@@ -41,7 +41,7 @@ That behaviour is deliberate for testing. Do not point real users at it.
 
 1. Push this repo to GitHub.
 2. Render → **New** → **Blueprint** → pick the repo. It reads
-   [`render.yaml`](../render.yaml) and creates the service.
+   [`render.yaml`](../../render.yaml) and creates the service.
 3. Wait for the build. Open the URL and sign in with any demo account
    (`arun@phoenixxit.com` / `Phoenixx@2026` — the full list is in the README).
 
@@ -56,7 +56,7 @@ see or commit them.
 ## Paid: the same service, with a disk
 
 The moment anyone is entering real data, move up. It is a two-line change to
-[`render.yaml`](../render.yaml):
+[`render.yaml`](../../render.yaml):
 
 1. `plan: free` → `plan: starter`
 2. Uncomment the `disk:` block

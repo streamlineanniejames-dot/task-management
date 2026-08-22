@@ -5,12 +5,17 @@
 # there is a single service here and why it must stay at one instance — see
 # docs/DEPLOY.md for what would have to change to scale past that.
 #
+# This file must stay at the repo ROOT — Render only looks for render.yaml here.
+# The app itself lives in phoenixx-os/, which is what rootDir below points at.
+#
 # Deploy: push this repo to GitHub, then Render → New → Blueprint → pick the repo.
 
 services:
   - type: web
     name: phoenixx-os
     runtime: node
+    # Every command below runs inside this directory, not the repo root.
+    rootDir: phoenixx-os
     # FREE TIER. No persistent disk and it sleeps after ~15 minutes idle, so the
     # database is rebuilt from the demo seed on each cold start (SEED_ON_BOOT).
     # Fine for testing and demos; anything a tester creates is lost on sleep.
