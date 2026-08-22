@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+.env
+*.log
+server/data/*.db
+server/data/*.db-*
+server/storage/
+web/dist/
+.expo/
+.DS_Store

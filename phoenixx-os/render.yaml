@@ -1,0 +1,68 @@
+# Phoenixx OS on Render — one service serving the API and the web app.
+#
+# Everything the app needs lives in this one process: the SQLite database, the
+# chat SSE stream, the background job runner and the generated PDFs. That is why
+# there is a single service here and why it must stay at one instance — see
+# docs/DEPLOY.md for what would have to change to scale past that.
+#
+# Deploy: push this repo to GitHub, then Render → New → Blueprint → pick the repo.
+
+services:
+  - type: web
+    name: phoenixx-os
+    runtime: node
+    # FREE TIER. No persistent disk and it sleeps after ~15 minutes idle, so the
+    # database is rebuilt from the demo seed on each cold start (SEED_ON_BOOT).
+    # Fine for testing and demos; anything a tester creates is lost on sleep.
+    #
+    # To keep data: change to `plan: starter`, uncomment the `disk:` block below,
+    # and set SEED_ON_BOOT to false. Nothing else changes.
+    plan: free
+    # Closest to India. Free instances are not offered in every region — if
+    # Render rejects the blueprint, use `oregon` or `frankfurt`.
+    region: singapore
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+
+    # --- Uncomment together with `plan: starter` to keep data between restarts.
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0 # node:sqlite needs 22.5+; the app requires 22.13+
+      - key: NODE_ENV
+        value: production
+      - key: SERVE_WEB
+        value: 'true' # this process also serves web/dist — one origin, no CORS
+
+      # Generated once by Render and then held. Never commit real secrets.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      # Free tier: ephemeral disk, so seed the demo workspace on a cold start.
+      # With a disk attached, set these to /var/data/... and SEED_ON_BOOT false.
+      - key: DB_FILE
+        value: ./data/phoenixx.db
+      - key: STORAGE_DIR
+        value: ./storage
+      - key: SEED_ON_BOOT
+        value: 'true'
+
+      # Background jobs: deadline ladder, digests, recurring invoices.
+      - key: JOBS_ENABLED
+        value: 'true'
+
+      # Notifications log to stdout until real provider credentials are set.
+      # Add WHATSAPP_TOKEN / SMTP_* in the Render dashboard, not here.
+      - key: WHATSAPP_PROVIDER
+        value: log
+      - key: EMAIL_PROVIDER
+        value: log
