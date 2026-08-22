@@ -9,3 +9,4 @@ server/storage/
 web/dist/
 .expo/
 .DS_Store
+web/tsconfig.tsbuildinfo

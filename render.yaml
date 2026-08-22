@@ -27,7 +27,11 @@ services:
     # Render rejects the blueprint, use `oregon` or `frankfurt`.
     region: singapore
     branch: main
-    buildCommand: npm install && npm run build
+    # NODE_ENV=production (below) makes a plain `npm install` omit devDependencies,
+    # which is where typescript, vite and tailwind live — the build needs them.
+    # --include=dev overrides that; `ci` installs the lockfile exactly, so the
+    # build here matches a local one.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/v1/health
     autoDeploy: true

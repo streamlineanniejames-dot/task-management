@@ -13,9 +13,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": false,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "forceConsistentCasingInFileNames": true
   },
   "include": ["src"]
 }
