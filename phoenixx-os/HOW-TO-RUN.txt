@@ -215,8 +215,23 @@
 
 
 -------------------------------------------------------------------------------
- THE MOBILE APP
+ THE MOBILE APPS - THERE ARE TWO, PICK ONE
 -------------------------------------------------------------------------------
+
+ 1. ../phoenixx-os-mobile/    Capacitor. Wraps the FULL web app - every screen,
+                              every feature - as an Android and iOS app. One
+                              codebase: build the web app, build the phone app.
+                              This is the one to use.
+
+                              See ../phoenixx-os-mobile/HOW-TO-RUN.txt
+
+ 2. mobile/                   React Native / Expo. Six high-frequency screens,
+                              hand-written separately from the web app. Older,
+                              and it does not cover the product. Documented
+                              below for reference.
+
+ Neither replaces the other automatically - they are separate folders and
+ separate builds. The rest of this section is about option 2.
 
      cd mobile
      npm install
