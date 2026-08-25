@@ -6,7 +6,7 @@
   "description": "Capacitor shell for Phoenixx OS — wraps the phoenixx-os/web React app as an Android and iOS application.",
   "scripts": {
     "build": "node scripts/build-web.mjs",
-    "sync": "npm run build && cap sync",
+    "sync": "npm run build && cap sync && node scripts/fix-spm-paths.mjs",
     "android": "npm run sync && cap open android",
     "ios": "npm run sync && cap open ios",
     "run:android": "npm run sync && cap run android",

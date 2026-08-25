@@ -1,0 +1,204 @@
+name: Mobile build
+
+# Builds the Android and iOS apps from phoenixx-os-mobile.
+#
+# The point of the iOS job is that it runs on a GitHub-hosted Mac, so shipping
+# to the App Store does not require owning one. The Android job needs no local
+# JDK or Android Studio either.
+#
+# Neither job deploys anything. They produce artifacts you download from the
+# run's summary page.
+
+on:
+  push:
+    branches: [main, mobile-capacitor]
+    # Native output cannot change unless one of these does.
+    paths:
+      - 'phoenixx-os/web/**'
+      - 'phoenixx-os-mobile/**'
+      - '.github/workflows/mobile.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'API origin to build against (overrides the repo variable)'
+        required: false
+        type: string
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22.13.0'
+  # Precedence: manual input, then repo variable, then the deployed default.
+  # This is baked into the bundle at build time and cannot be changed later
+  # without rebuilding — see phoenixx-os-mobile/README.md.
+  VITE_API_URL: ${{ inputs.api_url || vars.VITE_API_URL || 'https://phoenixx-os.onrender.com' }}
+
+jobs:
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            phoenixx-os/package-lock.json
+            phoenixx-os-mobile/package-lock.json
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # --include=dev because the web build needs vite, tailwind and typescript,
+      # and the shell needs the Capacitor CLI — all devDependencies.
+      - name: Install web and server dependencies
+        working-directory: phoenixx-os
+        run: npm ci --include=dev
+
+      - name: Install mobile shell dependencies
+        working-directory: phoenixx-os-mobile
+        run: npm ci --include=dev
+
+      - name: Build web bundle and sync into the native project
+        working-directory: phoenixx-os-mobile
+        run: npm run sync
+
+      # Absent secrets are not an error: the job still produces a debug APK you
+      # can sideload. Only the Play Store needs the release signing key.
+      - name: Configure release signing
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — building an unsigned debug APK only."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > phoenixx-os-mobile/android/release.jks
+          # storeFile is resolved relative to the app/ module, hence the ../
+          cat > phoenixx-os-mobile/android/keystore.properties <<PROPS
+          storeFile=../release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          PROPS
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        if: steps.signing.outputs.signed == 'false'
+        working-directory: phoenixx-os-mobile/android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Build release bundle and APK
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: phoenixx-os-mobile/android
+        run: ./gradlew --no-daemon bundleRelease assembleRelease
+
+      # Runs even on failure so the keystore never lingers on the runner's disk.
+      - name: Remove signing material
+        if: always()
+        run: rm -f phoenixx-os-mobile/android/release.jks phoenixx-os-mobile/android/keystore.properties
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ github.sha }}
+          path: |
+            phoenixx-os-mobile/android/app/build/outputs/apk/**/*.apk
+            phoenixx-os-mobile/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+          retention-days: 30
+
+  ios:
+    name: iOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            phoenixx-os/package-lock.json
+            phoenixx-os-mobile/package-lock.json
+
+      - name: Install web and server dependencies
+        working-directory: phoenixx-os
+        run: npm ci --include=dev
+
+      - name: Install mobile shell dependencies
+        working-directory: phoenixx-os-mobile
+        run: npm ci --include=dev
+
+      # Also regenerates Package.swift with macOS path separators, which is why
+      # the sync runs here rather than trusting whatever was committed.
+      - name: Build web bundle and sync into the native project
+        working-directory: phoenixx-os-mobile
+        run: npm run sync
+
+      # Unsigned: this proves the project compiles and that every Capacitor
+      # plugin resolves through SPM. An unsigned archive cannot be installed on
+      # a device or submitted to App Store Connect — see the note below for what
+      # signing needs.
+      - name: Archive (unsigned)
+        working-directory: phoenixx-os-mobile
+        run: |
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package the archive
+        run: |
+          cd "$RUNNER_TEMP"
+          zip -qry App-xcarchive.zip App.xcarchive
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-archive-${{ github.sha }}
+          path: ${{ runner.temp }}/App-xcarchive.zip
+          if-no-files-found: error
+          retention-days: 30
+
+# ---------------------------------------------------------------------------
+# Turning these into store-ready builds
+#
+# Android — add four repository secrets (Settings > Secrets and variables >
+# Actions). The job then emits a signed .aab instead of a debug .apk:
+#
+#   ANDROID_KEYSTORE_BASE64     base64 -w0 phoenixx-release.jks
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+#   ANDROID_KEY_PASSWORD
+#
+# iOS — a signed .ipa additionally needs an Apple Developer Program membership
+# ($99/year), a distribution certificate and a provisioning profile. Once you
+# have those, add apple-actions/import-codesign-certs before the archive step,
+# drop the CODE_SIGNING_ALLOWED=NO flags, and follow with
+# `xcodebuild -exportArchive -exportOptionsPlist`. Until then this job is a
+# compile check, which is still the thing that catches breakage early.
+#
+# Optionally set a repository variable VITE_API_URL to point builds at a
+# different API without editing this file.
+# ---------------------------------------------------------------------------

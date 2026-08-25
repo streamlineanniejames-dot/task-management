@@ -154,16 +154,34 @@ Requires an Apple Developer Program membership ($99/year).
 
 ### Building iOS without a Mac
 
-The `ios/` folder in this repo is a complete, valid Xcode project — it just
-needs a macOS machine to compile. Options, cheapest first:
+**This is already set up.** `.github/workflows/mobile.yml` builds both platforms
+on GitHub's runners — Android on Linux, iOS on a hosted Mac — so neither a local
+Android Studio nor a Mac is required. Artifacts appear on the run's summary page.
 
-- **GitHub Actions** — `macos-14` runners are free for public repos. Commit
-  `ios/`, add a workflow that runs `npm run sync` then `xcodebuild archive`.
-- **Codemagic / Bitrise / Ionic Appflow** — hosted Mac builders with free tiers,
-  configured through a web UI rather than YAML.
-- **MacinCloud / AWS EC2 Mac** — a rented Mac you control, from about $1/hour.
+By default the iOS job produces an **unsigned** archive: proof that the project
+compiles and every Capacitor plugin resolves, but not something installable. A
+real `.ipa` needs an Apple Developer membership, a distribution certificate and
+a provisioning profile; the comment block at the bottom of the workflow says
+exactly what to add. Android goes further — supply four repository secrets and
+it emits a signed `.aab` ready for the Play Store.
 
-None of them need you to change anything in this project.
+Alternatives, if you would rather not use Actions: **Codemagic** or **Ionic
+Appflow** (hosted Mac builders with free tiers, configured through a web UI), or
+a rented Mac from **MacinCloud** / **AWS EC2 Mac**. None require changes here.
+
+### Two files that exist only so CI works
+
+Both are easy to delete by accident and produce baffling failures when missing:
+
+- `ios/App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme` — Xcode keeps
+  schemes per-developer in `xcuserdata/`, which is not committed, so
+  `xcodebuild -scheme App` fails on a runner with "scheme not found". Sharing
+  the scheme puts it in the repo.
+- `scripts/fix-spm-paths.mjs` — `cap sync` writes plugin paths with the host's
+  separator, so a sync on Windows fills `Package.swift` with backslashes. Swift
+  reads those as escape sequences (the `\n` in `\node_modules` becomes a
+  newline), leaving a file that cannot build anywhere. `npm run sync` runs the
+  fix automatically; a sync on macOS never needs it.
 
 ---
 
