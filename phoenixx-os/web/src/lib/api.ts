@@ -4,21 +4,25 @@
  * contract the mobile app consumes.
  */
 
-const BASE = '/api/v1';
+import { API_BASE } from './config';
+import { store } from './storage';
+import { saveAndOpen } from './nativeFiles';
+
+const BASE = API_BASE;
 
 const ACCESS_KEY = 'phoenixx.access';
 const REFRESH_KEY = 'phoenixx.refresh';
 
 export const tokens = {
-  get access() { return localStorage.getItem(ACCESS_KEY); },
-  get refresh() { return localStorage.getItem(REFRESH_KEY); },
+  get access() { return store.get(ACCESS_KEY); },
+  get refresh() { return store.get(REFRESH_KEY); },
   set(access: string, refresh?: string) {
-    localStorage.setItem(ACCESS_KEY, access);
-    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+    store.set(ACCESS_KEY, access);
+    if (refresh) store.set(REFRESH_KEY, refresh);
   },
   clear() {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    store.remove(ACCESS_KEY);
+    store.remove(REFRESH_KEY);
   },
 };
 
@@ -132,11 +136,12 @@ export const api = {
   del: <T = any>(path: string, opts: Options = {}) =>
     request<{ data: T }>(path, { method: 'DELETE', ...opts }),
 
-  /** Triggers a browser download for CSV/PDF endpoints. */
+  /** Triggers a browser download for CSV/PDF endpoints; the share sheet on a device. */
   async download(path: string, filename: string, params?: Record<string, any>) {
     const res = await request<Response>(path, { params, raw: true });
     if (!res.ok) throw new ApiError(res.status, 'download_failed', 'Could not download that file');
     const blob = await res.blob();
+    if (await saveAndOpen(blob, filename)) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -151,7 +156,10 @@ export const api = {
   async openPdf(path: string) {
     const res = await request<Response>(path, { raw: true });
     if (!res.ok) throw new ApiError(res.status, 'pdf_failed', 'Could not open that document');
-    const url = URL.createObjectURL(await res.blob());
+    const blob = await res.blob();
+    // A WebView has no tabs, so the file goes to the system viewer instead.
+    if (await saveAndOpen(blob, `${path.split('/').filter(Boolean).join('-') || 'document'}.pdf`)) return;
+    const url = URL.createObjectURL(blob);
     window.open(url, '_blank', 'noopener');
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   },

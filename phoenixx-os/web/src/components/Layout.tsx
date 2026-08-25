@@ -9,20 +9,25 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
+import { store } from '../lib/storage';
+import { applyStatusBarTheme } from '../lib/native';
 import { Avatar, Badge, Button, cx, EmptyState } from './ui';
 import { relative } from '../lib/format';
 
 /* ------------------------------------------------------------------ theme */
 function useTheme() {
   const [dark, setDark] = useState(() => {
-    const saved = localStorage.getItem('phoenixx.theme');
+    const saved = store.get('phoenixx.theme');
     if (saved) return saved === 'dark';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
-    localStorage.setItem('phoenixx.theme', dark ? 'dark' : 'light');
+    store.set('phoenixx.theme', dark ? 'dark' : 'light');
+    // The native status bar sits outside the WebView, so it has to be told
+    // separately or it keeps the old theme's text colour and goes unreadable.
+    void applyStatusBarTheme(dark);
   }, [dark]);
 
   return { dark, toggle: () => setDark((d) => !d) };

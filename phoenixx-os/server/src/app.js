@@ -44,7 +44,7 @@ export function createApp({ migrateOnBoot = true } = {}) {
   }));
 
   app.use(cors({
-    origin: config.env === 'production' ? [config.webBaseUrl] : true,
+    origin: config.env === 'production' ? config.corsOrigins : true,
     credentials: true,
     exposedHeaders: ['Idempotent-Replay', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
   }));

@@ -12,6 +12,7 @@ import {
   Modal, PageHeader, SearchInput, Select, Stat, StatusBadge, Table, TableSkeleton, TD, TH, THead,
   TR, Textarea, useToast, cx,
 } from '../components/ui';
+import { openUrl } from '../lib/openUrl';
 
 /** Module E5 — templated proposals, tracked share links and e-acceptance. */
 export default function Proposals() {
@@ -339,7 +340,7 @@ function ProposalDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 <Input readOnly value={p.share_url} className="mono text-[12px]"
                   onFocus={(e) => e.currentTarget.select()} />
                 <Button icon={<Copy size={14} />} onClick={copyLink}>Copy</Button>
-                <Button icon={<Link2 size={14} />} onClick={() => window.open(p.share_url, '_blank', 'noopener')}
+                <Button icon={<Link2 size={14} />} onClick={() => openUrl(p.share_url)}
                   aria-label="Open share link" />
               </div>
               {p.accepted_at && (

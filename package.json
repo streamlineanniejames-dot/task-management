@@ -12,7 +12,11 @@
     "seed": "npm --prefix phoenixx-os run seed",
     "reset": "npm --prefix phoenixx-os run reset",
     "test": "npm --prefix phoenixx-os run test",
-    "start": "npm --prefix phoenixx-os run start"
+    "start": "npm --prefix phoenixx-os run start",
+    "mobile:build": "npm --prefix phoenixx-os-mobile run build",
+    "mobile:sync": "npm --prefix phoenixx-os-mobile run sync",
+    "mobile:android": "npm --prefix phoenixx-os-mobile run android",
+    "mobile:ios": "npm --prefix phoenixx-os-mobile run ios"
   },
   "engines": {
     "node": ">=22.13"

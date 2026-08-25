@@ -13,6 +13,29 @@ export const config = {
   apiBaseUrl: process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 4010}`,
   webBaseUrl: process.env.WEB_BASE_URL || 'http://localhost:5173',
 
+  /**
+   * Origins allowed to call the API in production.
+   *
+   * The web app is same-origin so it needs nothing here, but the Capacitor
+   * mobile app is not: its pages are served by the device, which sends
+   * `Origin: http://localhost` on Android and `capacitor://localhost` on iOS.
+   * These are fixed platform constants, not a wildcard — an arbitrary site
+   * still cannot reach the API from a browser.
+   *
+   * EXTRA_CORS_ORIGINS (comma-separated) covers anything else, e.g. a separately
+   * hosted web front end.
+   */
+  corsOrigins: [
+    process.env.WEB_BASE_URL || 'http://localhost:5173',
+    'capacitor://localhost',
+    'http://localhost',
+    'https://localhost',
+    ...(process.env.EXTRA_CORS_ORIGINS || '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+  ],
+
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret-change-me',
     refreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me',

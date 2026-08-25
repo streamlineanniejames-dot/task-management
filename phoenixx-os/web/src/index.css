@@ -353,3 +353,42 @@ body.is-dragging .board-col.is-drop-target [data-empty] { display: none; }
   body { background: #fff; font-size: 12px; }
   .card { box-shadow: none; border-color: #ddd; break-inside: avoid; }
 }
+
+/* =====================================================================
+   Installed app (Capacitor) only.
+   `.native` is set on <html> before the first render — see lib/native.ts.
+   None of this applies in a browser tab.
+   ===================================================================== */
+
+/* The status bar and home indicator overlap the top and bottom of the
+   viewport. Padding the body keeps every fixed header, sidebar and bottom bar
+   clear of them without any layout inside the app having to know. */
+html.native body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* A WebView is not a browser: long-press selecting UI chrome, the grey tap
+   flash and iOS rubber-band scrolling all read as bugs in an app. Inputs and
+   anything explicitly marked keep normal selection. */
+html.native,
+html.native body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.native *:not(input):not(textarea):not([contenteditable]):not(.selectable) {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* iOS zooms the page when a field with a font smaller than 16px is focused,
+   and never zooms back out. */
+html.platform-ios input,
+html.platform-ios textarea,
+html.platform-ios select {
+  font-size: max(16px, 1em);
+}

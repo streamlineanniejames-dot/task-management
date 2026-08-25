@@ -4,6 +4,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Check, X, FileDown, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button, Field, Input, Modal, Textarea, cx } from '../components/ui';
+import { API_BASE } from '../lib/config';
+import { openUrl } from '../lib/openUrl';
 
 /**
  * E5 — the client-facing proposal view behind a share token. No sign-in, and
@@ -189,7 +191,7 @@ export default function PublicProposal() {
 
           <div className="mt-4 flex flex-wrap gap-2">
             <Button icon={<FileDown size={15} />}
-              onClick={() => window.open(`/api/v1/public/proposals/${token}/pdf`, '_blank', 'noopener')}>
+              onClick={() => openUrl(`${API_BASE}/public/proposals/${token}/pdf`)}>
               Download PDF
             </Button>
             {canDecide && (

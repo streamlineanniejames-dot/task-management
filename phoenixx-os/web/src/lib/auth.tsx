@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, tokens, ApiError } from './api';
+import { API_BASE } from './config';
 import { configureLocale } from './format';
 
 export type Role = 'super_admin' | 'owner' | 'manager' | 'employee' | 'finance' | 'hr' | 'client';
@@ -109,7 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       tokens.clear();
       setSession(null);
       if (refreshToken) {
-        fetch('/api/v1/auth/logout', {
+        fetch(`${API_BASE}/auth/logout`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refresh_token: refreshToken }),
