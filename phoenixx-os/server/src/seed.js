@@ -538,7 +538,7 @@ function seedPhoenixx() {
     ['Photoshoot planning & direction', 'branding', 1_500],
   ];
 
-  const activeClients = clients.filter((c) => c.status === 'active');
+  const activeClients = CLIENTS.filter((c) => c.status === 'active');
   const deliveryTeam = team.filter((t) => ['employee', 'manager'].includes(t.role));
   let historyCount = 0;
 
@@ -585,7 +585,7 @@ function seedPhoenixx() {
   // -------------------------------------------------------------- meetings
   for (let i = 0; i < 6; i++) {
     const meetingId = uuid();
-    const client = pick(clients.filter((c) => c.status === 'active'), i);
+    const client = pick(CLIENTS.filter((c) => c.status === 'active'), i);
     const when = addDays(new Date(), i < 3 ? -(2 + i * 3) : (1 + i)).toISOString();
     run(
       `INSERT INTO meetings (id, tenant_id, title, agenda, client_id, organizer_id, scheduled_at,
@@ -640,7 +640,7 @@ function seedPhoenixx() {
            accepted_by_name, created_at, updated_at)
          VALUES (?,?,?,?,?,?,?,?,?, 'INR', ?,?,?,18,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [propId, tenantId, clientIds[spec.client], number, spec.title, tpl.service_line_id, tpl.id,
-          users[clients.find((c) => c.name === spec.client).owner], spec.status,
+          users[CLIENTS.find((c) => c.name === spec.client).owner], spec.status,
           tpl.sections, tpl.terms, subtotal, tax, subtotal + tax,
           addDays(new Date(), 25).toISOString().slice(0, 10),
           uuid().replace(/-/g, '').slice(0, 22),
@@ -881,7 +881,7 @@ function seedPhoenixx() {
          total_items, completed_items, adherence_pct, started_at, completed_at, created_at, updated_at)
        VALUES (?,?,?,?, 'client', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [uuid(), tenantId, sop.id, sop.current_version,
-        clientIds[pick(clients.filter((c) => c.status === 'active'), i).name],
+        clientIds[pick(CLIENTS.filter((c) => c.status === 'active'), i).name],
         users[pick(team, i).email], JSON.stringify(state), checklist.length, completedCount,
         Math.round((completedCount / checklist.length) * 1000) / 10, started,
         completedCount === checklist.length ? started : null, ts, ts],
