@@ -414,7 +414,12 @@ function applyMove(stages: any[], d: CardDrop): any[] {
   const card = findCard(stages, d.id);
   if (!card) return stages;
   return stages.map((s) => {
-    if (s.id !== d.toListId && s.id !== d.fromListId) return s;
+    // The card is pulled out of whichever stage actually holds it, not the one
+    // the drag reported it left. A stale fromListId would otherwise leave the
+    // original behind and the board would carry the same client twice until
+    // the refetch landed.
+    const held = s.clients.some((c: any) => c.id === d.id);
+    if (!held && s.id !== d.toListId) return s;
     let clients = s.clients.filter((c: any) => c.id !== d.id);
     if (s.id === d.toListId) {
       const at = d.prevId

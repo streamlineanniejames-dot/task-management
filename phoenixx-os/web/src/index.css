@@ -329,6 +329,11 @@ body {
 body.is-dragging { cursor: grabbing !important; user-select: none !important; }
 body.is-dragging * { cursor: grabbing !important; }
 
+/* An empty column shows its placeholder until a card is held over it — then the
+   dashed drop gap says the same thing, so the placeholder steps aside. Done in
+   CSS because the placeholder belongs to React and must not be detached. */
+body.is-dragging .board-col.is-drop-target [data-empty] { display: none; }
+
 /* Every control on a touch device clears the 44px minimum. */
 @media (hover: none) {
   .board-col-head { padding: 0.75rem; }

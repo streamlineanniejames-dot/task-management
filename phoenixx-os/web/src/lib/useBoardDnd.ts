@@ -77,15 +77,33 @@ export function useBoardDnd({ onCardDrop, onListDrop, disabled }: Options) {
     let sx = 0, sy = 0, x = 0, y = 0, dx = 0, dy = 0;
     let timer: number | undefined;
     let raf = 0;
+    // A drop animates for ~170ms before React is told about it. Until that has
+    // landed the board still carries the drag's own nodes, so the settle is
+    // held here: whoever gets there first — the transition, the guard timer or
+    // the next gesture — runs it, and it runs exactly once.
+    let settle: (() => void) | null = null;
+    let settleTimer: number | undefined;
+
+    /**
+     * Nothing the drag injects may outlive it. React never rendered the clone
+     * or the gap, so React will never take them away either: one left behind
+     * reads as a duplicate card sitting in the column. Sweep by class rather
+     * than by reference, so a node orphaned by an earlier gesture goes too.
+     */
+    const sweep = () => {
+      document.querySelectorAll('.dnd-fly').forEach((n) => n.remove());
+      rail.querySelectorAll('.dnd-gap, .dnd-gap-list').forEach((n) => n.remove());
+    };
 
     const reset = () => {
       window.clearTimeout(timer);
+      window.clearTimeout(settleTimer);
       cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
-      fly?.remove();
-      ph?.remove();
+      settle = null;
+      sweep();
       if (el) { el.classList.remove('is-dragged'); el.style.display = ''; }
       rail.querySelectorAll('.is-drop-target').forEach((n) => n.classList.remove('is-drop-target'));
       document.body.classList.remove('is-dragging');
@@ -175,7 +193,9 @@ export function useBoardDnd({ onCardDrop, onListDrop, disabled }: Options) {
         cont = c;
         rail.querySelectorAll('.is-drop-target').forEach((n) => n.classList.remove('is-drop-target'));
         c.closest('[data-list]')?.classList.add('is-drop-target');
-        c.querySelector('[data-empty]')?.remove();
+        // The "nothing here yet" placeholder is React's node, so it is hidden
+        // with CSS, never removed: detaching it behind React's back makes the
+        // next commit throw on removeChild and takes the whole page down.
       }
       const after = nextSiblingAt(c, y);
       if (after) { if (after !== ph) c.insertBefore(ph!, after); }
@@ -259,14 +279,30 @@ export function useBoardDnd({ onCardDrop, onListDrop, disabled }: Options) {
       const f = fly!;
       f.style.transition = 'transform 170ms cubic-bezier(.2,.9,.3,1)';
       f.style.transform = `translate3d(${r.left}px, ${r.top}px, 0) rotate(0deg) scale(1)`;
-      const done = () => { if (!commit) return; const c = commit; commit = null; reset(); c(); };
-      f.addEventListener('transitionend', done, { once: true });
-      window.setTimeout(done, 230);
+
+      const drop = commit;
+      commit = null;
+      settle = () => { settle = null; reset(); drop!(); };
+
+      // transitionend bubbles, and the clone is a whole card: a label or the
+      // health meter finishing its own transition must not pass for the card
+      // having landed.
+      const onEnd = (e: TransitionEvent) => {
+        if (e.target !== f) return;
+        f.removeEventListener('transitionend', onEnd);
+        settle?.();
+      };
+      f.addEventListener('transitionend', onEnd);
+      settleTimer = window.setTimeout(() => settle?.(), 230);
       started = false;
     }
 
     function onDown(e: PointerEvent) {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      // Grabbing again while the last drop is still animating: land that one
+      // first. Otherwise its pending settle tears down this drag's clone and
+      // gap instead of its own, and both are orphaned on the board.
+      settle?.();
       const target = e.target as HTMLElement;
       if (target.closest('button, a, input, select, textarea, [data-no-drag]')) return;
 

@@ -117,10 +117,189 @@ function seedSuperAdmin() {
   console.log('✓ super admin  platform@phoenixxit.com / Platform@2026');
 }
 
+// --------------------------------------------------------------- clients
+/**
+ * The demo pipeline. Every stage carries five or six cards on purpose: an
+ * empty column says nothing about how the board reads or behaves, and a
+ * one-card board is not a board.
+ */
+const CLIENTS = [
+    { name: 'Cotton India Textiles', industry: 'textiles', stage: 'execution', status: 'active', model: 'retainer', mrr: 150_000, sls: ['branding', 'digital'], city: 'Tiruppur', state: 'Tamil Nadu', code: '33', gstin: '33AABCC7654D1Z9', owner: 'divya@phoenixxit.com', scope: [24, 19], sat: 4, onboarded: -420 },
+    { name: 'Sree Balaji Constructions', industry: 'construction', stage: 'execution', status: 'active', model: 'hybrid', mrr: 120_000, sls: ['digital', 'tech'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', gstin: '33AAECS4321F1ZP', owner: 'divya@phoenixxit.com', scope: [18, 16], sat: 5, onboarded: -300 },
+    { name: 'Aroma Kitchens & Catering', industry: 'hospitality', stage: 'execution', status: 'active', model: 'retainer', mrr: 75_000, sls: ['digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', gstin: '33AAFFA8765H1ZQ', owner: 'priya@phoenixxit.com', scope: [12, 7], sat: 3, onboarded: -180 },
+    { name: 'ThermaCool HVAC Systems', industry: 'hvac', stage: 'execution', status: 'active', model: 'project', mrr: 0, deal: 660_000, sls: ['tech', 'branding'], city: 'Chennai', state: 'Tamil Nadu', code: '33', gstin: '33AAGCT3456K1ZM', owner: 'vignesh@phoenixxit.com', scope: [20, 11], sat: 4, onboarded: -95 },
+    { name: 'Meridian Financial Advisory', industry: 'financial advisory', stage: 'retention', status: 'active', model: 'retainer', mrr: 110_000, sls: ['sales', 'digital'], city: 'Bengaluru', state: 'Karnataka', code: '29', gstin: '29AAHCM9876L1ZR', owner: 'nithya@phoenixxit.com', scope: [15, 14], sat: 5, onboarded: -250, renewal: 45 },
+    { name: 'Weave & Co. Ecommerce', industry: 'ecommerce', stage: 'execution', status: 'active', model: 'hybrid', mrr: 95_000, sls: ['digital', 'tech'], city: 'Erode', state: 'Tamil Nadu', code: '33', gstin: '33AAJCW6543M1ZS', owner: 'priya@phoenixxit.com', scope: [16, 9], sat: 3, onboarded: -140 },
+    { name: 'Kongu Steel Traders', industry: 'construction', stage: 'invoicing', status: 'active', model: 'project', mrr: 0, deal: 320_000, sls: ['branding'], city: 'Salem', state: 'Tamil Nadu', code: '33', owner: 'rahul@phoenixxit.com', scope: [10, 10], sat: 4, onboarded: -60 },
+    { name: 'Nilgiri Estate Resorts', industry: 'hospitality', stage: 'onboarding', status: 'active', model: 'retainer', mrr: 90_000, sls: ['branding', 'digital'], city: 'Ooty', state: 'Tamil Nadu', code: '33', owner: 'karthik@phoenixxit.com', scope: [14, 2], sat: null, onboarded: -12 },
+    { name: 'Vertex Precision Tools', industry: 'manufacturing', stage: 'proposal', status: 'lead', deal: 550_000, sls: ['tech'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'vignesh@phoenixxit.com', next: 'Follow up on the automation proposal', nextIn: 2 },
+    { name: 'Kadambari Silks', industry: 'textiles', stage: 'follow_up', status: 'lead', deal: 280_000, sls: ['branding', 'digital'], city: 'Kanchipuram', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Share the branding case studies', nextIn: 1 },
+    { name: 'Southern Spice Restaurants', industry: 'hospitality', stage: 'pitch', status: 'lead', deal: 180_000, sls: ['digital'], city: 'Madurai', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Pitch deck walkthrough call', nextIn: -1 },
+    { name: 'Anandha Jewellers', industry: 'retail', stage: 'outreach', status: 'lead', deal: 220_000, sls: ['branding'], city: 'Trichy', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'First outreach on WhatsApp', nextIn: 0 },
+    { name: 'GreenBuild Infra', industry: 'construction', stage: 'follow_up', status: 'lead', deal: 400_000, sls: ['digital', 'sales'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com' },
+    { name: 'Coastal Logistics', industry: 'logistics', stage: 'outreach', status: 'lead', deal: 150_000, sls: ['tech'], city: 'Tuticorin', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Qualify budget and timeline', nextIn: 4 },
+    { name: 'Bharathi Educational Trust', industry: 'education', stage: 'retention', status: 'churned', model: 'retainer', mrr: 0, sls: ['digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'divya@phoenixxit.com', churnReason: 'COST', churnedDaysAgo: 40, onboarded: -400 },
+
+    // Bench depth, so every column on the pipeline board carries five or six
+    // cards. An empty stage tells you nothing about how the board behaves, and
+    // a one-card board is not a board.
+    { name: 'Trident Auto Components', industry: 'manufacturing', stage: 'outreach', status: 'lead', deal: 260_000, sls: ['tech'], city: 'Hosur', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Intro call with the plant head', nextIn: 1 },
+    { name: 'Vaigai Health Clinics', industry: 'healthcare', stage: 'outreach', status: 'lead', deal: 175_000, sls: ['digital'], city: 'Madurai', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', next: 'Send the clinic marketing brief', nextIn: 3 },
+    { name: 'Marina Realty Group', industry: 'real estate', stage: 'outreach', status: 'lead', deal: 480_000, sls: ['branding', 'digital'], city: 'Chennai', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com' },
+    { name: 'Kaveri Organic Foods', industry: 'fmcg', stage: 'outreach', status: 'lead', deal: 195_000, sls: ['branding'], city: 'Erode', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', next: 'Share the packaging portfolio', nextIn: 5 },
+
+    { name: 'Zenith Fitness Studios', industry: 'fitness', stage: 'pitch', status: 'lead', deal: 210_000, sls: ['digital', 'sales'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Walk through the membership funnel deck', nextIn: 2 },
+    { name: 'Pallava Granites', industry: 'mining', stage: 'pitch', status: 'lead', deal: 340_000, sls: ['tech', 'branding'], city: 'Salem', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', next: 'Pitch the export catalogue site', nextIn: 0 },
+    { name: 'Aadhi Pharma Distributors', industry: 'pharma', stage: 'pitch', status: 'lead', deal: 290_000, sls: ['digital'], city: 'Trichy', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Second pitch with the promoter', nextIn: -2 },
+    { name: 'Skyline Interiors', industry: 'interiors', stage: 'pitch', status: 'lead', deal: 265_000, sls: ['branding'], city: 'Chennai', state: 'Tamil Nadu', code: '33', owner: 'vignesh@phoenixxit.com' },
+
+    { name: 'Nova Edutech', industry: 'education', stage: 'follow_up', status: 'lead', deal: 320_000, sls: ['tech', 'digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', next: 'Chase the revised requirement list', nextIn: 1 },
+    { name: 'Sri Murugan Textile Mills', industry: 'textiles', stage: 'follow_up', status: 'lead', deal: 380_000, sls: ['branding', 'digital'], city: 'Tiruppur', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Follow up after the mill visit', nextIn: -3 },
+    { name: 'Blue Harbour Seafoods', industry: 'food processing', stage: 'follow_up', status: 'lead', deal: 240_000, sls: ['sales'], city: 'Tuticorin', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', next: 'Reconfirm the export budget', nextIn: 6 },
+
+    { name: 'Ambal Hospitals', industry: 'healthcare', stage: 'proposal', status: 'lead', deal: 720_000, sls: ['tech', 'digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'vignesh@phoenixxit.com', next: 'Proposal review with the board', nextIn: 3 },
+    { name: 'Everest Packaging', industry: 'manufacturing', stage: 'proposal', status: 'lead', deal: 460_000, sls: ['branding', 'tech'], city: 'Hosur', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', next: 'Send the revised commercials', nextIn: 1 },
+    { name: 'Chola Travels and Tours', industry: 'travel', stage: 'proposal', status: 'lead', deal: 390_000, sls: ['tech'], city: 'Madurai', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Close the scope on the booking portal', nextIn: -1 },
+    { name: 'Ivory Wedding Studios', industry: 'events', stage: 'proposal', status: 'lead', deal: 300_000, sls: ['branding', 'digital'], city: 'Chennai', state: 'Tamil Nadu', code: '33', owner: 'karthik@phoenixxit.com' },
+
+    { name: 'Pioneer Public School', industry: 'education', stage: 'onboarding', status: 'active', model: 'retainer', mrr: 65_000, sls: ['digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'divya@phoenixxit.com', scope: [12, 1], sat: null, onboarded: -9 },
+    { name: 'Rathna Home Appliances', industry: 'retail', stage: 'onboarding', status: 'active', model: 'hybrid', mrr: 80_000, sls: ['digital', 'branding'], city: 'Trichy', state: 'Tamil Nadu', code: '33', owner: 'priya@phoenixxit.com', scope: [16, 3], sat: null, onboarded: -18 },
+    { name: 'Deccan Agro Exports', industry: 'agriculture', stage: 'onboarding', status: 'active', model: 'project', mrr: 0, deal: 540_000, sls: ['tech'], city: 'Erode', state: 'Tamil Nadu', code: '33', owner: 'karthik@phoenixxit.com', scope: [15, 2], sat: null, onboarded: -6 },
+    { name: 'Lakshya Sports Academy', industry: 'sports', stage: 'onboarding', status: 'active', model: 'retainer', mrr: 45_000, sls: ['branding'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'rahul@phoenixxit.com', scope: [10, 2], sat: 4, onboarded: -21 },
+
+    { name: 'Velmurugan Auto Dealers', industry: 'automotive', stage: 'execution', status: 'active', model: 'retainer', mrr: 105_000, sls: ['digital', 'sales'], city: 'Salem', state: 'Tamil Nadu', code: '33', owner: 'vignesh@phoenixxit.com', scope: [18, 12], sat: 4, onboarded: -210 },
+
+    { name: 'Sakthi Engineering Works', industry: 'manufacturing', stage: 'invoicing', status: 'active', model: 'project', mrr: 0, deal: 430_000, sls: ['tech'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'divya@phoenixxit.com', scope: [12, 12], sat: 4, onboarded: -75 },
+    { name: 'Crescent Dental Care', industry: 'healthcare', stage: 'invoicing', status: 'active', model: 'retainer', mrr: 55_000, sls: ['digital'], city: 'Chennai', state: 'Tamil Nadu', code: '33', owner: 'priya@phoenixxit.com', scope: [9, 9], sat: 5, onboarded: -120 },
+    { name: 'Anicham Furniture', industry: 'retail', stage: 'invoicing', status: 'active', model: 'project', mrr: 0, deal: 275_000, sls: ['branding'], city: 'Erode', state: 'Tamil Nadu', code: '33', owner: 'karthik@phoenixxit.com', scope: [8, 8], sat: 3, onboarded: -55 },
+    { name: 'TN Solar Solutions', industry: 'energy', stage: 'invoicing', status: 'active', model: 'hybrid', mrr: 70_000, sls: ['tech', 'digital'], city: 'Madurai', state: 'Tamil Nadu', code: '33', owner: 'vignesh@phoenixxit.com', scope: [14, 13], sat: 4, onboarded: -160 },
+
+    { name: 'Annapoorna Foods', industry: 'hospitality', stage: 'retention', status: 'active', model: 'retainer', mrr: 130_000, sls: ['branding', 'digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'divya@phoenixxit.com', scope: [22, 20], sat: 5, onboarded: -520, renewal: 30 },
+    { name: 'Global Logistics Park', industry: 'logistics', stage: 'retention', status: 'active', model: 'retainer', mrr: 85_000, sls: ['tech'], city: 'Chennai', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com', scope: [17, 15], sat: 3, onboarded: -365, renewal: 75 },
+    { name: 'Sunrise Apparels', industry: 'textiles', stage: 'retention', status: 'active', model: 'hybrid', mrr: 60_000, sls: ['digital'], city: 'Tiruppur', state: 'Tamil Nadu', code: '33', owner: 'priya@phoenixxit.com', scope: [13, 11], sat: 2, onboarded: -280, renewal: 15 },
+];
+
+/** Code -> id maps for a tenant that is already in the database. */
+function lookups(tenantId) {
+  const byCode = (table) => Object.fromEntries(
+    all(`SELECT id, code FROM ${table} WHERE tenant_id = ?`, [tenantId]).map((r) => [r.code, r.id]));
+  return {
+    tenantId,
+    sl: byCode('service_lines'),
+    stages: byCode('pipeline_stages'),
+    reasons: byCode('reason_codes'),
+    users: Object.fromEntries(
+      all('SELECT id, email FROM users WHERE tenant_id = ?', [tenantId]).map((u) => [u.email, u.id])),
+  };
+}
+
+/** One client with its primary contact and activity history. */
+function insertClient(ctx, c) {
+  const { tenantId, stages, users, sl, reasons } = ctx;
+  const id = uuid();
+  const createdAt = addDays(new Date(), c.onboarded ? c.onboarded - 30 : -(20 + Math.floor(Math.random() * 60))).toISOString();
+
+  run(
+    `INSERT INTO clients (id, tenant_id, name, legal_name, industry, stage_id, status, owner_id, source,
+       gstin, city, state, state_code, country, currency, service_lines, engagement_model, mrr_minor,
+       deal_value_minor, next_action, next_action_date, next_action_owner_id, scope_total, scope_delivered,
+       satisfaction, onboarded_at, renewal_date, churned_at, churn_reason_code_id, stage_entered_at,
+       last_activity_at, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'India', 'INR', ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [id, tenantId, c.name, c.name, c.industry, stages[c.stage], c.status, users[c.owner],
+      pick(['referral', 'inbound', 'outreach', 'linkedin', 'event'], c.name.length),
+      c.gstin ?? null, c.city, c.state, c.code, JSON.stringify((c.sls || []).map((s) => sl[s])),
+      c.model || 'project', rupees(c.mrr || 0), rupees(c.deal || (c.mrr ? c.mrr * 12 : 0)),
+      c.next ?? null, c.nextIn != null ? addDays(new Date(), c.nextIn).toISOString().slice(0, 10) : null,
+      c.next ? users[c.owner] : null,
+      c.scope?.[0] || 0, c.scope?.[1] || 0, c.sat ?? null,
+      c.onboarded ? addDays(new Date(), c.onboarded).toISOString() : null,
+      c.renewal ? addDays(new Date(), c.renewal).toISOString().slice(0, 10) : null,
+      c.churnedDaysAgo ? addDays(new Date(), -c.churnedDaysAgo).toISOString() : null,
+      c.churnReason ? reasons[c.churnReason] : null,
+      addDays(new Date(), -(5 + Math.floor(Math.random() * 40))).toISOString(),
+      addDays(new Date(), -Math.floor(Math.random() * 12)).toISOString(),
+      createdAt, ts],
+  );
+
+  // Primary contact
+  const first = c.name.split(/[\s&]/)[0];
+  run(
+    `INSERT INTO contacts (id, tenant_id, client_id, name, designation, email, phone, whatsapp,
+       is_primary, consent_whatsapp, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,1,1,?,?)`,
+    [uuid(), tenantId, id,
+      pick(['Ravi Shankar', 'Lakshmi Narayan', 'Suresh Babu', 'Anitha Raj', 'Mohan Das', 'Deepa Krishnan'], c.name.length),
+      pick(['Director', 'Managing Partner', 'Marketing Head', 'Founder', 'CEO'], c.industry.length),
+      `contact@${first.toLowerCase()}.com`, '+919440000000', '+919440000000', ts, ts],
+  );
+
+  // Activity history so conversion / retention scores have real inputs.
+  const activityCount = c.status === 'active' ? 12 : 6;
+  for (let i = 0; i < activityCount; i++) {
+    const daysAgo = Math.floor((i + 1) * (c.status === 'active' ? 5 : 4)) + Math.floor(Math.random() * 3);
+    run(
+      `INSERT INTO activities (id, tenant_id, client_id, type, direction, subject, body, outcome,
+         occurred_at, user_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid(), tenantId, id,
+        pick(['call', 'whatsapp', 'email', 'meeting', 'note'], i),
+        i % 3 === 0 ? 'inbound' : 'outbound',
+        pick(['Check-in call', 'Shared monthly report', 'Campaign review', 'Requirement discussion', 'Invoice follow-up'], i),
+        'Logged from the seed dataset.',
+        pick(['connected', 'positive', 'no_response', 'connected', 'positive'], i + c.name.length),
+        addDays(new Date(), -daysAgo).toISOString(), users[c.owner], ts],
+    );
+  }
+
+  // One grievance on the account that should read as at-risk.
+  if (c.name === 'Aroma Kitchens & Catering') {
+    run(
+      `INSERT INTO activities (id, tenant_id, client_id, type, direction, subject, body, outcome,
+         occurred_at, user_id, created_at) VALUES (?,?,?, 'grievance', 'inbound', ?, ?, 'negative', ?, ?, ?)`,
+      [uuid(), tenantId, id, 'Delay in monthly creative delivery',
+        'Client raised that the July creatives landed six days late.',
+        addDays(new Date(), -18).toISOString(), users['divya@phoenixxit.com'], ts],
+    );
+    run(
+      `UPDATE clients SET retention_risk = 1, retention_reason_code_id = ?, retention_reason_note = ?
+        WHERE id = ?`,
+      [reasons.RESULTS_BELOW, 'Creative turnaround slipped twice; engagement is down.', id],
+    );
+  }
+  return id;
+}
+
+/**
+ * Fill in whatever the pipeline is missing on a database that was seeded
+ * before this list grew. Matching is by name, so running it twice adds
+ * nothing the second time and no existing card is touched.
+ */
+function topUpClients() {
+  const tenant = get("SELECT id FROM tenants WHERE slug = 'phoenixx-it'");
+  if (!tenant) return 0;
+  const ctx = lookups(tenant.id);
+  let added = 0;
+  for (const c of CLIENTS) {
+    if (get('SELECT id FROM clients WHERE tenant_id = ? AND name = ? AND deleted_at IS NULL',
+      [tenant.id, c.name])) continue;
+    insertClient(ctx, c);
+    added += 1;
+  }
+  if (added) scoreAllClients(tenant.id, { snapshot: true });
+  return added;
+}
+
 // ================================================================= TENANT #1
 function seedPhoenixx() {
   if (get("SELECT id FROM tenants WHERE slug = 'phoenixx-it'")) {
-    return console.log('· Phoenixx IT already seeded (use --reset to rebuild)');
+    // Already seeded: leave everything alone except the pipeline, which is
+    // topped up so a database created before this list grew still shows a
+    // full board. `--reset` is still the way to rebuild from scratch.
+    const added = topUpClients();
+    console.log(added
+      ? `· Phoenixx IT already seeded — added ${added} missing pipeline cards`
+      : '· Phoenixx IT already seeded (use --reset to rebuild)');
+    return;
   }
 
   const { tenantId, ownerId } = provisionTenant({
@@ -212,99 +391,10 @@ function seedPhoenixx() {
   console.log(`✓ Phoenixx IT: ${staff.length} team members`);
 
   // --------------------------------------------------------------- clients
-  const clients = [
-    { name: 'Cotton India Textiles', industry: 'textiles', stage: 'execution', status: 'active', model: 'retainer', mrr: 150_000, sls: ['branding', 'digital'], city: 'Tiruppur', state: 'Tamil Nadu', code: '33', gstin: '33AABCC7654D1Z9', owner: 'divya@phoenixxit.com', scope: [24, 19], sat: 4, onboarded: -420 },
-    { name: 'Sree Balaji Constructions', industry: 'construction', stage: 'execution', status: 'active', model: 'hybrid', mrr: 120_000, sls: ['digital', 'tech'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', gstin: '33AAECS4321F1ZP', owner: 'divya@phoenixxit.com', scope: [18, 16], sat: 5, onboarded: -300 },
-    { name: 'Aroma Kitchens & Catering', industry: 'hospitality', stage: 'execution', status: 'active', model: 'retainer', mrr: 75_000, sls: ['digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', gstin: '33AAFFA8765H1ZQ', owner: 'priya@phoenixxit.com', scope: [12, 7], sat: 3, onboarded: -180 },
-    { name: 'ThermaCool HVAC Systems', industry: 'hvac', stage: 'execution', status: 'active', model: 'project', mrr: 0, deal: 660_000, sls: ['tech', 'branding'], city: 'Chennai', state: 'Tamil Nadu', code: '33', gstin: '33AAGCT3456K1ZM', owner: 'vignesh@phoenixxit.com', scope: [20, 11], sat: 4, onboarded: -95 },
-    { name: 'Meridian Financial Advisory', industry: 'financial advisory', stage: 'retention', status: 'active', model: 'retainer', mrr: 110_000, sls: ['sales', 'digital'], city: 'Bengaluru', state: 'Karnataka', code: '29', gstin: '29AAHCM9876L1ZR', owner: 'nithya@phoenixxit.com', scope: [15, 14], sat: 5, onboarded: -250, renewal: 45 },
-    { name: 'Weave & Co. Ecommerce', industry: 'ecommerce', stage: 'execution', status: 'active', model: 'hybrid', mrr: 95_000, sls: ['digital', 'tech'], city: 'Erode', state: 'Tamil Nadu', code: '33', gstin: '33AAJCW6543M1ZS', owner: 'priya@phoenixxit.com', scope: [16, 9], sat: 3, onboarded: -140 },
-    { name: 'Kongu Steel Traders', industry: 'construction', stage: 'invoicing', status: 'active', model: 'project', mrr: 0, deal: 320_000, sls: ['branding'], city: 'Salem', state: 'Tamil Nadu', code: '33', owner: 'rahul@phoenixxit.com', scope: [10, 10], sat: 4, onboarded: -60 },
-    { name: 'Nilgiri Estate Resorts', industry: 'hospitality', stage: 'onboarding', status: 'active', model: 'retainer', mrr: 90_000, sls: ['branding', 'digital'], city: 'Ooty', state: 'Tamil Nadu', code: '33', owner: 'karthik@phoenixxit.com', scope: [14, 2], sat: null, onboarded: -12 },
-    { name: 'Vertex Precision Tools', industry: 'manufacturing', stage: 'proposal', status: 'lead', deal: 550_000, sls: ['tech'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'vignesh@phoenixxit.com', next: 'Follow up on the automation proposal', nextIn: 2 },
-    { name: 'Kadambari Silks', industry: 'textiles', stage: 'follow_up', status: 'lead', deal: 280_000, sls: ['branding', 'digital'], city: 'Kanchipuram', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Share the branding case studies', nextIn: 1 },
-    { name: 'Southern Spice Restaurants', industry: 'hospitality', stage: 'pitch', status: 'lead', deal: 180_000, sls: ['digital'], city: 'Madurai', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Pitch deck walkthrough call', nextIn: -1 },
-    { name: 'Anandha Jewellers', industry: 'retail', stage: 'outreach', status: 'lead', deal: 220_000, sls: ['branding'], city: 'Trichy', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'First outreach on WhatsApp', nextIn: 0 },
-    { name: 'GreenBuild Infra', industry: 'construction', stage: 'follow_up', status: 'lead', deal: 400_000, sls: ['digital', 'sales'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'nithya@phoenixxit.com' },
-    { name: 'Coastal Logistics', industry: 'logistics', stage: 'outreach', status: 'lead', deal: 150_000, sls: ['tech'], city: 'Tuticorin', state: 'Tamil Nadu', code: '33', owner: 'sundar@phoenixxit.com', next: 'Qualify budget and timeline', nextIn: 4 },
-    { name: 'Bharathi Educational Trust', industry: 'education', stage: 'retention', status: 'churned', model: 'retainer', mrr: 0, sls: ['digital'], city: 'Coimbatore', state: 'Tamil Nadu', code: '33', owner: 'divya@phoenixxit.com', churnReason: 'COST', churnedDaysAgo: 40, onboarded: -400 },
-  ];
-
   const clientIds = {};
-  for (const c of clients) {
-    const id = uuid();
-    clientIds[c.name] = id;
-    const createdAt = addDays(new Date(), c.onboarded ? c.onboarded - 30 : -(20 + Math.floor(Math.random() * 60))).toISOString();
-
-    run(
-      `INSERT INTO clients (id, tenant_id, name, legal_name, industry, stage_id, status, owner_id, source,
-         gstin, city, state, state_code, country, currency, service_lines, engagement_model, mrr_minor,
-         deal_value_minor, next_action, next_action_date, next_action_owner_id, scope_total, scope_delivered,
-         satisfaction, onboarded_at, renewal_date, churned_at, churn_reason_code_id, stage_entered_at,
-         last_activity_at, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'India', 'INR', ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, tenantId, c.name, c.name, c.industry, stages[c.stage], c.status, users[c.owner],
-        pick(['referral', 'inbound', 'outreach', 'linkedin', 'event'], c.name.length),
-        c.gstin ?? null, c.city, c.state, c.code, JSON.stringify((c.sls || []).map((s) => sl[s])),
-        c.model || 'project', rupees(c.mrr || 0), rupees(c.deal || (c.mrr ? c.mrr * 12 : 0)),
-        c.next ?? null, c.nextIn != null ? addDays(new Date(), c.nextIn).toISOString().slice(0, 10) : null,
-        c.next ? users[c.owner] : null,
-        c.scope?.[0] || 0, c.scope?.[1] || 0, c.sat ?? null,
-        c.onboarded ? addDays(new Date(), c.onboarded).toISOString() : null,
-        c.renewal ? addDays(new Date(), c.renewal).toISOString().slice(0, 10) : null,
-        c.churnedDaysAgo ? addDays(new Date(), -c.churnedDaysAgo).toISOString() : null,
-        c.churnReason ? reasons[c.churnReason] : null,
-        addDays(new Date(), -(5 + Math.floor(Math.random() * 40))).toISOString(),
-        addDays(new Date(), -Math.floor(Math.random() * 12)).toISOString(),
-        createdAt, ts],
-    );
-
-    // Primary contact
-    const first = c.name.split(/[\s&]/)[0];
-    run(
-      `INSERT INTO contacts (id, tenant_id, client_id, name, designation, email, phone, whatsapp,
-         is_primary, consent_whatsapp, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,1,1,?,?)`,
-      [uuid(), tenantId, id,
-        pick(['Ravi Shankar', 'Lakshmi Narayan', 'Suresh Babu', 'Anitha Raj', 'Mohan Das', 'Deepa Krishnan'], c.name.length),
-        pick(['Director', 'Managing Partner', 'Marketing Head', 'Founder', 'CEO'], c.industry.length),
-        `contact@${first.toLowerCase()}.com`, '+919440000000', '+919440000000', ts, ts],
-    );
-
-    // Activity history so conversion / retention scores have real inputs.
-    const activityCount = c.status === 'active' ? 12 : 6;
-    for (let i = 0; i < activityCount; i++) {
-      const daysAgo = Math.floor((i + 1) * (c.status === 'active' ? 5 : 4)) + Math.floor(Math.random() * 3);
-      run(
-        `INSERT INTO activities (id, tenant_id, client_id, type, direction, subject, body, outcome,
-           occurred_at, user_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [uuid(), tenantId, id,
-          pick(['call', 'whatsapp', 'email', 'meeting', 'note'], i),
-          i % 3 === 0 ? 'inbound' : 'outbound',
-          pick(['Check-in call', 'Shared monthly report', 'Campaign review', 'Requirement discussion', 'Invoice follow-up'], i),
-          'Logged from the seed dataset.',
-          pick(['connected', 'positive', 'no_response', 'connected', 'positive'], i + c.name.length),
-          addDays(new Date(), -daysAgo).toISOString(), users[c.owner], ts],
-      );
-    }
-
-    // One grievance on the account that should read as at-risk.
-    if (c.name === 'Aroma Kitchens & Catering') {
-      run(
-        `INSERT INTO activities (id, tenant_id, client_id, type, direction, subject, body, outcome,
-           occurred_at, user_id, created_at) VALUES (?,?,?, 'grievance', 'inbound', ?, ?, 'negative', ?, ?, ?)`,
-        [uuid(), tenantId, id, 'Delay in monthly creative delivery',
-          'Client raised that the July creatives landed six days late.',
-          addDays(new Date(), -18).toISOString(), users['divya@phoenixxit.com'], ts],
-      );
-      run(
-        `UPDATE clients SET retention_risk = 1, retention_reason_code_id = ?, retention_reason_note = ?
-          WHERE id = ?`,
-        [reasons.RESULTS_BELOW, 'Creative turnaround slipped twice; engagement is down.', id],
-      );
-    }
-  }
-  console.log(`✓ ${clients.length} clients with contacts and activity history`);
+  const ctx = { tenantId, stages, users, sl, reasons };
+  for (const c of CLIENTS) clientIds[c.name] = insertClient(ctx, c);
+  console.log(`✓ ${CLIENTS.length} clients with contacts and activity history`);
 
   // -------------------------------------------------------------- projects
   const projects = [
