@@ -353,11 +353,35 @@
 
      197 of 197 server tests pass.
 
- NOT VERIFIED, because the toolchain was not available on this machine:
+     AN ANDROID APK HAS NOW BEEN BUILT.  (25 Aug 2026, on Windows, using the
+     JDK bundled with Android Studio and SDK build-tools 36.)
 
-     No APK has been built. There was no JDK or Android SDK installed.
+         gradlew clean assembleDebug    ->  BUILD SUCCESSFUL in 1m 26s
+         android/app/build/outputs/apk/debug/app-debug.apk    5.31 MB
 
-     Nothing has run on a real phone or an emulator.
+     The contents of that .apk were unpacked and checked, not assumed:
+
+         538 files, including the whole web bundle under assets/public/
+         the API origin baked in reads https://phoenixx-os.onrender.com
+         no stale localhost URLs left anywhere in the bundle
+         package com.phoenixx.os, versionCode 1, versionName "1.0"
+         minSdk 24, targetSdk 36, and INTERNET is the only permission
+         launcher activity and adaptive icon both present
+         usesCleartextTraffic is in the DEBUG source set only - a release
+           build does not carry it
+
+     The only build warnings are three javac "unchecked or unsafe operations"
+     notes, all of them from Capacitor's own Plugin.java inside node_modules.
+     Not from this project, and not fixable from here. Ignore them.
+
+
+ NOT VERIFIED, because the toolchain or hardware was not available:
+
+     Nothing has run on a real phone or an emulator. The .apk builds and its
+     contents are correct, but it has not been installed and launched.
+
+     No RELEASE build has been made. Only the debug variant above. No signing
+     key exists yet - see SHIPPING TO THE PLAY STORE.
 
      No iOS build has happened - that needs a Mac.
 
@@ -365,17 +389,20 @@
      syntax is valid and the commands were rehearsed locally, but expect the
      usual first-run adjustments any new CI pipeline needs.
 
+
  ONE THING THAT IS DEFINITELY STILL OUTSTANDING:
 
      The phone app cannot talk to the live server yet. The API currently
-     refuses requests from the app's address, and the fix for that is written
-     but has NOT been deployed. It ships the moment the mobile-capacitor
-     branch is merged into main - Render redeploys automatically.
+     refuses requests from the app's address.
 
-     This was confirmed against the live server, not assumed.
+     The fix is written and is correct - server/src/config.js lists
+     capacitor://localhost and http://localhost in corsOrigins - but it lives
+     on the mobile-capacitor branch, and Render deploys from main. So it is
+     NOT live. Merging is what ships it; Render redeploys automatically.
 
-     Until then, test against the API on your own machine using the LAN IP
-     method described in "THE EVERYDAY LOOP".
+     Until then an installed .apk will launch and render correctly and then
+     fail every API call. Test against the API on your own machine using the
+     LAN IP method described in "THE EVERYDAY LOOP".
 
 
 -------------------------------------------------------------------------------
