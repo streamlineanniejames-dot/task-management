@@ -88,6 +88,55 @@ sqlite3 /var/data/phoenixx.db ".backup '/var/data/backup-$(date +%F).db'"
 
 ---
 
+## Your own domain
+
+The app is served at **https://app.phoenixxedu.com**. Because one process serves
+the React app and the API together, the subdomain covers both — there is no
+second host, no CORS to configure and no split build.
+
+**1. DNS.** At the registrar holding `phoenixxedu.com`, add one record:
+
+| Type | Name | Value |
+|---|---|---|
+| CNAME | `app` | `<your-service>.onrender.com` |
+
+The service's `onrender.com` hostname is on its dashboard page. Use CNAME, not
+A — Render's IPs are not static.
+
+**2. Render.** Settings → Custom Domains → add `app.phoenixxedu.com`. It is also
+declared in [`render.yaml`](../../render.yaml), so a blueprint deploy adds it for
+you; the dashboard is the manual path. Render verifies the record and issues a
+Let's Encrypt certificate within a few minutes of DNS propagating. Renewal is
+automatic.
+
+**3. Tell the app its own address.** `WEB_BASE_URL` and `API_BASE_URL` are set to
+the subdomain in `render.yaml`. This is not cosmetic. `WEB_BASE_URL` is what
+builds the links that leave the building:
+
+- client proposal share links — `/p/:token`
+  ([`proposals.routes.js`](../server/src/routes/proposals.routes.js))
+- team invite links — `/accept-invite?token=`
+  ([`users.routes.js`](../server/src/routes/users.routes.js))
+
+Unset, it falls back to `http://localhost:5173` and every invite you send points
+at the recipient's own machine. It also seeds the production CORS allow-list
+([`config.js`](../server/src/config.js)).
+
+**What does not break.** Render keeps serving the old `onrender.com` hostname
+alongside the custom one, so anything already pointed there — including installed
+mobile builds — keeps working. New mobile builds pick up the subdomain from
+`phoenixx-os-mobile/.env`; the API origin is baked in at build time, so an
+existing app on someone's phone only moves after a rebuild and reinstall.
+
+**Still the free tier.** A custom domain does not change the plan. The instance
+still sleeps after ~15 minutes idle (~50s first request back) and still discards
+the database when it does. A real domain in front of a demo deployment reads as a
+production system to whoever you send it to — move to `plan: starter` with a disk
+before that address goes on anything client-facing.
+
+---
+
+
 ## Other hosts
 
 Same shape, same constraints.
@@ -111,6 +160,7 @@ of them. The ones that matter for a deploy:
 | `NODE_ENV` | `production` |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | 24+ random characters each. **The app refuses to start in production without them** — the dev fallbacks are in this repo, so anyone could mint a session with them |
 | `SERVE_WEB` | `true` — this process also serves `web/dist`, so the whole app is one origin with no CORS to configure |
+| `WEB_BASE_URL`, `API_BASE_URL` | The deployment's public address, e.g. `https://app.phoenixxedu.com`. `WEB_BASE_URL` builds proposal share links and team invite links, so an unset value mails people a `localhost` URL |
 | `DB_FILE`, `STORAGE_DIR` | Paths on the persistent disk, if there is one |
 | `SEED_ON_BOOT` | `true` only on a disk-less free tier |
 | `WHATSAPP_PROVIDER`, `EMAIL_PROVIDER` | `log` until you have real credentials; both write to stdout instead of sending |

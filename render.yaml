@@ -36,6 +36,15 @@ services:
     healthCheckPath: /api/v1/health
     autoDeploy: true
 
+    # Custom domain. Render still serves the default onrender.com hostname
+    # alongside this one, so the mobile builds already pointing there keep
+    # working; app.phoenixxedu.com is simply the address people are given.
+    #
+    # DNS, at your registrar: CNAME  app  ->  <service>.onrender.com
+    # Render issues and renews the TLS certificate once that record resolves.
+    domains:
+      - app.phoenixxedu.com
+
     # --- Uncomment together with `plan: starter` to keep data between restarts.
     # disk:
     #   name: data
@@ -49,6 +58,16 @@ services:
         value: production
       - key: SERVE_WEB
         value: 'true' # this process also serves web/dist — one origin, no CORS
+
+      # The public address of this deployment. Not cosmetic: WEB_BASE_URL is
+      # what builds the links that leave the building — client proposal share
+      # links (/p/:token) and team invite links (/accept-invite). Left unset it
+      # falls back to http://localhost:5173, and every invite you send points at
+      # the recipient's own machine.
+      - key: WEB_BASE_URL
+        value: https://app.phoenixxedu.com
+      - key: API_BASE_URL
+        value: https://app.phoenixxedu.com
 
       # Generated once by Render and then held. Never commit real secrets.
       - key: JWT_ACCESS_SECRET

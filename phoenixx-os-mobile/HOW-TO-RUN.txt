@@ -43,7 +43,7 @@
 
  Copy .env.example to .env and check the line inside it:
 
-     VITE_API_URL=https://phoenixx-os.onrender.com
+     VITE_API_URL=https://app.phoenixxedu.com
 
  Origin only. No trailing slash. No /api/v1 on the end - that gets added for
  you.

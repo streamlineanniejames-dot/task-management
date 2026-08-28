@@ -35,7 +35,7 @@ env:
   # Precedence: manual input, then repo variable, then the deployed default.
   # This is baked into the bundle at build time and cannot be changed later
   # without rebuilding — see phoenixx-os-mobile/README.md.
-  VITE_API_URL: ${{ inputs.api_url || vars.VITE_API_URL || 'https://phoenixx-os.onrender.com' }}
+  VITE_API_URL: ${{ inputs.api_url || vars.VITE_API_URL || 'https://app.phoenixxedu.com' }}
 
 jobs:
   android:

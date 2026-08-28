@@ -39,7 +39,7 @@ phoenixx-os-mobile/www      Capacitor's web root
 Copy `.env.example` to `.env` and set the API origin:
 
 ```
-VITE_API_URL=https://phoenixx-os.onrender.com
+VITE_API_URL=https://app.phoenixxedu.com
 ```
 
 Origin only — no trailing slash, no `/api/v1` (that is appended in
