@@ -132,6 +132,59 @@ describe('tenant isolation', () => {
   });
 });
 
+describe('adding a team member', () => {
+  test('a password set by an admin makes the account usable straight away', async () => {
+    const res = await api.post('/users', {
+      name: 'Direct Hire', email: 'direct@alpha.test', role: 'employee', password: 'Onboard@2026',
+    }, { token: alphaToken });
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.data.status, 'active');
+    assert.equal(res.body.data.invite_url, undefined, 'no invite link when a password was set');
+
+    const login = await api.post('/auth/login', { email: 'direct@alpha.test', password: 'Onboard@2026' });
+    assert.equal(login.status, 200);
+  });
+
+  test('omitting the password still issues an invitation', async () => {
+    const res = await api.post('/users', {
+      name: 'Invited Hire', email: 'invited@alpha.test', role: 'employee',
+    }, { token: alphaToken });
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.data.status, 'invited');
+    assert.ok(res.body.data.invite_url.includes('/accept-invite?token='));
+  });
+
+  test('a password shorter than eight characters is rejected on the field', async () => {
+    const res = await api.post('/users', {
+      name: 'Weak Hire', email: 'weakhire@alpha.test', role: 'employee', password: 'short',
+    }, { token: alphaToken });
+
+    assert.equal(res.status, 422);
+    assert.ok(res.body.error.details.some((d) => d.field === 'password'));
+  });
+
+  test('a password cannot be slipped in through the update route', async () => {
+    const created = await api.post('/users', {
+      name: 'Patch Target', email: 'patch@alpha.test', role: 'employee', password: 'Original@2026',
+    }, { token: alphaToken });
+
+    const patched = await api.patch(`/users/${created.body.data.id}`, {
+      designation: 'Analyst', password: 'Hijacked@2026',
+    }, { token: alphaToken });
+    assert.equal(patched.status, 200);
+    assert.equal(patched.body.data.designation, 'Analyst');
+
+    // The field is stripped rather than applied: changing a password is its own
+    // route, because that one also revokes every existing session.
+    assert.equal((await api.post('/auth/login',
+      { email: 'patch@alpha.test', password: 'Hijacked@2026' })).status, 401);
+    assert.equal((await api.post('/auth/login',
+      { email: 'patch@alpha.test', password: 'Original@2026' })).status, 200);
+  });
+});
+
 describe('role-based access control', () => {
   let employeeToken; let financeToken; let employeeId;
 

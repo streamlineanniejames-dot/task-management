@@ -179,7 +179,18 @@ function OrgTree({ nodes, depth = 0, onSelect }: { nodes: any[]; depth?: number;
   );
 }
 
-/* ---------------------------------------------------------------- invite */
+/**
+ * A password somebody reads off a screen and types into a phone. The alphabet
+ * drops O/0 and l/1 because these get transcribed by hand far more often than
+ * they get pasted.
+ */
+function generatePassword(): string {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const picks = crypto.getRandomValues(new Uint32Array(14));
+  return Array.from(picks, (n) => alphabet[n % alphabet.length]).join('');
+}
+
+/* ------------------------------------------------------------ add a member */
 function InviteModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -187,7 +198,9 @@ function InviteModal({ onClose }: { onClose: () => void }) {
     name: '', email: '', role: 'employee', designation: '', phone: '',
     service_line_id: '', manager_id: '', monthly_cost: '', date_of_joining: new Date().toISOString().slice(0, 10),
   });
-  const [inviteUrl, setInviteUrl] = useState('');
+  const [mode, setMode] = useState<'invite' | 'password'>('invite');
+  const [password, setPassword] = useState('');
+  const [created, setCreated] = useState<{ invite_url?: string; password?: string } | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const { data: meta } = useQuery({
@@ -214,10 +227,17 @@ function InviteModal({ onClose }: { onClose: () => void }) {
       manager_id: form.manager_id || null,
       monthly_cost_minor: form.monthly_cost ? Math.round(Number(form.monthly_cost) * 100) : 0,
       date_of_joining: form.date_of_joining || null,
+      // Omitted entirely in invite mode, which is what keeps the old flow intact.
+      ...(mode === 'password' ? { password } : {}),
     }),
     onSuccess: (res: any) => {
-      setInviteUrl(res.data.invite_url);
-      toast.success('Invitation created. Share the link below.');
+      setCreated({
+        invite_url: res.data.invite_url,
+        password: mode === 'password' ? password : undefined,
+      });
+      toast.success(mode === 'password'
+        ? `${form.name.trim()} can sign in now.`
+        : 'Invitation created. Share the link below.');
       qc.invalidateQueries({ queryKey: ['team'] });
     },
     onError: (e: any) => {
@@ -229,20 +249,26 @@ function InviteModal({ onClose }: { onClose: () => void }) {
   const set = (k: string, v: string) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: '' })); };
   const overBand = invite.error && (invite.error as any).message?.includes('covers up to');
 
-  if (inviteUrl) {
+  if (created) {
+    const isPassword = !!created.password;
+    const secret = created.password || created.invite_url || '';
     return (
-      <Modal open onClose={onClose} title="Invitation ready" size="sm"
-        subtitle="Share this link — it lets them set their own password"
+      <Modal open onClose={onClose} size="sm"
+        title={isPassword ? 'Account created' : 'Invitation ready'}
+        subtitle={isPassword
+          ? `${form.email.trim().toLowerCase()} can sign in now`
+          : 'Share this link — it lets them set their own password'}
         footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
         <div className="space-y-3">
-          <Input readOnly value={inviteUrl} className="mono text-[12px]" onFocus={(e) => e.currentTarget.select()} />
+          <Input readOnly value={secret} className="mono text-[12px]" onFocus={(e) => e.currentTarget.select()} />
           <Button className="w-full justify-center" icon={<Copy size={15} />}
-            onClick={() => { navigator.clipboard?.writeText(inviteUrl); toast.success('Copied.'); }}>
-            Copy invitation link
+            onClick={() => { navigator.clipboard?.writeText(secret); toast.success('Copied.'); }}>
+            {isPassword ? 'Copy password' : 'Copy invitation link'}
           </Button>
           <p className="text-[12.5px] text-subtle leading-relaxed">
-            Send it over your usual channel. The link works once, and the account stays in “invited”
-            state until they set a password.
+            {isPassword
+              ? 'This is the only time it is shown. Send it over a secure channel, and ask them to change it after their first sign-in.'
+              : 'Send it over your usual channel. The link works once, and the account stays in “invited” state until they set a password.'}
           </p>
         </div>
       </Modal>
@@ -250,7 +276,8 @@ function InviteModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal open onClose={onClose} title="Invite a team member" size="lg"
+    <Modal open onClose={onClose} size="lg"
+      title={mode === 'password' ? 'Add a team member' : 'Invite a team member'}
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -260,11 +287,44 @@ function InviteModal({ onClose }: { onClose: () => void }) {
             </Button>
           )}
           <Button variant="primary" loading={invite.isPending}
-            disabled={!form.name.trim() || !/\S+@\S+\.\S+/.test(form.email)}
-            onClick={() => invite.mutate(false)}>Create invitation</Button>
+            disabled={!form.name.trim() || !/\S+@\S+\.\S+/.test(form.email)
+              || (mode === 'password' && password.length < 8)}
+            onClick={() => invite.mutate(false)}>
+            {mode === 'password' ? 'Create account' : 'Create invitation'}
+          </Button>
         </>
       }>
       <div className="space-y-4">
+        <Tabs
+          tabs={[
+            { id: 'invite', label: 'Send an invite link' },
+            { id: 'password', label: 'Set a password now' },
+          ]}
+          active={mode}
+          onChange={(id) => {
+            setMode(id as 'invite' | 'password');
+            setErrors((e) => ({ ...e, password: '' }));
+          }}
+        />
+
+        {mode === 'password' ? (
+          <Field label="Password" required error={errors.password}
+            hint="They sign in with this immediately — no link to pass along.">
+            <div className="flex gap-2">
+              <Input value={password} className="mono"
+                placeholder="At least 8 characters"
+                onChange={(e) => { setPassword(e.target.value); setErrors((x) => ({ ...x, password: '' })); }} />
+              <Button type="button" icon={<KeyRound size={15} />}
+                onClick={() => setPassword(generatePassword())}>Generate</Button>
+            </div>
+          </Field>
+        ) : (
+          <p className="text-[12.5px] text-subtle leading-relaxed">
+            They get a one-time link and choose their own password. Nothing is emailed while the mail
+            provider is set to <code className="mono">log</code> — you copy the link and send it.
+          </p>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Full name" required error={errors.name}>
             <Input value={form.name} onChange={(e) => set('name', e.target.value)} autoFocus />

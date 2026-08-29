@@ -29,6 +29,17 @@ const userSchema = z.object({
   status: z.enum(['active', 'invited', 'disabled']).optional(),
 });
 
+/**
+ * Creating someone is not the same shape as editing them. A password may be set
+ * at creation but is never a field you can PATCH - that goes through
+ * /:id/reset-password, which also revokes existing sessions. Keeping it off
+ * userSchema is load-bearing: PATCH builds its UPDATE from those same keys, so a
+ * `password` there would try to write a column that does not exist.
+ */
+const createUserSchema = userSchema.extend({
+  password: z.string().min(8, 'Password must be at least 8 characters').optional(),
+});
+
 const SELECT = `
   SELECT u.id, u.name, u.email, u.role, u.custom_role_id, u.designation, u.phone, u.whatsapp,
          u.service_line_id, u.manager_id, u.client_id, u.employment_type, u.date_of_joining,
@@ -123,9 +134,9 @@ router.get('/:id', requires('employees', 'view'), (req, res) => {
   });
 });
 
-// ------------------------------------------------------------------ invite
+// -------------------------------------------------------------- add a member
 router.post('/', requires('users', 'create'), (req, res) => {
-  const body = validate(userSchema, req.body);
+  const body = validate(createUserSchema, req.body);
   const { tenantId } = req.auth;
   const email = body.email.toLowerCase();
 
@@ -147,24 +158,41 @@ router.post('/', requires('users', 'create'), (req, res) => {
     );
   }
 
+  /**
+   * Two ways in. Send an invitation and let them pick their own password, or set
+   * one now and hand it over. The second exists because nothing is actually
+   * delivered while EMAIL_PROVIDER is `log` - somebody is carrying the
+   * credential across by hand either way, so the invite round-trip only adds a
+   * step. A password here means the account is active immediately; without one
+   * the behaviour is unchanged.
+   */
   const id = uuid();
-  const inviteToken = token(24);
+  const direct = body.password ?? null;
+  const inviteToken = direct ? null : token(24);
   run(
     `INSERT INTO users (id, tenant_id, email, password_hash, name, phone, whatsapp, role, custom_role_id,
        designation, service_line_id, manager_id, client_id, employment_type, date_of_joining,
        monthly_cost_minor, status, invite_token, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'invited', ?, ?, ?)`,
-    [id, tenantId, email, bcrypt.hashSync(token(16), 10), body.name, body.phone ?? null,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [id, tenantId, email, bcrypt.hashSync(direct || token(16), 10), body.name, body.phone ?? null,
       body.whatsapp ?? body.phone ?? null, body.role, body.custom_role_id ?? null,
       body.designation ?? null, body.service_line_id ?? null, body.manager_id ?? null,
       body.client_id ?? null, body.employment_type || 'full_time', body.date_of_joining ?? null,
-      body.monthly_cost_minor || 0, inviteToken, nowIso(), nowIso()],
+      body.monthly_cost_minor || 0, direct ? 'active' : 'invited', inviteToken, nowIso(), nowIso()],
   );
 
-  audit(req, { entity: 'user', entityId: id, action: 'create', after: { email, role: body.role } });
+  // The password itself is never written to the audit trail, only how they joined.
+  audit(req, {
+    entity: 'user',
+    entityId: id,
+    action: 'create',
+    after: { email, role: body.role, onboarding: direct ? 'password set by admin' : 'invited' },
+  });
   return created(res, {
     ...get(`${SELECT} WHERE u.id = ?`, [id]),
-    invite_url: `${config.webBaseUrl}/accept-invite?token=${inviteToken}`,
+    ...(inviteToken
+      ? { invite_url: `${config.webBaseUrl}/accept-invite?token=${inviteToken}` }
+      : { note: 'The account is active. Share the password over a secure channel and ask them to change it after signing in.' }),
   });
 });
 
