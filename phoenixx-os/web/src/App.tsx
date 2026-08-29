@@ -6,6 +6,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import AcceptInvite from './pages/AcceptInvite';
+import Recover from './pages/Recover';
 import PublicProposal from './pages/PublicProposal';
 import Home from './pages/Home';
 
@@ -62,6 +63,7 @@ export default function App() {
       {/* -------------------------------------------------------- public */}
       <Route path="/p/:token" element={<PublicProposal />} />
       <Route path="/accept-invite" element={<AcceptInvite />} />
+      <Route path="/recover" element={<Recover />} />
       <Route path="/login" element={loading ? <FullPageSpinner /> : user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/signup" element={loading ? <FullPageSpinner /> : user ? <Navigate to="/" replace /> : <Signup />} />
 

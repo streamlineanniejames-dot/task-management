@@ -44,6 +44,7 @@ const SELECT = `
   SELECT u.id, u.name, u.email, u.role, u.custom_role_id, u.designation, u.phone, u.whatsapp,
          u.service_line_id, u.manager_id, u.client_id, u.employment_type, u.date_of_joining,
          u.monthly_cost_minor, u.avatar_url, u.status, u.twofa_enabled, u.last_login_at, u.created_at,
+         (u.security_answer_hash IS NOT NULL) AS has_security_question,
          m.name AS manager_name, sl.name AS service_line_name, cr.name AS custom_role_name,
          cl.name AS portal_client_name
     FROM users u

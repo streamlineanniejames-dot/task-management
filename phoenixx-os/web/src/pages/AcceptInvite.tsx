@@ -5,6 +5,10 @@ import { ArrowRight, AlertTriangle } from 'lucide-react';
 import { api, tokens } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Button, Field, Input } from '../components/ui';
+import {
+  SecurityQuestionFields, EMPTY_SECURITY_QUESTION, isSecurityQuestionComplete,
+  type SecurityQuestionValue,
+} from '../components/SecurityQuestion';
 
 /** Invitation acceptance — the invitee sets their own password. */
 export default function AcceptInvite() {
@@ -16,18 +20,24 @@ export default function AcceptInvite() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [security, setSecurity] = useState<SecurityQuestionValue>(EMPTY_SECURITY_QUESTION);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const accept = useMutation({
     mutationFn: () => api.post('/auth/accept-invite', {
-      token, password, ...(name.trim() ? { name: name.trim() } : {}),
+      token,
+      password,
+      ...(name.trim() ? { name: name.trim() } : {}),
+      security_question: security.question.trim(),
+      security_answer: security.answer.trim(),
     }),
     onSuccess: async (res: any) => {
       tokens.set(res.data.access_token, res.data.refresh_token);
       await refresh();
       navigate('/', { replace: true });
     },
-    onError: (e: any) => setError(e.message),
+    onError: (e: any) => { setError(e.message); setFieldErrors(e.fieldErrors || {}); },
   });
 
   const mismatch = confirm.length > 0 && password !== confirm;
@@ -61,7 +71,8 @@ export default function AcceptInvite() {
 
         <h1 className="text-[23px] font-semibold text-ink tracking-[-0.01em]">Set up your account</h1>
         <p className="mt-1 text-[14px] text-subtle">
-          Choose a password and you are in. Your role and team are already set up for you.
+          Choose a password and a security question, and you are in. Your role and team are
+          already set up for you.
         </p>
 
         <form className="mt-7 space-y-4" onSubmit={(e) => { e.preventDefault(); accept.mutate(); }} noValidate>
@@ -77,6 +88,15 @@ export default function AcceptInvite() {
               autoComplete="new-password" />
           </Field>
 
+          {/* The only moment we can be sure the new user is here to choose one.
+              Without it, forgetting the password means asking an owner or HR. */}
+          <div className="border-t border-line pt-4 space-y-4">
+            <p className="text-[13px] text-subtle leading-relaxed">
+              If you ever forget your password, this is how you get back in on your own.
+            </p>
+            <SecurityQuestionFields value={security} onChange={setSecurity} errors={fieldErrors} />
+          </div>
+
           {error && (
             <p role="alert" className="rounded-md border border-[color-mix(in_srgb,var(--negative)_30%,transparent)]
                                         bg-negative-soft px-3 py-2 text-[13px] text-[var(--negative)]">
@@ -85,9 +105,10 @@ export default function AcceptInvite() {
           )}
 
           <Button type="submit" variant="primary" size="lg" className="w-full justify-center"
-            loading={accept.isPending} disabled={password.length < 8 || mismatch}
+            loading={accept.isPending}
+            disabled={password.length < 8 || mismatch || !isSecurityQuestionComplete(security)}
             icon={!accept.isPending ? <ArrowRight size={16} /> : undefined}>
-            Set password and continue
+            Finish setting up
           </Button>
         </form>
 

@@ -8,9 +8,17 @@ import { config } from '../config.js';
 // target swaps this for the Redis counter without changing call sites.
 const buckets = new Map();
 
-export function rateLimit({ windowMs = config.rateLimit.windowMs, max = config.rateLimit.max } = {}) {
+/**
+ * `keyBy` overrides what the window counts against. The default - tenant, then
+ * IP - is right for authenticated traffic, but an unauthenticated endpoint that
+ * targets one named account (password recovery) wants a per-account window
+ * instead: an office behind one NAT address should not exhaust the budget for
+ * everybody, and spraying many accounts from one IP is what the per-account
+ * lockout is there to stop.
+ */
+export function rateLimit({ windowMs = config.rateLimit.windowMs, max = config.rateLimit.max, keyBy } = {}) {
   return (req, res, next) => {
-    const key = req.auth?.tenantId || req.ip || 'anon';
+    const key = keyBy ? keyBy(req) : (req.auth?.tenantId || req.ip || 'anon');
     const now = Date.now();
     let b = buckets.get(key);
     if (!b || now > b.reset) {

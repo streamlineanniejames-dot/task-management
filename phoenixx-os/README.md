@@ -29,6 +29,11 @@ listed on the login screen (password `Phoenixx@2026`):
 | Employee | `priya@phoenixxit.com` | Only their own work |
 | Platform admin | `platform@phoenixxit.com` | Tenant console (`Platform@2026`) |
 
+**Forgot your password?** on the login screen recovers an account through its
+security question. Every seeded account answers the same one — *"Which city were
+you in when you started your first job?"* — with **Coimbatore**. Real accounts
+set their own question when they accept an invitation or sign up.
+
 `npm run seed` builds Phoenixx IT as tenant #1 with three months of realistic
 history — 15 clients across the pipeline, 26 invoices, costs, attendance, SOP
 runs and a hiring pipeline — plus a second tenant so isolation is visible rather

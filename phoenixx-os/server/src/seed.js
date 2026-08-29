@@ -1094,6 +1094,24 @@ if (phoenixxId) {
   console.log(`✓ ${chatted} chat messages across the company channel and the project rooms`);
 }
 
+/**
+ * Account recovery needs a question on every demo account, or the "Forgot your
+ * password?" flow has nothing to show. One shared question and answer, printed
+ * below with the passwords - this is seed data for a workspace that is rebuilt
+ * on every cold start, not a credential worth protecting.
+ */
+const DEMO_QUESTION = 'Which city were you in when you started your first job?';
+const DEMO_ANSWER = 'Coimbatore';
+{
+  const answerHash = bcrypt.hashSync(DEMO_ANSWER.toLowerCase(), 10);
+  const { changes } = run(
+    `UPDATE users SET security_question = ?, security_answer_hash = ?, security_updated_at = ?
+      WHERE security_answer_hash IS NULL AND deleted_at IS NULL`,
+    [DEMO_QUESTION, answerHash, nowIso()],
+  );
+  console.log(`✓ security question set on ${changes} account${changes === 1 ? '' : 's'}`);
+}
+
 console.log('\n' + '─'.repeat(52));
 console.log('Sign in at http://localhost:5173\n');
 console.log('  Owner      arun@phoenixxit.com       Phoenixx@2026');
@@ -1102,4 +1120,8 @@ console.log('  Finance    meera@phoenixxit.com      Phoenixx@2026');
 console.log('  HR         sanjay@phoenixxit.com     Phoenixx@2026');
 console.log('  Employee   priya@phoenixxit.com      Phoenixx@2026');
 console.log('  Platform   platform@phoenixxit.com   Platform@2026');
+console.log('');
+console.log('Forgot-password demo — every account answers the same question:');
+console.log(`  "${DEMO_QUESTION}"`);
+console.log(`  ${DEMO_ANSWER}`);
 console.log('');

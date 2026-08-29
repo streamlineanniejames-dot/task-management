@@ -35,6 +35,18 @@ const ADDED_COLUMNS = [
   // Delivery lead on a project, alongside the existing manager_id. Mirrors the
   // project_members row holding the 'lead' seat.
   ['projects', 'lead_id', 'TEXT'],
+  // Security-question account recovery. The question is shown back to whoever
+  // is trying to recover, so it is stored in the clear; the answer never is.
+  ['users', 'security_question', 'TEXT'],
+  ['users', 'security_answer_hash', 'TEXT'],
+  ['users', 'security_updated_at', 'TEXT'],
+  // Wrong-answer throttling lives on the row rather than in the in-memory rate
+  // limiter: a lockout has to survive a restart and cannot be shed by moving IP.
+  ['users', 'recovery_failed_attempts', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'recovery_locked_until', 'TEXT'],
+  // Single-use, short-lived, stored as a SHA-256 digest like refresh tokens.
+  ['users', 'recovery_token', 'TEXT'],
+  ['users', 'recovery_token_expires_at', 'TEXT'],
 ];
 
 function addColumns() {

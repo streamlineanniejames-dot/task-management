@@ -1,9 +1,13 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ShieldCheck, KeyRound, Smartphone, Monitor, Check, LogOut } from 'lucide-react';
+import { ShieldCheck, KeyRound, Smartphone, Monitor, Check, LogOut, ShieldQuestion } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { dateTime, relative, titleCase } from '../lib/format';
+import {
+  SecurityQuestionFields, EMPTY_SECURITY_QUESTION, isSecurityQuestionComplete,
+  type SecurityQuestionValue,
+} from '../components/SecurityQuestion';
 import {
   Avatar, Badge, Button, Card, CardHeader, EmptyState, Field, Input, Modal, PageHeader,
   Table, TD, TH, THead, TR, useToast, cx, Skeleton,
@@ -17,10 +21,16 @@ export default function Profile() {
   const [phone, setPhone] = useState(user?.phone || '');
   const [twofaOpen, setTwofaOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [questionOpen, setQuestionOpen] = useState(false);
 
   const sessions = useQuery({
     queryKey: ['sessions'],
     queryFn: () => api.get('/auth/sessions').then((r) => r.data),
+  });
+
+  const securityQuestion = useQuery({
+    queryKey: ['security-question'],
+    queryFn: () => api.get('/auth/security-question').then((r) => r.data),
   });
 
   const saveProfile = useMutation({
@@ -97,6 +107,34 @@ export default function Profile() {
               )}
 
               <div className="border-t border-line pt-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13.5px] font-medium text-ink">Security question</p>
+                    <p className="text-[12.5px] text-subtle leading-snug mt-0.5">
+                      {securityQuestion.data?.configured
+                        ? 'Answer it on the sign-in page to reset a forgotten password yourself.'
+                        : 'Without one, a forgotten password means asking an owner or HR to reset it for you.'}
+                    </p>
+                  </div>
+                  {securityQuestion.isLoading ? null
+                    : securityQuestion.data?.configured
+                      ? <Badge tone="positive" dot>set</Badge>
+                      : <Badge tone="warning" dot>not set</Badge>}
+                </div>
+
+                {securityQuestion.data?.configured && (
+                  <p className="mt-2 rounded-md border border-line bg-sunken px-2.5 py-2 text-[12.5px] text-muted leading-snug">
+                    {securityQuestion.data.question}
+                  </p>
+                )}
+
+                <Button className="mt-2.5" icon={<ShieldQuestion size={15} />}
+                  onClick={() => setQuestionOpen(true)}>
+                  {securityQuestion.data?.configured ? 'Change question' : 'Set a security question'}
+                </Button>
+              </div>
+
+              <div className="border-t border-line pt-4">
                 <p className="text-[13.5px] font-medium text-ink">Password</p>
                 <p className="text-[12.5px] text-subtle mt-0.5 mb-2.5">
                   Changing it signs out every other session.
@@ -138,6 +176,13 @@ export default function Profile() {
 
       {twofaOpen && <TwoFactorModal onClose={() => setTwofaOpen(false)} />}
       {passwordOpen && <PasswordModal onClose={() => setPasswordOpen(false)} />}
+      {questionOpen && (
+        <SecurityQuestionModal
+          current={securityQuestion.data?.question || ''}
+          onClose={() => setQuestionOpen(false)}
+          onSaved={() => securityQuestion.refetch()}
+        />
+      )}
     </>
   );
 }
@@ -247,6 +292,60 @@ function PasswordModal({ onClose }: { onClose: () => void }) {
         <p className="text-[12.5px] text-subtle">
           Every other session is signed out when the password changes.
         </p>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Setting or changing the recovery question. The current password is asked for
+ * here because the server requires it: a session somebody else got hold of must
+ * not be able to plant an answer they know and the real owner does not.
+ */
+function SecurityQuestionModal({ current, onClose, onSaved }: {
+  current: string; onClose: () => void; onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [value, setValue] = useState<SecurityQuestionValue>(
+    current ? { ...EMPTY_SECURITY_QUESTION, question: current } : EMPTY_SECURITY_QUESTION,
+  );
+  const [password, setPassword] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const save = useMutation({
+    mutationFn: () => api.put('/auth/security-question', {
+      question: value.question.trim(), answer: value.answer.trim(), password,
+    }),
+    onSuccess: () => {
+      toast.success(current ? 'Security question updated.' : 'Security question set.');
+      onSaved();
+      onClose();
+    },
+    onError: (e: any) => { setErrors(e.fieldErrors || {}); toast.error(e.message); },
+  });
+
+  return (
+    <Modal open onClose={onClose} size="sm"
+      title={current ? 'Change your security question' : 'Set a security question'}
+      subtitle="Used to reset your own password if you are ever locked out"
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={save.isPending}
+            disabled={!password || !isSecurityQuestionComplete(value)}
+            onClick={() => save.mutate()}>
+            {current ? 'Update question' : 'Set question'}
+          </Button>
+        </>
+      }>
+      <div className="space-y-4">
+        <SecurityQuestionFields value={value} onChange={(v) => { setValue(v); setErrors({}); }}
+          errors={errors} />
+        <Field label="Your current password" required error={errors.password}
+          hint="Confirms it is really you changing this">
+          <Input type="password" value={password} autoComplete="current-password"
+            onChange={(e) => { setPassword(e.target.value); setErrors((x) => ({ ...x, password: '' })); }} />
+        </Field>
       </div>
     </Modal>
   );

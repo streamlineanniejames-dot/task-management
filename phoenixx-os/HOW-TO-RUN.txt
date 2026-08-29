@@ -65,6 +65,20 @@
  Invoices or Billing in the sidebar at all, and the API refuses those routes
  even if you type the URL directly.
 
+ FORGOT THE PASSWORD?
+
+     "Forgot your password?" under the password box recovers an account with
+     its security question - no email is sent, and no admin is needed.
+
+     Every seeded account answers the same question:
+
+         "Which city were you in when you started your first job?"
+         Coimbatore
+
+     Answer it, set a new password, and sign in again. Five wrong answers lock
+     recovery on that account for 15 minutes. People who join for real pick
+     their own question when they accept their invitation.
+
 
 -------------------------------------------------------------------------------
  WHAT THE SEED CREATES

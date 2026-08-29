@@ -127,6 +127,12 @@ export default function Login() {
                 autoComplete="current-password" required placeholder="••••••••" />
             </Field>
 
+            <div className="flex justify-end -mt-1">
+              <Link to="/recover" className="text-[13px] text-[var(--brand)] hover:underline">
+                Forgot your password?
+              </Link>
+            </div>
+
             {needsTotp && (
               <Field label="Authenticator code" hint="Six digits from your authenticator app" required>
                 <Input value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, '').slice(0, 6))}

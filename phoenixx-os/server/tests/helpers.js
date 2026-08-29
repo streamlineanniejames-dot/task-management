@@ -66,6 +66,7 @@ export async function startServer() {
     close: () => new Promise((r) => server.close(r)),
     get: (p, o) => request('GET', p, o),
     post: (p, body, o) => request('POST', p, { body, ...o }),
+    put: (p, body, o) => request('PUT', p, { body, ...o }),
     patch: (p, body, o) => request('PATCH', p, { body, ...o }),
     del: (p, o) => request('DELETE', p, o),
   };

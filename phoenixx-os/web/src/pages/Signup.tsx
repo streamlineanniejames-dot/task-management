@@ -6,6 +6,10 @@ import { useAuth } from '../lib/auth';
 import { api, ApiError } from '../lib/api';
 import { money } from '../lib/format';
 import { Button, Field, Input, cx } from '../components/ui';
+import {
+  SecurityQuestionFields, EMPTY_SECURITY_QUESTION, isSecurityQuestionComplete,
+  type SecurityQuestionValue,
+} from '../components/SecurityQuestion';
 
 /**
  * S7 — tenant self-signup. Three short steps rather than one long form:
@@ -22,6 +26,7 @@ export default function Signup() {
     owner_name: '', email: '', phone: '', password: '',
     plan_code: 'growth' as 'starter' | 'growth' | 'scale',
   });
+  const [security, setSecurity] = useState<SecurityQuestionValue>(EMPTY_SECURITY_QUESTION);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -41,7 +46,8 @@ export default function Signup() {
   const canAdvance = () => {
     if (step === 0) return form.agency_name.trim().length >= 2;
     if (step === 1) return form.owner_name.trim().length >= 2
-      && /\S+@\S+\.\S+/.test(form.email) && form.password.length >= 8;
+      && /\S+@\S+\.\S+/.test(form.email) && form.password.length >= 8
+      && isSecurityQuestionComplete(security);
     return true;
   };
 
@@ -57,6 +63,8 @@ export default function Signup() {
         phone: form.phone || undefined,
         city: form.city || undefined,
         plan_code: form.plan_code,
+        security_question: security.question.trim(),
+        security_answer: security.answer.trim(),
       });
       navigate('/', { replace: true });
     } catch (err: any) {
@@ -141,6 +149,16 @@ export default function Signup() {
                   <Input type="password" value={form.password} onChange={(e) => set('password', e.target.value)}
                     autoComplete="new-password" />
                 </Field>
+
+                {/* An owner is the top of their own workspace - there is nobody
+                    above them to reset a forgotten password. */}
+                <div className="border-t border-line pt-4 space-y-4">
+                  <p className="text-[13px] text-subtle leading-relaxed">
+                    Nobody can reset an owner password for you, so set a question you can
+                    answer if you are ever locked out.
+                  </p>
+                  <SecurityQuestionFields value={security} onChange={setSecurity} errors={fieldErrors} />
+                </div>
               </div>
             )}
 

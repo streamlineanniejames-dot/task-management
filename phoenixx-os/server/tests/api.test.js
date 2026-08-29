@@ -196,14 +196,26 @@ describe('role-based access control', () => {
     employeeId = invite.body.data.id;
 
     const inviteToken = new URL(invite.body.data.invite_url).searchParams.get('token');
-    const accepted = await api.post('/auth/accept-invite', { token: inviteToken, password: 'Password@123' });
+    // Accepting an invitation also sets the account-recovery question - it is
+    // the one moment the new user is there to choose one.
+    const accepted = await api.post('/auth/accept-invite', {
+      token: inviteToken,
+      password: 'Password@123',
+      security_question: 'What was the name of the first street you lived on as a child?',
+      security_answer: 'Trichy Road',
+    });
     employeeToken = accepted.body.data.access_token;
 
     const finance = await api.post('/users', {
       name: 'Test Finance', email: 'finance@alpha.test', role: 'finance',
     }, { token: alphaToken });
     const financeInvite = new URL(finance.body.data.invite_url).searchParams.get('token');
-    financeToken = (await api.post('/auth/accept-invite', { token: financeInvite, password: 'Password@123' })).body.data.access_token;
+    financeToken = (await api.post('/auth/accept-invite', {
+      token: financeInvite,
+      password: 'Password@123',
+      security_question: 'What was the make and model of your first vehicle?',
+      security_answer: 'Bajaj Chetak',
+    })).body.data.access_token;
   });
 
   test('an employee cannot see invoices', async () => {
