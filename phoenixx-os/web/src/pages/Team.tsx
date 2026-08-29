@@ -59,7 +59,7 @@ export default function Team() {
             )}
             {can('users', 'create') && (
               <Button variant="primary" icon={<Plus size={15} />} onClick={() => setInviteOpen(true)}>
-                Invite someone
+                Add someone
               </Button>
             )}
           </>
@@ -198,7 +198,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
     name: '', email: '', role: 'employee', designation: '', phone: '',
     service_line_id: '', manager_id: '', monthly_cost: '', date_of_joining: new Date().toISOString().slice(0, 10),
   });
-  const [mode, setMode] = useState<'invite' | 'password'>('invite');
+  const [mode, setMode] = useState<'invite' | 'password'>('password');
   const [password, setPassword] = useState('');
   const [created, setCreated] = useState<{ invite_url?: string; password?: string } | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -278,6 +278,9 @@ function InviteModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal open onClose={onClose} size="lg"
       title={mode === 'password' ? 'Add a team member' : 'Invite a team member'}
+      subtitle={mode === 'password'
+        ? 'They can sign in straight away with the role you pick here'
+        : 'They pick their own password from a one-time link'}
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
