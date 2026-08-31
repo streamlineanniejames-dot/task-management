@@ -328,34 +328,6 @@ function topUpClients() {
   return added;
 }
 
-/**
- * Real sign-ins that must exist whatever state the database is in, added to a
- * workspace that was seeded before they were listed here. Idempotent: an
- * account already present is left exactly as it is, so a password the person
- * has since changed is never reset from under them.
- */
-const SEEDED_OWNERS = [
-  { name: 'Rennie', email: 'rennie@phoenixxit.com', designation: 'Founder' },
-];
-
-function ensureSeededOwners() {
-  const tenant = get("SELECT id FROM tenants WHERE slug = 'phoenixx-it'");
-  if (!tenant) return;
-  const ts = nowIso();
-
-  for (const o of SEEDED_OWNERS) {
-    if (get('SELECT id FROM users WHERE email = ?', [o.email])) continue;
-    run(
-      `INSERT INTO users (id, tenant_id, email, password_hash, name, role, designation,
-         employment_type, date_of_joining, monthly_cost_minor, status, created_at, updated_at)
-       VALUES (?,?,?,?,?, 'owner', ?, 'full_time', ?, 0, 'active', ?, ?)`,
-      [uuid(), tenant.id, o.email, bcrypt.hashSync('Phoenixx@2026', 10), o.name, o.designation,
-        ts.slice(0, 10), ts, ts],
-    );
-    console.log(`· added missing owner ${o.email}`);
-  }
-}
-
 // ================================================================= TENANT #1
 function seedPhoenixx() {
   if (get("SELECT id FROM tenants WHERE slug = 'phoenixx-it'")) {
@@ -366,9 +338,6 @@ function seedPhoenixx() {
     console.log(added
       ? `· Phoenixx IT already seeded — added ${added} missing pipeline cards`
       : '· Phoenixx IT already seeded (use --reset to rebuild)');
-    // A database that predates an account being added to the seed would never
-    // get it, because this branch returns before the user loop runs.
-    ensureSeededOwners();
     return;
   }
 
@@ -422,13 +391,6 @@ function seedPhoenixx() {
 
   // ------------------------------------------------------------------ team
   const team = [
-    // Rennie is a real person's sign-in, not demo staff. It lives in the seed
-    // deliberately: on the free Render tier the database is rebuilt from here on
-    // every cold start, so an account created through the app disappears within
-    // the hour. Seeding it is what makes the login survive. Everything Rennie
-    // then creates in the app is still wiped on the next restart — only a
-    // persistent disk fixes that (see render.yaml).
-    { name: 'Rennie', email: 'rennie@phoenixxit.com', role: 'owner', designation: 'Founder', sl: null, cost: 0 },
     { name: 'Divya Ramesh', email: 'divya@phoenixxit.com', role: 'manager', designation: 'Delivery Manager', sl: 'digital', cost: 95_000 },
     { name: 'Karthik Subramanian', email: 'karthik@phoenixxit.com', role: 'manager', designation: 'Brand Lead', sl: 'branding', cost: 88_000 },
     { name: 'Meera Nair', email: 'meera@phoenixxit.com', role: 'finance', designation: 'Finance Manager', sl: null, cost: 72_000 },
@@ -1194,7 +1156,6 @@ const DEMO_ANSWER = 'Coimbatore';
 
 console.log('\n' + '─'.repeat(52));
 console.log('Sign in at http://localhost:5173\n');
-console.log('  Owner      rennie@phoenixxit.com     Phoenixx@2026');
 console.log('  Owner      arun@phoenixxit.com       Phoenixx@2026');
 console.log('  Manager    divya@phoenixxit.com      Phoenixx@2026');
 console.log('  Finance    meera@phoenixxit.com      Phoenixx@2026');
