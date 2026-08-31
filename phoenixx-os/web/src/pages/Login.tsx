@@ -1,22 +1,39 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowRight, Eye, EyeOff, Lock, ShieldCheck, Target, Wallet, Zap } from 'lucide-react';
+import {
+  ArrowRight, BarChart3, BellRing, BookOpen, CalendarDays, ChevronRight, Clock, Eye, EyeOff,
+  FileText, Lock, Mail, Receipt, ReceiptIndianRupee, ShieldCheck, SquareCheck, Target, UserCog,
+  Users2, UsersRound,
+} from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { ApiError } from '../lib/api';
 import { Button, Field, Input } from '../components/ui';
 import { Logo, Wordmark } from '../components/Logo';
 
-const PILLARS = [
-  { icon: Zap, title: 'Zero missed follow-ups', body: 'A reminder ladder and auto-escalation on every deadline.' },
-  { icon: Target, title: 'Quantified client health', body: 'Conversion, risk, relevancy and retention from real data.' },
-  { icon: Wallet, title: 'GST invoicing that adds up', body: 'Atomic numbering, CGST/SGST/IGST, HSN/SAC codes.' },
-  { icon: ShieldCheck, title: 'Multi-tenant from day one', body: 'Row-level isolation, RBAC and a full audit trail.' },
+const FEATURES = [
+  { icon: BellRing, title: 'Never Miss a Follow-up', body: 'Reminders and automatic escalation.' },
+  { icon: Target, title: 'Track Client Health', body: 'Monitor conversion, risk and retention.' },
+  { icon: ReceiptIndianRupee, title: 'Smart GST Invoicing', body: 'Easy GST, HSN/SAC & numbering.' },
+  { icon: UsersRound, title: 'Built for Teams', body: 'Secure multi-user access with audit trails.' },
 ];
 
-/** The modules a workspace actually ships with — named, not counted. */
+/** The workspace's real modules, in the order they appear in the sidebar. */
 const MODULES = [
-  'Action items', 'Meetings & MOM', 'Deadlines', 'CRM pipeline', 'Proposals',
-  'Invoices', 'Cost & profit', 'HR', 'SOP & KPI', 'Traction',
+  { icon: SquareCheck, label: 'Tasks' },
+  { icon: CalendarDays, label: 'Meetings' },
+  { icon: Clock, label: 'Deadlines' },
+  { icon: Users2, label: 'CRM' },
+  { icon: FileText, label: 'Proposals' },
+  { icon: Receipt, label: 'Invoices' },
+  { icon: UserCog, label: 'HR' },
+  { icon: BookOpen, label: 'SOPs' },
+  { icon: BarChart3, label: 'Performance' },
+];
+
+const TRUST = [
+  { icon: ShieldCheck, label: 'Secure' },
+  { icon: Lock, label: '2FA Ready' },
+  { icon: ShieldCheck, label: 'Fully Audited' },
 ];
 
 export default function Login() {
@@ -52,165 +69,181 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-surface lg:grid lg:grid-cols-[1.08fr_minmax(432px,0.92fr)]">
+    <div className="min-h-screen bg-surface lg:grid lg:grid-cols-[minmax(0,1.05fr)_minmax(444px,0.95fr)]">
 
       {/* ------------------------------------------------------- brand side */}
       <aside
-        className="relative hidden flex-col justify-between overflow-hidden p-10 text-white lg:flex xl:p-14"
-        style={{
-          // The mark's own shadow-to-body range, lit from the top left so the
-          // headline sits on the warmest part of the panel.
-          background: 'linear-gradient(152deg, #883111 0%, #6f2a11 34%, #401708 72%, #24100a 100%)',
-        }}
+        className="relative hidden overflow-hidden border-r border-line px-14 py-12 lg:flex lg:flex-col lg:justify-between xl:px-16"
+        // Warm white that deepens toward the divider, so the two panels
+        // separate on tone rather than on a hard colour change.
+        style={{ background: 'linear-gradient(115deg, #ffffff 0%, #fffaf7 55%, #fff2ea 100%)' }}
       >
-        {/* All decorative. A fine dot grid for texture, one ember bloom behind
-            the headline, and the mark itself ghosted into the low corner so the
-            panel is unmistakably Phoenixx even with the copy stripped out. */}
-        <div aria-hidden className="absolute inset-0 opacity-[0.09]"
-          style={{
-            backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)',
-            backgroundSize: '32px 32px',
-          }} />
-        <div aria-hidden className="absolute -right-40 -top-40 h-[30rem] w-[30rem] rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(225,89,38,0.40), transparent 68%)' }} />
-        <div aria-hidden className="absolute -bottom-32 -left-28 h-[26rem] w-[26rem] rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(237,140,0,0.16), transparent 70%)' }} />
+        {/* Decorative. The mark ghosted large behind the copy, and a halftone
+            that fades out of the low corner. */}
         <div aria-hidden
-          className="pointer-events-none absolute top-1/2 -right-44 -translate-y-1/2 select-none opacity-[0.11]">
-          <Logo size={640} alt="" />
+          className="pointer-events-none absolute top-[8%] right-0 translate-x-[16%] select-none"
+          // Left at full chroma but very faint: desaturating turns the ember a
+          // dirty grey, whereas 7% of the real orange over white lands on the
+          // pale peach the bird should be.
+          style={{ opacity: 0.075 }}>
+          <Logo size={560} alt="" />
         </div>
+        <div aria-hidden className="pointer-events-none absolute bottom-0 right-0 h-72 w-96"
+          style={{
+            backgroundImage: 'radial-gradient(circle at center, var(--brand-vivid) 1.1px, transparent 1.2px)',
+            backgroundSize: '14px 14px',
+            maskImage: 'linear-gradient(to top left, #000, transparent 62%)',
+            WebkitMaskImage: 'linear-gradient(to top left, #000, transparent 62%)',
+            opacity: 0.25,
+          }} />
 
-        <Wordmark size={58} variant="onDark" tagline="Agency operations, one platform" className="relative" />
+        <Wordmark size={54} tagline="Agency operations, one platform" className="relative" />
 
-        <div className="relative max-w-xl">
-          <p className="font-serif text-[38px] font-semibold leading-[1.1] tracking-[-0.01em] xl:text-[46px]"
-            style={{ textWrap: 'balance' } as any}>
-            Spreadsheets, WhatsApp threads and missed invoices
-            <span className="text-accent-400"> — replaced by one system.</span>
+        <div className="relative">
+          <p className="max-w-xl text-[38px] font-bold leading-[1.2] tracking-[-0.022em] text-ink xl:text-[42px]">
+            Spreadsheets, WhatsApp &amp; missed invoices —
+            <span className="mt-1 block text-[var(--brand-vivid)]">all in one system.</span>
           </p>
 
-          <p className="mt-6 max-w-md text-[15px] leading-relaxed text-white/70">
-            Action items and MOM, deadlines with WhatsApp escalation, CRM through to invoicing,
-            client scoring, SOPs per service line, and a traction dashboard that rolls it all up.
+          <p className="mt-6 max-w-md text-[16px] leading-relaxed text-muted">
+            Manage tasks, meetings, deadlines, CRM, invoices, HR and performance from one platform.
           </p>
 
-          <dl className="mt-10 grid max-w-lg grid-cols-2 gap-x-8 gap-y-7">
-            {PILLARS.map((f) => (
-              <div key={f.title}>
-                <dt className="flex items-center gap-2.5 text-[14px] font-semibold">
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/10 ring-1 ring-inset ring-white/15">
-                    <f.icon size={15} className="text-accent-400" />
-                  </span>
-                  {f.title}
-                </dt>
-                <dd className="mt-2 text-[13px] leading-snug text-white/60">{f.body}</dd>
+          <dl className="mt-11 grid max-w-2xl grid-cols-2 gap-x-10 gap-y-8">
+            {FEATURES.map((f) => (
+              <div key={f.title} className="flex gap-4">
+                <span className="grid h-[58px] w-[58px] shrink-0 place-items-center rounded-2xl bg-brand-soft
+                                 ring-1 ring-inset ring-[color-mix(in_srgb,var(--brand)_12%,transparent)]">
+                  <f.icon size={25} className="text-[var(--brand-vivid)]" />
+                </span>
+                <div className="min-w-0">
+                  <dt className="text-[15.5px] font-semibold leading-snug text-ink">{f.title}</dt>
+                  <dd className="mt-1 text-[14px] leading-snug text-muted">{f.body}</dd>
+                </div>
               </div>
             ))}
           </dl>
         </div>
 
         <div className="relative">
-          {/* What the product contains, rather than a result it cannot show a
-              signed-out visitor. These are the workspace's real modules. */}
-          <ul className="mb-7 flex flex-wrap gap-2" aria-label="Included modules">
+          <ul className="flex flex-wrap gap-2.5 border-t border-line pt-9" aria-label="Included modules">
             {MODULES.map((m) => (
-              <li key={m}
-                className="rounded-full border border-white/15 bg-white/[0.06] px-2.5 py-1 text-[11.5px] font-medium text-white/65">
-                {m}
+              <li key={m.label}>
+                <span className="inline-flex items-center gap-2 rounded-full border bg-raised px-3.5 py-2 text-[13.5px] font-medium text-[var(--brand)]"
+                  style={{ borderColor: 'color-mix(in srgb, var(--brand) 24%, transparent)' }}>
+                  <m.icon size={15} />
+                  {m.label}
+                </span>
               </li>
             ))}
           </ul>
-          <p className="border-t border-white/10 pt-5 text-[12.5px] text-white/45">
+          <p className="mt-9 border-t border-line pt-7 text-[14px] text-subtle">
             Phoenixx IT · Coimbatore · Beyond Technology
           </p>
         </div>
       </aside>
 
       {/* -------------------------------------------------------- form side */}
-      <main className="relative flex flex-col justify-center px-5 py-12 sm:px-10 lg:px-14">
-        {/* A breath of the brand ember washed down from the top edge. Without it
-            a white card on a near-white ground has no edge to speak of. */}
-        <div aria-hidden className="pointer-events-none absolute inset-0"
-          style={{ background: 'radial-gradient(120% 75% at 50% 0%, rgba(225,89,38,0.055), transparent 62%)' }} />
-        <div className="relative mx-auto w-full max-w-[26rem]">
+      <main className="flex flex-col justify-center px-5 py-12 sm:px-10 lg:px-14">
+        <div className="mx-auto w-full max-w-[27rem]">
 
           {/* The brand panel is desktop-only, so on a phone the lockup carries it. */}
           <div className="mb-8 flex justify-center lg:hidden">
-            <Wordmark size={56} tagline="Agency operations, one platform" />
+            <Wordmark size={50} tagline="Agency operations, one platform" />
           </div>
 
-          {/* Raised card: against the warm page ground it gives the form a real
-              edge, which is what makes signing in read as a deliberate step
-              rather than fields floating on a background. */}
-          <div className="card p-7 shadow-[var(--shadow-lg)] sm:p-8">
-            <h1 className="text-[26px] font-semibold tracking-[-0.015em] text-ink">Sign in</h1>
-            <p className="mt-1.5 text-[14px] text-subtle">Welcome back. Pick up where the team left off.</p>
+          <div className="rounded-3xl border border-line bg-raised p-8 shadow-[var(--shadow-lg)] sm:p-9">
+            <div className="flex justify-center">
+              <Logo size={54} alt="" />
+            </div>
+            <h1 className="mt-5 text-center text-[27px] font-bold tracking-[-0.02em] text-ink">
+              Welcome back!
+            </h1>
+            <p className="mt-1.5 text-center text-[15px] text-muted">Continue where you left off.</p>
 
-            <form onSubmit={submit} className="mt-7 space-y-4" noValidate>
-              <Field label="Work email" required>
-                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="username" required placeholder="you@agency.com" className="h-11" />
+            {/* Field owns the label/input id wiring, so the login-only label
+                treatment is applied here rather than by editing the shared
+                primitive every other form in the app also uses. */}
+            <form onSubmit={submit} noValidate
+              className="mt-7 space-y-4 [&_label]:text-[14px] [&_label]:font-semibold [&_label]:text-ink">
+              <Field label="Work email">
+                <div className="relative">
+                  <Mail aria-hidden size={17}
+                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-subtle" />
+                  <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="username" required placeholder="name@phoenixxit.com"
+                    className="h-12 rounded-xl pl-11" />
+                </div>
               </Field>
 
-              <Field label="Password" required>
+              <Field label="Password">
                 <div className="relative">
+                  <Lock aria-hidden size={17}
+                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-subtle" />
                   <Input
                     type={showPassword ? 'text' : 'password'} value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="current-password" required
-                    className="h-11 pr-11"
+                    className="h-12 rounded-xl pl-11 pr-11"
                   />
                   <button
                     type="button" onClick={() => setShowPassword((v) => !v)} tabIndex={-1}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center
+                    className="absolute right-1.5 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center
                                rounded-md text-subtle transition-colors duration-150 hover:text-ink"
                   >
-                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                   </button>
                 </div>
               </Field>
 
               <div className="-mt-1 flex justify-end">
-                <Link to="/recover" className="text-[13px] font-medium text-[var(--brand)] hover:underline">
-                  Forgot your password?
+                <Link to="/recover" className="text-[13.5px] font-medium text-[var(--brand)] hover:underline">
+                  Forgot password?
                 </Link>
               </div>
 
               {needsTotp && (
-                <Field label="Authenticator code" hint="Six digits from your authenticator app" required>
+                <Field label="Authenticator code" hint="Six digits from your authenticator app">
                   <Input value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    inputMode="numeric" autoComplete="one-time-code" placeholder="000000"
-                    className="mono h-11 text-center text-base tracking-[0.35em]" />
+                    inputMode="numeric" autoComplete="one-time-code" placeholder="000000" required
+                    className="mono h-12 rounded-xl text-center text-base tracking-[0.35em]" />
                 </Field>
               )}
 
               {error && (
-                <p role="alert" className="rounded-md border border-[color-mix(in_srgb,var(--negative)_30%,transparent)]
-                                            bg-negative-soft px-3 py-2 text-[13px] text-[var(--negative)]">
+                <p role="alert" className="rounded-xl border border-[color-mix(in_srgb,var(--negative)_30%,transparent)] bg-negative-soft px-3.5 py-2.5 text-[13px] text-[var(--negative)]">
                   {error}
                 </p>
               )}
 
-              <Button type="submit" variant="primary" size="lg" loading={loading}
-                className="w-full justify-center" icon={!loading ? <ArrowRight size={16} /> : undefined}>
+              <Button type="submit" variant="primary" loading={loading}
+                className="h-[52px] w-full justify-center rounded-xl text-[16px] font-semibold"
+                icon={!loading ? <ArrowRight size={17} /> : undefined}>
                 Sign in
               </Button>
             </form>
           </div>
 
-          <p className="mt-6 text-center text-[13.5px] text-subtle">
-            New agency?{' '}
-            <Link to="/signup" className="font-medium text-[var(--brand)] hover:underline">
-              Start a 14-day trial
+          <p className="mt-6 flex items-center justify-center gap-1.5 text-[14px] text-muted">
+            New here?
+            <Link to="/signup" className="inline-flex items-center font-semibold text-[var(--brand)] hover:underline">
+              Start your 14-day trial
+              <ChevronRight size={15} className="ml-0.5" />
             </Link>
           </p>
 
-          <div className="mt-8 flex items-center justify-center gap-2 border-t border-line pt-5
-                          text-[12px] text-subtle">
-            <Lock size={13} className="shrink-0" />
-            Encrypted in transit · two-factor ready · every action audited
-          </div>
+          <ul className="mt-8 flex flex-wrap items-center justify-center gap-x-3.5 gap-y-2 text-[13px] text-subtle">
+            {TRUST.map((t, i) => (
+              <li key={t.label} className="flex items-center gap-3.5">
+                {i > 0 && <span aria-hidden className="text-line-strong">&middot;</span>}
+                <span className="flex items-center gap-1.5">
+                  <t.icon size={14} className="shrink-0" />
+                  {t.label}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       </main>
     </div>

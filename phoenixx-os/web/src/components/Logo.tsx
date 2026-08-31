@@ -37,35 +37,41 @@ export function Logo({ size = 40, className, alt = 'Phoenixx' }: {
 }
 
 /**
- * Mark plus name — the lockup used in headers and on the sign-in page.
- * `onDark` is for the ember brand panel, `plain` inherits currentColor.
+ * Mark plus name — the lockup used on the sign-in page.
+ * The name is set in the brand orange to match the master artwork's wordmark.
+ * `onDark` is for a dark panel, `plain` inherits currentColor.
  */
-export function Wordmark({ size = 48, variant = 'brand', tagline, className }: {
+export function Wordmark({ size = 54, variant = 'brand', tagline, className }: {
   size?: number;
   variant?: 'brand' | 'onDark' | 'plain';
   tagline?: string;
   className?: string;
 }) {
   const nameColor =
-    variant === 'onDark' ? 'text-white' : variant === 'plain' ? 'text-current' : 'text-ink';
-  const taglineColor = variant === 'onDark' ? 'text-white/60' : 'text-subtle';
+    variant === 'onDark' ? 'text-white'
+      : variant === 'plain' ? 'text-current'
+        // Vivid rather than the AA-darkened --brand: at this weight and size the
+        // name is "large text", which only needs 3:1, so it can carry the
+        // mark's own orange.
+        : 'text-[var(--brand-vivid)]';
+  const taglineColor = variant === 'onDark' ? 'text-white/60' : 'text-muted';
 
   return (
-    <div className={`flex items-center gap-3 ${className || ''}`}>
+    <div className={`flex items-center gap-3.5 ${className || ''}`}>
       {/* The name is right here in text, so the mark is decorative. */}
       <Logo size={size} alt="" />
       <div className="leading-tight">
-        {/* Serif, uppercase and tracked out to match the master artwork. */}
-        {/* The bird is tall and mostly negative space, so it needs to run
-            noticeably larger than the type to read as its equal in the lockup:
-            0.34 keeps the cap height of the name against the bird's body. */}
         <p
-          className={`font-serif font-semibold uppercase tracking-[0.07em] ${nameColor}`}
-          style={{ fontSize: Math.round(size * 0.34) }}
+          className={`font-bold uppercase tracking-[0.02em] ${nameColor}`}
+          style={{ fontSize: Math.round(size * 0.46) }}
         >
-          Phoenixx <span className="tracking-[0.04em]">OS</span>
+          Phoenixx OS
         </p>
-        {tagline && <p className={`mt-1 text-[12px] ${taglineColor}`}>{tagline}</p>}
+        {tagline && (
+          <p className={`mt-1 ${taglineColor}`} style={{ fontSize: Math.round(size * 0.27) }}>
+            {tagline}
+          </p>
+        )}
       </div>
     </div>
   );
