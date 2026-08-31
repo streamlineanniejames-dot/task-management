@@ -37,41 +37,58 @@ export function Logo({ size = 40, className, alt = 'Phoenixx' }: {
 }
 
 /**
- * Mark plus name — the lockup used on the sign-in page.
- *
- * Set in a serif, because the master artwork's own wordmark is a serif, and in
- * the mark's orange. The rule across the page: serif is the brand voice, sans
- * is the product UI.
+ * The mark set in a circular disc — the lockup badge and the card crest.
+ * `size` is the disc diameter; the bird is inset to about 60% of it.
  */
-export function Wordmark({ size = 50, variant = 'brand', tagline, className }: {
+export function LogoDisc({ size = 62, tone = 'dark', className, alt = '' }: {
+  size?: number; tone?: 'dark' | 'light'; className?: string; alt?: string;
+}) {
+  const dark = tone === 'dark';
+  return (
+    <span
+      className={`grid shrink-0 place-items-center rounded-full ${className || ''}`}
+      style={{
+        width: size,
+        height: size,
+        background: dark
+          ? 'radial-gradient(circle at 50% 40%, #2a1408 0%, #140a05 70%)'
+          : 'radial-gradient(circle at 50% 35%, #fdeae0 0%, #fbf1ea 100%)',
+        boxShadow: dark
+          ? 'inset 0 0 0 1px rgba(255,138,70,0.28), 0 0 26px -6px rgba(226,89,38,0.55)'
+          : 'inset 0 0 0 1px rgba(225,89,38,0.12)',
+      }}
+    >
+      <Logo size={Math.round(size * 0.62)} alt={alt} />
+    </span>
+  );
+}
+
+/**
+ * Mark plus name — the lockup used on the sign-in page.
+ * The name is two-tone, as the master artwork sets it: "PHOENIXX" in the
+ * panel's own ink and "OS" in the mark's orange.
+ */
+export function Wordmark({ size = 62, variant = 'brand', tagline, className }: {
   size?: number;
   variant?: 'brand' | 'onDark' | 'plain';
   tagline?: string;
   className?: string;
 }) {
-  const nameColor =
-    variant === 'onDark' ? 'text-white'
-      : variant === 'plain' ? 'text-current'
-        // Vivid rather than the AA-darkened --brand: at this weight and size
-        // the name is "large text", which needs only 3:1, so it can carry the
-        // mark's own orange.
-        : 'text-[var(--brand-vivid)]';
-  const taglineColor = variant === 'onDark' ? 'text-white/60' : 'text-subtle';
+  const onDark = variant === 'onDark';
+  const nameColor = onDark ? 'text-white' : variant === 'plain' ? 'text-current' : 'text-ink';
+  const taglineColor = onDark ? 'text-white/55' : 'text-subtle';
 
   return (
-    <div className={`flex items-center gap-3.5 ${className || ''}`}>
-      {/* The name is right here in text, so the mark is decorative. */}
-      <Logo size={size} alt="" />
+    <div className={`flex items-center gap-4 ${className || ''}`}>
+      {/* The name is right here in text, so the disc is decorative. */}
+      <LogoDisc size={size} tone={onDark ? 'dark' : 'light'} />
       <div className="leading-tight">
-        <p
-          className={`font-serif font-semibold uppercase tracking-[0.09em] ${nameColor}`}
-          style={{ fontSize: Math.round(size * 0.4) }}
-        >
-          Phoenixx OS
+        <p className={`font-bold uppercase tracking-[0.005em] ${nameColor}`}
+          style={{ fontSize: Math.round(size * 0.45) }}>
+          Phoenixx <span className="text-[var(--brand-vivid)]">OS</span>
         </p>
         {tagline && (
-          <p className={`mt-1.5 tracking-[0.01em] ${taglineColor}`}
-            style={{ fontSize: Math.round(size * 0.25) }}>
+          <p className={`mt-1 ${taglineColor}`} style={{ fontSize: Math.round(size * 0.24) }}>
             {tagline}
           </p>
         )}
