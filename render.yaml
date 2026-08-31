@@ -16,12 +16,17 @@ services:
     runtime: node
     # Every command below runs inside this directory, not the repo root.
     rootDir: phoenixx-os
-    # FREE TIER. No persistent disk and it sleeps after ~15 minutes idle, so the
-    # database is rebuilt from the demo seed on each cold start (SEED_ON_BOOT).
-    # Fine for testing and demos; anything a tester creates is lost on sleep.
+    # FREE TIER. No persistent disk, and it sleeps after ~15 minutes idle, which
+    # destroys the container's filesystem along with the SQLite file.
     #
-    # To keep data: change to `plan: starter`, uncomment the `disk:` block below,
-    # and set SEED_ON_BOOT to false. Nothing else changes.
+    # Data survives that because the database is snapshotted to Supabase Storage
+    # and restored on boot (SUPABASE_* below). That is a simulated disk, not a
+    # real one: a kill without SIGTERM loses up to SNAPSHOT_INTERVAL_MINUTES of
+    # writes, and it assumes exactly one instance — two would overwrite each
+    # other's snapshots. Do not scale this service out while that is the case.
+    #
+    # For a real disk: `plan: starter`, uncomment `disk:` below, point DB_FILE
+    # and STORAGE_DIR at /var/data, and turn SNAPSHOT_ENABLED off.
     plan: free
     # Closest to India. Free instances are not offered in every region — if
     # Render rejects the blueprint, use `oregon` or `frankfurt`.
@@ -77,11 +82,34 @@ services:
 
       # Free tier: ephemeral disk, so seed the demo workspace on a cold start.
       # With a disk attached, set these to /var/data/... and SEED_ON_BOOT false.
+      #
+      # SEED_ON_BOOT only fires when the database comes up empty AND no snapshot
+      # was restored, so with Supabase snapshots configured below it applies to
+      # the very first boot and never again. Once the workspace holds real data,
+      # setting it to false removes the demo fallback entirely.
       - key: DB_FILE
         value: ./data/phoenixx.db
       - key: STORAGE_DIR
         value: ./storage
       - key: SEED_ON_BOOT
+        value: 'true'
+
+      # --- Supabase snapshots: durable storage on a host with no disk.
+      # The database is downloaded on boot, uploaded every few minutes and again
+      # on shutdown. See server/src/services/snapshot.js for what this does and
+      # does not guarantee. Both values below are set in the Render dashboard,
+      # never here: SUPABASE_SERVICE_KEY is the service-role key and grants full
+      # access to the bucket holding every tenant's data.
+      - key: SUPABASE_URL
+        sync: false # https://<project-ref>.supabase.co
+      - key: SUPABASE_SERVICE_KEY
+        sync: false # Supabase → Project Settings → API → service_role key
+      - key: SNAPSHOT_BUCKET
+        value: phoenixx-db
+      # Also the worst-case data loss if the instance is killed without SIGTERM.
+      - key: SNAPSHOT_INTERVAL_MINUTES
+        value: '5'
+      - key: SNAPSHOT_ENABLED
         value: 'true'
 
       # Background jobs: deadline ladder, digests, recurring invoices.

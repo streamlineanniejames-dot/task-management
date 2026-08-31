@@ -55,6 +55,25 @@ export const config = {
   // whenever the database comes up empty, so a cold start is never a dead app.
   seedOnBoot: bool(process.env.SEED_ON_BOOT, false),
 
+  /**
+   * Snapshot the SQLite file to Supabase Storage, to survive a host that throws
+   * its disk away on every restart (see services/snapshot.js).
+   *
+   * The key must be the SERVICE ROLE key, not the anon key: the anon key is
+   * subject to storage policies and is meant to be public, and this uploads a
+   * file containing every tenant's data. Set it in the host's secret store,
+   * never in render.yaml.
+   */
+  snapshot: {
+    url: process.env.SUPABASE_URL || '',
+    key: process.env.SUPABASE_SERVICE_KEY || '',
+    bucket: process.env.SNAPSHOT_BUCKET || 'phoenixx-db',
+    // How often to push, in minutes. This is also the worst-case data loss if
+    // the host kills the process without warning.
+    intervalMinutes: Number(process.env.SNAPSHOT_INTERVAL_MINUTES || 5),
+    enabled: bool(process.env.SNAPSHOT_ENABLED, true),
+  },
+
   providers: {
     whatsapp: process.env.WHATSAPP_PROVIDER || 'log',
     whatsappToken: process.env.WHATSAPP_TOKEN || '',
