@@ -19,6 +19,9 @@ const clientSchema = z.object({
   name: z.string().min(2).max(160),
   legal_name: z.string().optional().nullable(),
   industry: z.string().optional().nullable(),
+  // The client master record this lead belongs to, when it is one already on
+  // file. Optional — most new leads are for companies you have no account for.
+  client_account_id: z.string().optional().nullable(),
   stage_id: z.string().optional().nullable(),
   status: z.enum(['lead', 'active', 'churned', 'lost']).optional(),
   owner_id: z.string().optional().nullable(),
@@ -51,13 +54,15 @@ const SELECT = `
   SELECT c.*, u.name AS owner_name, u.avatar_url AS owner_avatar,
          s.name AS stage_name, s.code AS stage_code, s.sort AS stage_sort, s.probability,
          rc.label AS retention_reason_label,
+         ca.name AS client_account_name,
          (SELECT COUNT(*) FROM activities a WHERE a.client_id = c.id) AS activity_count,
          (SELECT COALESCE(SUM(i.balance_minor),0) FROM invoices i
            WHERE i.client_id = c.id AND i.deleted_at IS NULL AND i.status NOT IN ('draft','written_off')) AS outstanding_minor
     FROM clients c
     LEFT JOIN users u ON u.id = c.owner_id
     LEFT JOIN pipeline_stages s ON s.id = c.stage_id
-    LEFT JOIN reason_codes rc ON rc.id = c.retention_reason_code_id`;
+    LEFT JOIN reason_codes rc ON rc.id = c.retention_reason_code_id
+    LEFT JOIN client_accounts ca ON ca.id = c.client_account_id`;
 
 const SORTS = {
   name: 'c.name',
@@ -88,6 +93,7 @@ router.get('/clients', requires('crm', 'view'), (req, res) => {
   const q = req.query;
   if (q.status) { const s = String(q.status).split(','); filters.push(`c.status IN (${s.map(() => '?').join(',')})`); params.push(...s); }
   if (q.stage_id) { filters.push('c.stage_id = ?'); params.push(q.stage_id); }
+  if (q.client_account_id) { filters.push('c.client_account_id = ?'); params.push(q.client_account_id); }
   if (q.owner_id) { filters.push('c.owner_id = ?'); params.push(q.owner_id); }
   if (q.industry) { filters.push('c.industry = ?'); params.push(q.industry); }
   if (q.engagement_model) { filters.push('c.engagement_model = ?'); params.push(q.engagement_model); }
@@ -333,13 +339,15 @@ router.post('/clients', requires('crm', 'create'), (req, res) => {
 
   tx(() => {
     run(
-      `INSERT INTO clients (id, tenant_id, name, legal_name, industry, stage_id, status, owner_id, source,
+      `INSERT INTO clients (id, tenant_id, name, legal_name, industry, client_account_id, stage_id, status,
+         owner_id, source,
          website, gstin, pan, address, city, state, state_code, country, currency, service_lines,
          engagement_model, mrr_minor, deal_value_minor, next_action, next_action_date, next_action_owner_id,
          scope_total, scope_delivered, renewal_date, tags, notes, stage_entered_at, last_activity_at,
          created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, tenantId, body.name, body.legal_name ?? null, body.industry ?? null, firstStage?.id ?? null,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, tenantId, body.name, body.legal_name ?? null, body.industry ?? null,
+        body.client_account_id ?? null, firstStage?.id ?? null,
         body.status || 'lead', body.owner_id || userId, body.source ?? null, body.website ?? null,
         body.gstin ?? null, body.pan ?? null, body.address ?? null, body.city ?? null, body.state ?? null,
         body.state_code ?? null, body.country || 'India', body.currency || 'INR',

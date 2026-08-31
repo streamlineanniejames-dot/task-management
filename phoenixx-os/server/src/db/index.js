@@ -32,6 +32,12 @@ const ADDED_COLUMNS = [
   // REAL, not INTEGER: positions are assigned as the midpoint between the two
   // neighbours, so a reorder touches one row instead of renumbering the column.
   ['clients', 'board_sort', 'REAL NOT NULL DEFAULT 0'],
+  // Links a pipeline lead to the client master record it belongs to. Nullable:
+  // most leads are for companies not yet on file, and they stay that way until
+  // someone attaches them. No REFERENCES clause here - SQLite cannot add a
+  // foreign key with ALTER TABLE, so on an existing database this is a plain
+  // TEXT column; new databases get the constraint from schema.sql.
+  ['clients', 'client_account_id', 'TEXT'],
   // Delivery lead on a project, alongside the existing manager_id. Mirrors the
   // project_members row holding the 'lead' seat.
   ['projects', 'lead_id', 'TEXT'],

@@ -34,6 +34,9 @@ export default function CRM() {
     industry: params.get('industry') || '',
     retention_risk: params.get('retention_risk') || '',
     filter: params.get('filter') || '',
+    // Set by the "N leads" link on the Clients page, to show just that client's
+    // pipeline records.
+    client_account_id: params.get('client_account_id') || '',
   };
 
   const setFilter = (key: string, value: string) => {
@@ -626,15 +629,44 @@ function CreateClientModal({ meta, stageId, onClose }: {
     name: '', industry: '', city: '', state_code: '33', website: '', gstin: '',
     owner_id: user?.id || '', source: 'outreach', engagement_model: 'project',
     deal_value: '', next_action: '', next_action_date: '',
-    service_lines: [] as string[], notes: '',
+    service_lines: [] as string[], notes: '', client_account_id: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [duplicate, setDuplicate] = useState<any>(null);
+
+  // Clients already on file. Picking one links the lead to that client and
+  // fills in what is already known, so existing details are never retyped.
+  const { data: accounts } = useQuery({
+    queryKey: ['client-accounts', 'picker'],
+    queryFn: () => api.get('/clients', { limit: 200 }).then((r) => r.data),
+    staleTime: 300_000,
+  });
+
+  const pickAccount = (id: string) => {
+    const a = (accounts || []).find((x: any) => x.id === id);
+    if (!a) {
+      setForm((f) => ({ ...f, client_account_id: '' }));
+      return;
+    }
+    // Only fill blanks — anything already typed in this form wins.
+    setForm((f) => ({
+      ...f,
+      client_account_id: id,
+      name: f.name.trim() || a.name || '',
+      industry: f.industry || a.industry || '',
+      city: f.city || a.city || '',
+      state_code: a.state_code || f.state_code,
+      website: f.website || a.website || '',
+      gstin: f.gstin || a.gstin || '',
+      owner_id: f.owner_id || a.owner_id || '',
+    }));
+  };
 
   const create = useMutation({
     mutationFn: (force?: boolean) => api.post(`/crm/clients${force ? '?force=true' : ''}`, {
       name: form.name.trim(),
       stage_id: stageId || null,
+      client_account_id: form.client_account_id || null,
       industry: form.industry || null,
       city: form.city || null,
       state_code: form.state_code || null,
@@ -701,6 +733,20 @@ function CreateClientModal({ meta, stageId, onClose }: {
       )}
 
       <div className="space-y-4">
+        {(accounts?.length ?? 0) > 0 && (
+          <Field label="Existing client"
+            hint="Pick one to link this lead to a client already on file and reuse their details">
+            <Select value={form.client_account_id} onChange={(e) => pickAccount(e.target.value)}>
+              <option value="">New company — not a client yet</option>
+              {accounts.map((a: any) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}{a.city ? ` — ${a.city}` : ''}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Company name" required error={errors.name} className="sm:col-span-2">
             <Input value={form.name} onChange={(e) => set('name', e.target.value)}

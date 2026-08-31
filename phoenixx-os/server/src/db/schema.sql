@@ -809,12 +809,62 @@ CREATE TABLE IF NOT EXISTS kpis (
 );
 
 -- ---------------------------------------------------------------- MODULE E
+--
+-- Two tables, deliberately. `client_accounts` is the client master: the people
+-- you actually do business with, entered and managed on the Clients page and
+-- kept whether or not any sales activity is running. `clients` below is the CRM
+-- pipeline record - a lead/opportunity that lives on the board and carries a
+-- stage, a deal value and a next action.
+--
+-- A lead points at an account through clients.client_account_id when it belongs
+-- to a client already on file, which is how saved client details get reused for
+-- lead and campaign work instead of being retyped. The link is optional: a lead
+-- for a company you have never worked with does not need an account first.
+--
+-- The pipeline table keeps the name `clients` because projects, invoices,
+-- proposals, contacts and activities all carry a client_id foreign key to it
+-- across 112 query sites; renaming it is a migration in its own right and is
+-- not what makes these two things separate.
+CREATE TABLE IF NOT EXISTS client_accounts (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  name TEXT NOT NULL,
+  legal_name TEXT,
+  industry TEXT,
+  status TEXT NOT NULL DEFAULT 'active',   -- active | inactive | archived
+  owner_id TEXT REFERENCES users(id),      -- account manager
+  -- Primary point of contact. Richer contact lists still belong on the lead
+  -- record via the contacts table; this is the one person you call by default.
+  contact_name TEXT,
+  contact_designation TEXT,
+  email TEXT,
+  phone TEXT,
+  whatsapp TEXT,
+  website TEXT,
+  -- Billing identity, so an invoice can be raised straight from the account.
+  gstin TEXT, pan TEXT,
+  address TEXT, city TEXT, state TEXT, state_code TEXT, country TEXT DEFAULT 'India',
+  currency TEXT NOT NULL DEFAULT 'INR',
+  payment_terms_days INTEGER NOT NULL DEFAULT 30,
+  tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_client_accounts_tenant ON client_accounts(tenant_id, status);
+CREATE INDEX IF NOT EXISTS ix_client_accounts_name ON client_accounts(tenant_id, name);
+CREATE INDEX IF NOT EXISTS ix_client_accounts_owner ON client_accounts(tenant_id, owner_id);
+
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   name TEXT NOT NULL,
   legal_name TEXT,
   industry TEXT,                           -- E2 category tag
+  -- The client this lead belongs to, when it is one already on file. Optional:
+  -- a lead for a company you have never worked with stands on its own.
+  client_account_id TEXT REFERENCES client_accounts(id),
   stage_id TEXT REFERENCES pipeline_stages(id),
   status TEXT NOT NULL DEFAULT 'lead',     -- lead|active|churned|lost
   owner_id TEXT REFERENCES users(id),

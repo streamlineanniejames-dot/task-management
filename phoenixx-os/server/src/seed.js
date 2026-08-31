@@ -193,6 +193,45 @@ function lookups(tenantId) {
   };
 }
 
+/**
+ * The client register. Only the won business becomes an account — a lead still
+ * being chased is an opportunity, not a client on file, which is exactly the
+ * distinction the two tables exist to hold. Each account is linked back to its
+ * pipeline record so the Clients page can show the work attached to it.
+ */
+function seedClientAccounts(ctx, clientIds) {
+  const { tenantId, users } = ctx;
+  const ts = nowIso();
+  let n = 0;
+
+  for (const c of CLIENTS.filter((x) => x.status === 'active')) {
+    const clientId = clientIds[c.name];
+    const contact = get(
+      'SELECT name, designation, email, phone, whatsapp FROM contacts WHERE client_id = ? AND is_primary = 1',
+      [clientId],
+    );
+    const id = uuid();
+    run(
+      `INSERT INTO client_accounts (id, tenant_id, name, legal_name, industry, status, owner_id,
+         contact_name, contact_designation, email, phone, whatsapp, website, gstin,
+         address, city, state, state_code, country, currency, payment_terms_days, tags, notes,
+         created_at, updated_at)
+       VALUES (?,?,?,?,?,'active',?,?,?,?,?,?,?,?,?,?,?,?,'India','INR',?,?,?,?,?)`,
+      [id, tenantId, c.name, `${c.name} Private Limited`, c.industry, users[c.owner] ?? null,
+        contact?.name ?? null, contact?.designation ?? null, contact?.email ?? null,
+        contact?.phone ?? null, contact?.whatsapp ?? null,
+        `https://${c.name.split(/[\s&.]/)[0].toLowerCase()}.com`, c.gstin ?? null,
+        // No street line in the demo data — city and state carry the address, and
+        // repeating them here would render as "Tiruppur, Tamil Nadu, Tiruppur…".
+        null, c.city, c.state, c.code, c.model === 'retainer' ? 15 : 30,
+        JSON.stringify([c.model]), null, ts, ts],
+    );
+    run('UPDATE clients SET client_account_id = ? WHERE id = ?', [id, clientId]);
+    n++;
+  }
+  return n;
+}
+
 /** One client with its primary contact and activity history. */
 function insertClient(ctx, c) {
   const { tenantId, stages, users, sl, reasons } = ctx;
@@ -395,6 +434,9 @@ function seedPhoenixx() {
   const ctx = { tenantId, stages, users, sl, reasons };
   for (const c of CLIENTS) clientIds[c.name] = insertClient(ctx, c);
   console.log(`✓ ${CLIENTS.length} clients with contacts and activity history`);
+
+  const accounts = seedClientAccounts(ctx, clientIds);
+  console.log(`✓ ${accounts} client accounts on the register, linked to their pipeline records`);
 
   // -------------------------------------------------------------- projects
   const projects = [

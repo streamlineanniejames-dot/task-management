@@ -13,6 +13,7 @@ import { chatRouter } from './chat.routes.js';
 import { hrRouter } from './hr.routes.js';
 import { sopRouter, kpiRouter } from './sop.routes.js';
 import { crmRouter } from './crm.routes.js';
+import { clientsRouter } from './clients.routes.js';
 import { proposalsRouter, publicProposalRouter } from './proposals.routes.js';
 import { invoicesRouter } from './invoices.routes.js';
 import { financeRouter } from './finance.routes.js';
@@ -65,6 +66,8 @@ api.use('/hr', hrRouter);
 api.use('/sop', sopRouter);
 api.use('/kpis', kpiRouter);
 api.use('/crm', crmRouter);
+// The client master. /crm stays the pipeline; this is the register behind it.
+api.use('/clients', clientsRouter);
 api.use('/proposals', proposalsRouter);
 api.use('/invoices', invoicesRouter);
 api.use('/finance', financeRouter);

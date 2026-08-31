@@ -18,6 +18,7 @@ const Meetings = lazy(() => import('./pages/Meetings'));
 const Chat = lazy(() => import('./pages/Chat'));
 const Deadlines = lazy(() => import('./pages/Deadlines'));
 const CRM = lazy(() => import('./pages/CRM'));
+const Clients = lazy(() => import('./pages/Clients'));
 const ClientDetail = lazy(() => import('./pages/ClientDetail'));
 const Proposals = lazy(() => import('./pages/Proposals'));
 const Projects = lazy(() => import('./pages/Projects'));
@@ -94,6 +95,7 @@ export default function App() {
         <Route path="meetings/:id" element={<Suspense fallback={<FullPageSpinner />}><Meetings /></Suspense>} />
         <Route path="deadlines" element={<Suspense fallback={<FullPageSpinner />}><Deadlines /></Suspense>} />
         <Route path="chat" element={<Suspense fallback={<FullPageSpinner />}><Chat /></Suspense>} />
+        <Route path="clients" element={<Suspense fallback={<FullPageSpinner />}><Clients /></Suspense>} />
         <Route path="crm" element={<Suspense fallback={<FullPageSpinner />}><CRM /></Suspense>} />
         <Route path="crm/:id" element={<Suspense fallback={<FullPageSpinner />}><ClientDetail /></Suspense>} />
         <Route path="proposals" element={<Suspense fallback={<FullPageSpinner />}><Proposals /></Suspense>} />
