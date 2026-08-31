@@ -42,6 +42,19 @@ if (config.seedOnBoot) {
   migrate();
 }
 
+// Clients added to the register before delivery records existed would be
+// missing from every project, proposal and invoice picker, with nothing on
+// screen to explain why. Idempotent, and a no-op once consistent.
+{
+  const { backfillDeliveryRecords } = await import('./services/clientAccounts.js');
+  const repaired = backfillDeliveryRecords();
+  if (repaired) {
+    console.log(JSON.stringify({
+      t: nowIso(), msg: 'linked client accounts to delivery records', count: repaired,
+    }));
+  }
+}
+
 const server = app.listen(config.port, () => {
   console.log(JSON.stringify({
     t: nowIso(),

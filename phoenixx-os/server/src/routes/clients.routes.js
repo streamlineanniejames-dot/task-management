@@ -6,6 +6,7 @@ import {
   ok, created, validate, notFound, conflict, audit, paginate, pageMeta, sortClause,
 } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
+import { ensureDeliveryRecord } from '../services/clientAccounts.js';
 
 /**
  * The client master - the register behind the Clients page.
@@ -48,10 +49,14 @@ const accountSchema = z.object({
   notes: z.string().max(4000).optional().nullable(),
 });
 
+// `stage_id IS NOT NULL` is what separates a real opportunity from the
+// stage-less delivery record every account carries. Without it the page would
+// report "1 lead" against a client that has no pipeline activity at all.
 const SELECT = `
   SELECT a.*, u.name AS owner_name, u.avatar_url AS owner_avatar,
          (SELECT COUNT(*) FROM clients c
-           WHERE c.client_account_id = a.id AND c.deleted_at IS NULL) AS lead_count
+           WHERE c.client_account_id = a.id AND c.deleted_at IS NULL
+             AND c.stage_id IS NOT NULL) AS lead_count
     FROM client_accounts a
     LEFT JOIN users u ON u.id = a.owner_id`;
 
@@ -168,6 +173,7 @@ router.get('/:id', requires('crm', 'view'), (req, res) => {
     `SELECT c.id, c.name, c.status, c.deal_value_minor, c.mrr_minor, s.name AS stage_name
        FROM clients c LEFT JOIN pipeline_stages s ON s.id = c.stage_id
       WHERE c.client_account_id = ? AND c.tenant_id = ? AND c.deleted_at IS NULL
+        AND c.stage_id IS NOT NULL
       ORDER BY c.updated_at DESC LIMIT 50`,
     [req.params.id, req.auth.tenantId],
   );
@@ -208,6 +214,10 @@ router.post('/', requires('crm', 'create'), (req, res) => {
       JSON.stringify(body.tags || []), nullify(body.notes), ts, ts],
   );
 
+  // So the client is immediately pickable when creating a project, proposal or
+  // invoice — those all read the pipeline table.
+  ensureDeliveryRecord(tenantId, userId, get('SELECT * FROM client_accounts WHERE id = ?', [id]));
+
   audit(req, { entity: 'client_account', entityId: id, action: 'create', after: { name: body.name } });
   return created(res, hydrate(get(`${SELECT} WHERE a.id = ?`, [id])));
 });
@@ -239,6 +249,17 @@ router.patch('/:id', requires('crm', 'edit'), (req, res) => {
   if (patch.name === null) delete patch.name;
 
   r.update(before.id, patch);
+
+  // Also repairs an account created before delivery records existed, so editing
+  // a client is enough to make it selectable everywhere.
+  const after = get('SELECT * FROM client_accounts WHERE id = ?', [before.id]);
+  const deliveryId = ensureDeliveryRecord(tenantId, req.auth.userId, after);
+  // Keep the name in step, or the pickers would still show the old one.
+  if (patch.name) {
+    run('UPDATE clients SET name = ?, updated_at = ? WHERE id = ? AND tenant_id = ?',
+      [after.name, nowIso(), deliveryId, tenantId]);
+  }
+
   audit(req, { entity: 'client_account', entityId: before.id, action: 'update', before, after: patch });
   return ok(res, hydrate(get(`${SELECT} WHERE a.id = ?`, [before.id])));
 });
@@ -255,14 +276,23 @@ router.delete('/:id', requires('crm', 'delete'), (req, res) => {
   const before = r.findById(req.params.id);
   if (!before) throw notFound('Client');
 
-  const detached = run(
+  // Counted before the detach, and only real opportunities — the stage-less
+  // delivery record is bookkeeping, not something worth telling anyone about.
+  const detachedLeads = Number(get(
+    `SELECT COUNT(*) AS n FROM clients
+      WHERE client_account_id = ? AND tenant_id = ? AND deleted_at IS NULL
+        AND stage_id IS NOT NULL`,
+    [before.id, tenantId],
+  )?.n || 0);
+
+  run(
     'UPDATE clients SET client_account_id = NULL WHERE client_account_id = ? AND tenant_id = ?',
     [before.id, tenantId],
   );
   r.softDelete(before.id, nowIso());
 
   audit(req, { entity: 'client_account', entityId: before.id, action: 'delete', before });
-  return ok(res, { id: before.id, detached_leads: Number(detached?.changes || 0) });
+  return ok(res, { id: before.id, detached_leads: detachedLeads });
 });
 
 export { router as clientsRouter };

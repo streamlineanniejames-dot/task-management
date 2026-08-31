@@ -119,8 +119,12 @@ describe('leads linked to a client', () => {
     assert.equal(read.body.data.lead_count, 1);
     assert.equal(read.body.data.leads.length, 1);
 
+    // Two rows are linked to the account: the stage-less delivery record every
+    // client carries, and this opportunity. Only the latter counts as a lead,
+    // which is why lead_count above is 1 rather than 2.
     const filtered = await api.get(`/crm/clients?client_account_id=${account.id}`, { token });
-    assert.equal(filtered.body.data.length, 1);
+    assert.equal(filtered.body.data.length, 2);
+    assert.equal(filtered.body.data.filter((c) => c.stage_id).length, 1);
   });
 
   test('archiving a client keeps its leads and unlinks them', async () => {
@@ -165,5 +169,50 @@ describe('validation', () => {
 
   test('an unknown status is rejected', async () => {
     assert.equal((await create({ name: 'Bad Status Ltd', status: 'prospect' })).status, 422);
+  });
+});
+
+describe('a new client is usable straight away', () => {
+  test('appears in the picker that projects, proposals and invoices read', async () => {
+    const account = (await create({ name: 'Pickable Client Ltd', city: 'Erode', industry: 'retail' })).body.data;
+
+    // This is the exact call the New project / New invoice / New proposal
+    // forms make. Before delivery records existed, a client added on the
+    // Clients page was simply absent from all three.
+    const picker = await api.get('/crm/clients?limit=200', { token });
+    const match = picker.body.data.find((c) => c.name === 'Pickable Client Ltd');
+    assert.ok(match, 'the new client is selectable when creating a project');
+    assert.equal(match.client_account_id, account.id);
+    assert.equal(match.status, 'active');
+  });
+
+  test('the delivery record carries no stage, so it stays off the CRM board', async () => {
+    const account = (await create({ name: 'Not On The Board Ltd' })).body.data;
+
+    const record = (await api.get(`/crm/clients?client_account_id=${account.id}`, { token })).body.data[0];
+    assert.equal(record.stage_id, null);
+
+    const board = await api.get('/crm/pipeline', { token });
+    const onBoard = board.body.data.some((stage) =>
+      stage.clients.some((c) => c.name === 'Not On The Board Ltd'));
+    assert.equal(onBoard, false, 'a client on the register is not an opportunity in the funnel');
+  });
+
+  test('links an existing lead instead of duplicating it', async () => {
+    const lead = (await api.post('/crm/clients', { name: 'Already A Lead Ltd' }, { token })).body.data;
+    const account = (await create({ name: 'Already A Lead Ltd' })).body.data;
+
+    const matches = (await api.get('/crm/clients?search=Already A Lead', { token })).body.data;
+    assert.equal(matches.length, 1, 'no duplicate row was created');
+    assert.equal(matches[0].id, lead.id, 'the existing lead was linked, keeping its history');
+    assert.equal(matches[0].client_account_id, account.id);
+  });
+
+  test('renaming the client renames what the pickers show', async () => {
+    const account = (await create({ name: 'Old Trading Name Ltd' })).body.data;
+    await api.patch(`/clients/${account.id}`, { name: 'New Trading Name Ltd' }, { token });
+
+    const record = (await api.get(`/crm/clients?client_account_id=${account.id}`, { token })).body.data[0];
+    assert.equal(record.name, 'New Trading Name Ltd');
   });
 });
