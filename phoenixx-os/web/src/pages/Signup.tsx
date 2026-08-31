@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, ArrowLeft, Check } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { Logo } from '../components/Logo';
 import { api, ApiError } from '../lib/api';
 import { money } from '../lib/format';
 import { Button, Field, Input, cx } from '../components/ui';
@@ -83,7 +84,7 @@ export default function Signup() {
       <header className="border-b border-line bg-raised">
         <div className="max-w-3xl mx-auto px-5 h-14 flex items-center justify-between">
           <Link to="/login" className="flex items-center gap-2.5">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--brand)] text-white font-bold text-sm">P</span>
+            <Logo size={32} />
             <span className="font-semibold text-ink text-[15px]">Phoenixx OS</span>
           </Link>
           <Link to="/login" className="text-[13.5px] text-[var(--brand)] hover:underline">Sign in instead</Link>

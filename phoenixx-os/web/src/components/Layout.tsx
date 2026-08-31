@@ -10,12 +10,15 @@ import {
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { store } from '../lib/storage';
+import { Logo } from './Logo';
 import { applyStatusBarTheme } from '../lib/native';
 import { Avatar, Badge, Button, cx, EmptyState } from './ui';
 import { relative } from '../lib/format';
 
 /* ------------------------------------------------------------------ theme */
-function useTheme() {
+/** Exported so the mobile shell shares it — two copies would let the native
+ *  status bar drift out of step with the page. */
+export function useTheme() {
   const [dark, setDark] = useState(() => {
     const saved = store.get('phoenixx.theme');
     if (saved) return saved === 'dark';
@@ -134,10 +137,21 @@ export default function Layout() {
         sidebarOpen ? 'translate-x-0' : '-translate-x-full',
       )}>
         <div className="flex items-center gap-2.5 px-4 h-14 border-b border-line shrink-0">
-          <span className="grid h-8 w-8 place-items-center rounded-lg text-white font-bold text-sm shrink-0"
-            style={{ background: tenant?.brand_primary || '#1E40AF' }}>
-            {tenant?.name?.[0] || 'P'}
-          </span>
+          {/* The workspace's own identity, not the product's — an agency that
+              uploaded a logo sees it here, otherwise their initial in their
+              brand colour. Only with no tenant at all does Phoenixx OS's own
+              mark stand in. */}
+          {tenant?.logo_url ? (
+            <img src={tenant.logo_url} alt=""
+              className="h-8 w-8 shrink-0 rounded-lg object-cover" />
+          ) : tenant?.name ? (
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-sm font-bold text-white"
+              style={{ background: tenant.brand_primary || '#E15926' }}>
+              {tenant.name[0]}
+            </span>
+          ) : (
+            <Logo size={32} className="shrink-0" />
+          )}
           <div className="min-w-0 flex-1">
             <p className="text-[13.5px] font-semibold text-ink truncate leading-tight">{tenant?.name || 'Phoenixx OS'}</p>
             <p className="text-[11px] text-subtle truncate leading-tight">

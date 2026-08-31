@@ -21,3 +21,7 @@ assets/*.png
 # android/ and ios/ ARE committed. Capacitor can regenerate them, but they also
 # hold things it cannot: signing config, store metadata, permission entries and
 # any native code added later. Their own .gitignore files exclude build output.
+
+# Built app binaries — produced by `npm run sync` + gradle, never committed.
+*.apk
+*.aab

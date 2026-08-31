@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './lib/auth';
+import { isNative } from './lib/storage';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -35,6 +36,13 @@ const Admin = lazy(() => import('./pages/Admin'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const Profile = lazy(() => import('./pages/Profile'));
 
+/**
+ * Mobile V2 — its own shell, its own four-tab navigation, deliberately not the
+ * desktop screens shrunk down. It lives outside the <Layout> route below
+ * because it replaces the sidebar and header entirely.
+ */
+const MobileApp = lazy(() => import('./mobile/MobileApp'));
+
 function FullPageSpinner({ label = 'Loading' }: { label?: string }) {
   return (
     <div className="grid min-h-[60vh] place-items-center" role="status" aria-live="polite">
@@ -67,9 +75,18 @@ export default function App() {
       <Route path="/login" element={loading ? <FullPageSpinner /> : user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/signup" element={loading ? <FullPageSpinner /> : user ? <Navigate to="/" replace /> : <Signup />} />
 
+      {/* --------------------------------------------------- mobile V2 */}
+      {/* Browsable at /m on any device, which is how it is tested without one. */}
+      <Route path="/m/*" element={(
+        <RequireAuth>
+          <Suspense fallback={<FullPageSpinner />}><MobileApp /></Suspense>
+        </RequireAuth>
+      )} />
+
       {/* ----------------------------------------------------- protected */}
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
-        <Route index element={<Home />} />
+        {/* Inside the installed app the mobile shell is the whole product. */}
+        <Route index element={isNative ? <Navigate to="/m" replace /> : <Home />} />
         <Route path="dashboard" element={<Suspense fallback={<FullPageSpinner />}><Dashboard /></Suspense>} />
         <Route path="action-items" element={<Suspense fallback={<FullPageSpinner />}><ActionItems /></Suspense>} />
         <Route path="action-items/:id" element={<Suspense fallback={<FullPageSpinner />}><ActionItems /></Suspense>} />

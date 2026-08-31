@@ -2,94 +2,110 @@
 
 /* =====================================================================
    Phoenixx OS design system — "data-dense dashboard".
-   Blue carries structure and data; amber is reserved for the single most
+   The palette is taken from the Phoenixx IT mark: the wordmark vermillion
+   (#E15926) is brand-500, the phoenix's deep shadow is the 900/950 end, and
+   its highlight amber is the accent. Neutrals are warmed to sit with an ember
+   brand — a cool slate grey fights orange and reads dirty next to it.
+   Ember carries structure and data; amber is reserved for the single most
    important action or warning on a screen, so it never competes with itself.
    Every colour is a token defined in both themes; nothing is defined only
-   inside a dark-mode block.
+   inside a dark-mode block, and every foreground/background pair below is
+   AA (>= 4.5:1) in both themes.
    ===================================================================== */
 
 @theme {
   --font-sans: 'Fira Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* The mark's wordmark is set in a serif; this is the closest face that is
+     already on every machine, so the lockup needs no extra web font. */
+  --font-serif: Georgia, 'Times New Roman', Times, serif;
 
-  --color-brand-50: #eff6ff;
-  --color-brand-100: #dbeafe;
-  --color-brand-200: #bfdbfe;
-  --color-brand-300: #93c5fd;
-  --color-brand-400: #60a5fa;
-  --color-brand-500: #3b82f6;
-  --color-brand-600: #2563eb;
-  --color-brand-700: #1d4ed8;
-  --color-brand-800: #1e40af;
-  --color-brand-900: #1e3a8a;
-  --color-brand-950: #172554;
+  --color-brand-50: #fef4f1;
+  --color-brand-100: #fde6dd;
+  --color-brand-200: #fac9b7;
+  --color-brand-300: #f5a080;
+  --color-brand-400: #ee7a4f;
+  --color-brand-500: #e15926;   /* the mark's vermillion, sampled from logo.svg */
+  --color-brand-600: #c34718;
+  --color-brand-700: #a53b12;
+  --color-brand-800: #883111;
+  --color-brand-900: #6f2a11;
+  --color-brand-950: #401708;
 
-  --color-accent-50: #fffbeb;
-  --color-accent-100: #fef3c7;
+  --color-accent-50: #fff8eb;
+  --color-accent-100: #fdecc8;
   --color-accent-400: #fbbf24;
-  --color-accent-500: #f59e0b;
-  --color-accent-600: #d97706;
-  --color-accent-700: #b45309;
+  --color-accent-500: #ed8c00;  /* the phoenix's highlight amber */
+  --color-accent-600: #c97400;
+  --color-accent-700: #a85b08;
 
   --radius-card: 0.625rem;
 }
 
 /* ------------------------------------------------------------ semantics */
 :root {
-  --surface: #f8fafc;          /* page background */
+  --surface: #f9f7f5;          /* page background — warm, not slate */
   --surface-raised: #ffffff;   /* cards, panels */
-  --surface-sunken: #f1f5f9;   /* table headers, wells */
-  --surface-hover: #f8fafc;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --ink: #0f172a;              /* primary text  — 16.9:1 on surface */
-  --ink-muted: #475569;        /* secondary     —  7.4:1 */
-  --ink-subtle: #64748b;       /* tertiary      —  5.0:1 */
+  --surface-sunken: #f3efec;   /* table headers, wells */
+  --surface-hover: #fbf8f6;
+  --border: #e9e2dc;
+  --border-strong: #d6cac1;
+  --ink: #1c1410;              /* primary text  — 17.0:1 on surface */
+  --ink-muted: #57453c;        /* secondary     —  8.5:1 */
+  --ink-subtle: #7a6559;       /* tertiary      —  5.1:1 */
   --ink-inverse: #ffffff;
-  --brand: #1e40af;
-  --brand-soft: #eff6ff;
-  --accent: #b45309;           /* amber, darkened for AA text contrast */
-  --accent-bg: #f59e0b;        /* amber for fills, where contrast is set by the text on top */
-  --accent-soft: #fffbeb;
-  --positive: #15803d;
+  --brand: #c34718;            /* darkened from the mark for AA as text (4.6:1) */
+  --brand-vivid: #e15926;      /* the mark's own orange — decoration and fills only */
+  --brand-contrast: #ffffff;   /* text that sits on a --brand fill (5.0:1) */
+  --brand-soft: #fef4f1;
+  --accent: #a85b08;           /* amber, darkened for AA text contrast */
+  --accent-bg: #ed8c00;        /* amber for fills; contrast comes from the text on top */
+  --accent-contrast: #2a1806;  /* text that sits on an --accent-bg fill (6.8:1) */
+  --accent-soft: #fff8eb;
+  --positive: #166534;
   --positive-soft: #f0fdf4;
-  --negative: #b91c1c;
-  --negative-soft: #fef2f2;
-  --warning: #a16207;
-  --warning-soft: #fefce8;
+  --negative: #be123c;         /* rose, not red: a red negative is unreadable beside an ember brand */
+  --negative-soft: #fff1f3;
+  --negative-contrast: #ffffff;
+  --warning: #92610a;
+  --warning-soft: #fefaec;
   --info: #1d4ed8;
   --info-soft: #eff6ff;
-  --ring: #3b82f6;
-  --shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.05);
-  --shadow-md: 0 1px 3px 0 rgb(15 23 42 / 0.08), 0 1px 2px -1px rgb(15 23 42 / 0.05);
-  --shadow-lg: 0 10px 24px -6px rgb(15 23 42 / 0.12), 0 4px 8px -4px rgb(15 23 42 / 0.06);
+  --ring: #e15926;
+  --shadow-sm: 0 1px 2px 0 rgb(40 22 12 / 0.06);
+  --shadow-md: 0 1px 3px 0 rgb(40 22 12 / 0.09), 0 1px 2px -1px rgb(40 22 12 / 0.06);
+  --shadow-lg: 0 10px 24px -6px rgb(40 22 12 / 0.14), 0 4px 8px -4px rgb(40 22 12 / 0.07);
 }
 
 :root.dark {
-  --surface: #0b1120;
-  --surface-raised: #131c31;
-  --surface-sunken: #1a2436;
-  --surface-hover: #1a2436;
-  --border: #253046;
-  --border-strong: #33415c;
-  --ink: #f1f5f9;
-  --ink-muted: #b6c2d4;
-  --ink-subtle: #8fa0b8;
-  --ink-inverse: #0b1120;
-  --brand: #60a5fa;
-  --brand-soft: #17233c;
+  --surface: #12100f;
+  --surface-raised: #1c1917;
+  --surface-sunken: #241f1c;
+  --surface-hover: #241f1c;
+  --border: #332c28;
+  --border-strong: #4a403a;
+  --ink: #f5efea;
+  --ink-muted: #c4b5aa;
+  --ink-subtle: #9c8b7e;
+  --ink-inverse: #12100f;
+  --brand: #ff8a5b;            /* lifted for AA as text on a dark surface (8.2:1) */
+  --brand-vivid: #ff8a5b;
+  --brand-contrast: #2a0f06;   /* the fill is light here, so its text goes dark (7.7:1) */
+  --brand-soft: #2b1710;
   --accent: #fbbf24;
-  --accent-bg: #f59e0b;
-  --accent-soft: #2a2110;
+  --accent-bg: #ed8c00;
+  --accent-contrast: #2a1806;
+  --accent-soft: #2a1d08;
   --positive: #4ade80;
-  --positive-soft: #10241a;
-  --negative: #f87171;
-  --negative-soft: #2a1416;
+  --positive-soft: #0f2418;
+  --negative: #fda4af;
+  --negative-soft: #2c1218;
+  --negative-contrast: #2c1218;
   --warning: #fbbf24;
-  --warning-soft: #251d0d;
-  --info: #60a5fa;
+  --warning-soft: #261b08;
+  --info: #93c5fd;
   --info-soft: #17233c;
-  --ring: #60a5fa;
+  --ring: #ff8a5b;
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
   --shadow-md: 0 1px 3px 0 rgb(0 0 0 / 0.5);
   --shadow-lg: 0 12px 28px -8px rgb(0 0 0 / 0.6);
@@ -105,6 +121,7 @@
   --color-muted: var(--ink-muted);
   --color-subtle: var(--ink-subtle);
   --color-brand: var(--brand);
+  --color-brand-vivid: var(--brand-vivid);
   --color-brand-soft: var(--brand-soft);
   --color-accent: var(--accent);
   --color-accent-bg: var(--accent-bg);

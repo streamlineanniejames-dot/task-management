@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query';
 import { ArrowRight, AlertTriangle } from 'lucide-react';
 import { api, tokens } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { Logo } from '../components/Logo';
 import { Button, Field, Input } from '../components/ui';
 import {
   SecurityQuestionFields, EMPTY_SECURITY_QUESTION, isSecurityQuestionComplete,
@@ -65,7 +66,7 @@ export default function AcceptInvite() {
     <div className="min-h-screen grid place-items-center bg-surface px-5 py-10">
       <div className="w-full max-w-sm">
         <div className="flex items-center gap-2.5 mb-8">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--brand)] text-white font-bold">P</span>
+          <Logo size={36} />
           <span className="font-semibold text-ink">Phoenixx OS</span>
         </div>
 

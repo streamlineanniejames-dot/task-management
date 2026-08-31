@@ -138,7 +138,7 @@ function WorkspaceTab() {
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Primary colour">
                 <div className="flex gap-2">
-                  <input type="color" value={form.brand_primary || '#1E40AF'} disabled={!editable}
+                  <input type="color" value={form.brand_primary || '#E15926'} disabled={!editable}
                     onChange={(e) => set('brand_primary', e.target.value.toUpperCase())}
                     aria-label="Primary colour"
                     className="h-9 w-12 rounded-md border border-line-strong cursor-pointer bg-raised p-1" />

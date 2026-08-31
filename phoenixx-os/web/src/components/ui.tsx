@@ -17,12 +17,15 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   icon?: ReactNode;
 };
 
+// A filled variant never hard-codes its text colour: on light the brand fill is
+// dark and takes white, on dark it is light and takes near-black. The paired
+// --*-contrast token flips with the theme so both stay AA.
 const BUTTON_VARIANTS = {
-  primary: 'bg-[var(--brand)] text-white hover:brightness-110 border-transparent shadow-[var(--shadow-sm)]',
-  accent: 'bg-[var(--accent-bg)] text-slate-900 hover:brightness-105 border-transparent shadow-[var(--shadow-sm)] font-semibold',
+  primary: 'bg-[var(--brand)] text-[var(--brand-contrast)] hover:brightness-110 border-transparent shadow-[var(--shadow-sm)]',
+  accent: 'bg-[var(--accent-bg)] text-[var(--accent-contrast)] hover:brightness-105 border-transparent shadow-[var(--shadow-sm)] font-semibold',
   secondary: 'bg-raised text-ink border-line-strong hover:bg-sunken',
   ghost: 'bg-transparent text-muted border-transparent hover:bg-sunken hover:text-ink',
-  danger: 'bg-[var(--negative)] text-white hover:brightness-110 border-transparent',
+  danger: 'bg-[var(--negative)] text-[var(--negative-contrast)] hover:brightness-110 border-transparent',
 };
 
 const BUTTON_SIZES = {

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { ArrowRight, ArrowLeft, ShieldQuestion, Check, Lock } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
+import { Logo } from '../components/Logo';
 import { Button, Field, Input, cx } from '../components/ui';
 
 /**
@@ -104,7 +105,7 @@ export default function Recover() {
       <header className="border-b border-line bg-raised">
         <div className="max-w-md mx-auto px-5 h-14 flex items-center">
           <Link to="/login" className="flex items-center gap-2.5">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--brand)] text-white font-bold text-sm">P</span>
+            <Logo size={32} />
             <span className="font-semibold text-ink text-[15px]">Phoenixx OS</span>
           </Link>
         </div>

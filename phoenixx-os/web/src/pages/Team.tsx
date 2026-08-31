@@ -249,6 +249,18 @@ function InviteModal({ onClose }: { onClose: () => void }) {
   const set = (k: string, v: string) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: '' })); };
   const overBand = invite.error && (invite.error as any).message?.includes('covers up to');
 
+  /**
+   * What is still stopping the submit. The form is taller than the dialog on a
+   * laptop, so the required fields scroll out of sight behind the role and
+   * salary rows - a button that is merely greyed out reads as "broken" rather
+   * than "not finished". Naming the gap in the footer keeps it on screen.
+   */
+  const missing = [
+    !form.name.trim() && 'a full name',
+    !/\S+@\S+\.\S+/.test(form.email) && 'a work email',
+    mode === 'password' && password.length < 8 && 'a password of at least 8 characters',
+  ].filter(Boolean) as string[];
+
   if (created) {
     const isPassword = !!created.password;
     const secret = created.password || created.invite_url || '';
@@ -283,6 +295,11 @@ function InviteModal({ onClose }: { onClose: () => void }) {
         : 'They pick their own password from a one-time link'}
       footer={
         <>
+          {missing.length > 0 && (
+            <p className="mr-auto self-center text-[12.5px] text-subtle leading-snug max-w-[60%]">
+              Still needed: {missing.join(', ')}
+            </p>
+          )}
           <Button onClick={onClose}>Cancel</Button>
           {overBand && (
             <Button variant="accent" loading={invite.isPending} onClick={() => invite.mutate(true)}>
@@ -290,8 +307,7 @@ function InviteModal({ onClose }: { onClose: () => void }) {
             </Button>
           )}
           <Button variant="primary" loading={invite.isPending}
-            disabled={!form.name.trim() || !/\S+@\S+\.\S+/.test(form.email)
-              || (mode === 'password' && password.length < 8)}
+            disabled={missing.length > 0}
             onClick={() => invite.mutate(false)}>
             {mode === 'password' ? 'Create account' : 'Create invitation'}
           </Button>
