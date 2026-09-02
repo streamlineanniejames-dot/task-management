@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Clock, AlertTriangle, PhoneCall, CalendarDays, CheckCircle2, LogIn, LogOut,
-  ListChecks, ArrowUpRight, Bell, Stamp, Plus,
+  ListChecks, ArrowUpRight, Bell, Stamp, Plus, PencilLine, Users2,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -14,6 +14,7 @@ import {
 } from '../components/ui';
 import MiniChat from '../components/MiniChat';
 import PersonalTodos from '../components/PersonalTodos';
+import { DailyUpdateModal } from '../components/DailyUpdate';
 
 /**
  * The landing page answers one question: what does *this person* need to do
@@ -24,6 +25,7 @@ export default function Home() {
   const qc = useQueryClient();
   const toast = useToast();
   const navigate = useNavigate();
+  const [logging, setLogging] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard', 'home'],
@@ -109,8 +111,10 @@ export default function Home() {
           onClick={() => navigate('/action-items')} />
         <Stat label="In progress" value={c.in_progress ?? 0} icon={<ListChecks size={15} />}
           onClick={() => navigate('/action-items?status=in_progress')} />
-        <Stat label="Follow-ups" value={c.follow_ups ?? 0} icon={<PhoneCall size={15} />}
-          onClick={() => navigate('/crm?filter=follow_up_due')} />
+        <Stat label="Needs update" value={c.needs_update ?? 0}
+          tone={c.needs_update ? 'warning' : 'neutral'} icon={<PencilLine size={15} />}
+          onClick={() => navigate('/action-items?tab=updates')}
+          sub={c.needs_update ? 'not written up today' : 'all written up'} />
         <Stat label="Escalations" value={c.escalations ?? 0} tone={c.escalations ? 'warning' : 'neutral'}
           icon={<ArrowUpRight size={15} />} onClick={() => navigate('/deadlines?tab=escalations')} />
         <Stat label="Unread" value={c.unread ?? 0} icon={<Bell size={15} />}
@@ -129,8 +133,8 @@ export default function Home() {
 
           <Card>
             <CardHeader
-              title="What needs you today"
-              subtitle="Overdue and due items, plus anything you've already started"
+              title="Assigned to me"
+              subtitle="Company tasks due, overdue or started"
               icon={<ListChecks size={16} />}
               action={<Link to="/action-items" className="text-[13px] text-[var(--brand)] hover:underline">All items</Link>}
             />
@@ -154,22 +158,39 @@ export default function Home() {
                         <CheckCircle2 size={11} className="opacity-0 group-hover:opacity-100 text-[var(--positive)]" />
                       </button>
 
-                      <Link to={`/action-items?open=${item.id}`} className="min-w-0 flex-1">
-                        <p className="text-[14px] font-medium text-ink leading-snug">{item.title}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] text-subtle">
-                          {item.client_name && <span className="truncate max-w-[180px]">{item.client_name}</span>}
-                          {item.category_name && (
-                            <span className="inline-flex items-center gap-1">
-                              <span className="h-1.5 w-1.5 rounded-full" style={{ background: item.category_color }} aria-hidden />
-                              {item.category_name}
+                      <span className="min-w-0 flex-1">
+                        <Link to={`/action-items?open=${item.id}`} className="block">
+                          <p className="text-[14px] font-medium text-ink leading-snug">{item.title}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] text-subtle">
+                            {item.client_name && <span className="truncate max-w-[180px]">{item.client_name}</span>}
+                            {!item.accountable && (
+                              <span className="inline-flex items-center gap-1" title="Shared with others">
+                                <Users2 size={11} />shared
+                              </span>
+                            )}
+                            <span className={cx(overdue && 'text-[var(--negative)] font-medium')}>
+                              {overdue ? `${Math.abs(days!)} day${Math.abs(days!) > 1 ? 's' : ''} overdue` : `due ${relative(item.due_date)}`}
                             </span>
+                            {item.escalation_level > 0 && <Badge tone="negative">escalated L{item.escalation_level}</Badge>}
+                          </div>
+                        </Link>
+
+                        {/* The daily update lives on the row it is about, so it
+                            takes one click from the page people already open. */}
+                        <button
+                          onClick={() => setLogging(item)}
+                          className={cx(
+                            'mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11.5px]',
+                            'font-medium transition-colors duration-150 cursor-pointer',
+                            item.has_update_today
+                              ? 'text-subtle hover:bg-sunken hover:text-ink'
+                              : 'bg-warning-soft text-[var(--warning)] hover:brightness-95',
                           )}
-                          <span className={cx(overdue && 'text-[var(--negative)] font-medium')}>
-                            {overdue ? `${Math.abs(days!)} day${Math.abs(days!) > 1 ? 's' : ''} overdue` : `due ${relative(item.due_date)}`}
-                          </span>
-                          {item.escalation_level > 0 && <Badge tone="negative">escalated L{item.escalation_level}</Badge>}
-                        </div>
-                      </Link>
+                        >
+                          <PencilLine size={11} />
+                          {item.has_update_today ? 'Update logged' : 'Add today’s update'}
+                        </button>
+                      </span>
 
                       <Badge tone={item.priority === 'urgent' ? 'negative' : item.priority === 'high' ? 'warning' : 'neutral'}>
                         {item.priority}
@@ -276,6 +297,11 @@ export default function Home() {
           <MiniChat className="lg:sticky lg:top-5 h-[calc(100dvh-19rem)] min-h-[560px]" />
         </div>
       </div>
+
+      {logging && (
+        <DailyUpdateModal task={logging} existing={null} onClose={() => setLogging(null)}
+          onSaved={() => qc.invalidateQueries({ queryKey: ['dashboard', 'home'] })} />
+      )}
     </>
   );
 }

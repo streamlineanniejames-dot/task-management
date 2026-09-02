@@ -995,6 +995,85 @@ function seedPhoenixx() {
   }
   console.log(`✓ 2 open roles, ${candidates.length} candidates`);
 
+  // ------------------------------------------- assignment + daily updates
+  // A handful of live tasks get a second person on them and a written update,
+  // so the team board and the employee view both have something to show on a
+  // fresh install rather than reading as broken.
+  const liveTasks = all(
+    `SELECT id, title, owner_id, status FROM action_items
+      WHERE tenant_id = ? AND deleted_at IS NULL AND status NOT IN ('done','cancelled')
+        AND owner_id IS NOT NULL
+      ORDER BY due_date LIMIT 8`,
+    [tenantId],
+  );
+
+  const helpers = ['rahul@phoenixxit.com', 'aishwarya@phoenixxit.com', 'vignesh@phoenixxit.com',
+    'nithya@phoenixxit.com'].map((e) => users[e]).filter(Boolean);
+
+  let paired = 0;
+  for (const [i, t] of liveTasks.entries()) {
+    // Every other task is worked by two people, which is what makes the
+    // "shared" marker and the multi-person update view worth looking at.
+    if (i % 2) continue;
+    const helper = helpers.find((h) => h && h !== t.owner_id);
+    if (!helper) continue;
+    run(
+      `INSERT OR IGNORE INTO action_assignees (id, tenant_id, action_item_id, user_id, assigned_by, created_at)
+       VALUES (?,?,?,?,?,?)`,
+      [uuid(), tenantId, t.id, helper, users['divya@phoenixxit.com'] ?? ownerId, ts],
+    );
+    paired += 1;
+  }
+
+  const UPDATE_SCRIPTS = [
+    {
+      completed_today: 'Pulled the August numbers and drafted the summary deck',
+      in_progress: 'Charts for the media performance section',
+      pending: 'Client sign-off on the creative direction',
+      next_action: 'Send the draft to Divya first thing tomorrow',
+      progress_pct: 60, hours_spent: 3.5,
+    },
+    {
+      completed_today: 'Cleared the second round of UAT tickets',
+      in_progress: 'Service-history export performance',
+      blockers: 'Waiting on the client to confirm the staging data set',
+      next_action: 'Chase ThermaCool ops, then re-run the load test',
+      progress_pct: 45, hours_spent: 6,
+    },
+    {
+      completed_today: 'Locked the three key visuals with the studio',
+      pending: 'Copy deck for the festive push',
+      next_action: 'Share the visuals with the client for approval',
+      progress_pct: 75, hours_spent: 4,
+    },
+    {
+      in_progress: 'Working through the outreach list for the quarter',
+      blockers: 'CRM export is missing phone numbers for 40 of the leads',
+      next_action: 'Ask Sanjay to re-run the export with contacts included',
+      progress_pct: 25, hours_spent: 2,
+    },
+  ];
+
+  let updatesWritten = 0;
+  for (const [i, t] of liveTasks.slice(0, 5).entries()) {
+    const script = UPDATE_SCRIPTS[i % UPDATE_SCRIPTS.length];
+    // Today for most, yesterday for one, so the date picker has history behind
+    // it and the board is not uniformly green.
+    const day = i === 4 ? addDays(new Date(), -1).toISOString().slice(0, 10) : todayIso();
+    run(
+      `INSERT OR IGNORE INTO action_updates (id, tenant_id, action_item_id, user_id, update_date,
+         completed_today, in_progress, pending, blockers, next_action, remarks,
+         progress_pct, hours_spent, status_at_update, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid(), tenantId, t.id, t.owner_id, day,
+        script.completed_today ?? null, script.in_progress ?? null, script.pending ?? null,
+        script.blockers ?? null, script.next_action ?? null, null,
+        script.progress_pct ?? null, script.hours_spent ?? null, t.status, ts, ts],
+    );
+    updatesWritten += 1;
+  }
+  console.log(`✓ ${paired} tasks shared with a second assignee, ${updatesWritten} daily updates written`);
+
   // ------------------------------------------------------- reimbursements
   // One claim sitting at each stage of the chain, so every queue in the
   // Finance module has something in it on a fresh install.

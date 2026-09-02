@@ -98,6 +98,14 @@ export const DEFAULT_TEMPLATES = {
     subject: 'New action item: {{title}}',
     body: 'Hi {{user.name}}, you have been assigned "{{title}}" ({{priority}}) due {{due_date}}.',
   },
+  'action_item.update_due': {
+    subject: 'Daily update pending on {{count}} task(s)',
+    body: 'Hi {{user.name}}, you have {{count}} open task(s) with no update logged for today: {{titles}}. Two minutes now saves the standup tomorrow.',
+  },
+  'action_item.blocked_reported': {
+    subject: 'Blocker raised on {{title}}',
+    body: '{{person}} reported a blocker on "{{title}}": {{blockers}}',
+  },
   'action_item.due_soon': {
     subject: 'Due {{when}}: {{title}}',
     body: 'Reminder - "{{title}}" is due {{when}} ({{due_date}}). Client: {{client}}.',

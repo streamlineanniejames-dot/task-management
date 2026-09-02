@@ -117,11 +117,11 @@ export function CardHeader({ title, subtitle, action, icon, className }: {
 }) {
   return (
     <div className={cx('flex items-start justify-between gap-3 border-b border-line px-4 py-3', className)}>
-      <div className="min-w-0 flex items-start gap-2.5">
+      <div className="min-w-0 flex-1 flex items-start gap-2.5">
         {icon && <span className="mt-0.5 text-[var(--brand)] shrink-0">{icon}</span>}
         <div className="min-w-0">
           <h2 className="text-[15px] font-semibold text-ink leading-tight truncate">{title}</h2>
-          {subtitle && <p className="text-[13px] text-subtle mt-0.5 leading-snug">{subtitle}</p>}
+          {subtitle && <p className="text-[13px] text-subtle mt-0.5 leading-snug break-words">{subtitle}</p>}
         </div>
       </div>
       {action && <div className="shrink-0 flex items-center gap-2">{action}</div>}

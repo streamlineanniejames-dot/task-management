@@ -66,7 +66,7 @@ phoenixx-os/
 
 | | Module | Where it lives |
 |---|---|---|
-| **A** | Action items, meetings, MOM | `action-items`, `meetings` |
+| **A** | Action items, assignment, daily updates, meetings, MOM | `action-items`, `meetings` |
 | **B** | Deadline engine, alerts, escalations | `deadlines`, `notifications` |
 | **C** | Attendance, leave, performance, hiring | `hr` |
 | **D** | SOP library and KPI/KRA definitions | `sop` |
@@ -133,6 +133,33 @@ list. That is what makes "why did we lose them" answerable across a year of
 records instead of a hundred differently-worded notes. The API rejects a churn
 without a reason code.
 
+### Assignment and the daily update
+
+`action_items.owner_id` is the one person **accountable** — the reminder ladder
+and every escalation target read that single column, and exactly one name has to
+answer for a due date. `action_assignees` holds everyone *else* working the task,
+so the effective team is the owner plus those rows. Deliberately additive: no
+existing task needed a backfill, and the accountable person cannot drift out of
+step with itself. Assigning to a team means picking a project: everyone seated on
+it becomes an assignee, and one of them is named accountable.
+
+On top of that sits the **daily update** — the standup, written down. One row per
+person per task per day, upserted, with six fields in a fixed order: what moved,
+what is moving, what has not started, what is in the way, what happens next, and
+anything else. A field left out of a later call keeps its value; only an explicit
+null clears it, so adding a blocker at four o'clock cannot wipe what was written
+at ten.
+
+Two views read it. The employee sees what is on them, what still owes an update
+and what they have written; the manager sees one row per report for a chosen day,
+**including the people who wrote nothing** — silence is the thing a manager most
+needs to see, so "no update" is reported as loudly as an update is. Somebody with
+no open work is not counted as silent.
+
+An end-of-day job (`action_items.update_reminder`, 12:00 UTC / 17:30 IST) sends
+one message per person listing what they have not written up — one message, not
+one per task, because five nudges is how a reminder becomes noise.
+
 ### The reimbursement chain
 
 An expense claim passes two gates before money moves:
@@ -179,10 +206,10 @@ for this at both the service and API layers.
 npm test
 ```
 
-296 tests across GST computation, invoice numbering, client scoring, invoicing,
-billing, reimbursement approval and payment, project permissions, personal
-to-do privacy, database snapshots and API integration (auth, RBAC, tenant
-isolation, idempotency, mobile sync, audit trail).
+327 tests across GST computation, invoice numbering, client scoring, invoicing,
+billing, reimbursement approval and payment, task assignment and daily updates,
+project permissions, personal to-do privacy, database snapshots and API
+integration (auth, RBAC, tenant isolation, idempotency, mobile sync, audit trail).
 
 The PRD asks for ≥70% coverage on scoring, invoicing and billing logic:
 

@@ -123,6 +123,41 @@ open → in_progress → done
 - Meeting minutes (MOM) create action items directly, which is what makes a
   meeting produce tracked work rather than a document.
 
+### 4b. Assignment and the daily update
+
+Every task carries one **accountable** person (`owner_id`) and, when several
+people work it, a list of co-assignees (`action_assignees`). Assigning to a team
+means choosing a project: everyone seated on it is assigned, and one of them is
+named accountable. Only the accountable column drives the deadline ladder — an
+escalation needs one name, not four.
+
+```
+create ──▶ assign ──▶ the assignee works it ──▶ daily update ──▶ manager reviews ──▶ done
+             │                                       │                  │
+      individual or a                        six fields, one            team board,
+      project team, one                      per person per             including who
+      accountable                            task per day               said nothing
+```
+
+The update is upserted per person per task per day: logging at noon and again at
+six leaves one entry, not two, and the second call **merges** — a field left out
+keeps its value, only an explicit null clears it. Sending `status` alongside
+moves the task on in the same action, which is what stops "I finished it" sitting
+next to a task still marked open.
+
+- **Blockers are the one part somebody else must act on**, so writing one notifies
+  the accountable owner and the reporting manager the same day, deduped per
+  person per task per day.
+- **Silence is reported.** The manager board lists a report with open work and no
+  update as `silent`, and names the tasks they said nothing about. Somebody with
+  no open work is `no_open_tasks`, not silent — a quiet day is not a missed one.
+- **The reminder** (`action_items.update_reminder`, 12:00 UTC / 17:30 IST) sends
+  one message per person naming what is unwritten, deduped on the date so a
+  restart or a forced re-run cannot send it twice.
+- **Scope.** An employee sees only their own; a manager sees direct reports plus
+  themselves; an admin sees the workspace. The employee view and the team view
+  are the same data read through that filter.
+
 ---
 
 ## 5. CRM: lead to client
@@ -356,6 +391,8 @@ Honest list of the failure modes, since none of them raise an alarm on their own
 | Symptom | Look at |
 |---|---|
 | No reminders anywhere | `JOBS_ENABLED`, then `job_runs` for `deadlines.ladder` |
+| Nobody is nudged for daily updates | `job_runs` for `action_items.update_reminder`; it only fires at 12:00 UTC |
+| A task never asks for an update | It is `done`/`cancelled`, or nobody is assigned to it |
 | Reminders but no escalations | `users.manager_id` unset — escalation with no target is a no-op |
 | Nothing escalates in one category | `action_categories.escalation_days` |
 | Notifications "sent" but nobody got them | Provider still `log`; check the delivery log |

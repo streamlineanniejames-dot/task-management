@@ -1430,3 +1430,56 @@ CREATE TABLE IF NOT EXISTS reimbursement_counters (
   next_number INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (tenant_id, year)
 );
+
+-- ------------------------------------------- ACTION ITEMS: TEAM ASSIGNMENT
+-- `action_items.owner_id` stays the one person accountable for the task - the
+-- deadline ladder and every escalation target read it, and exactly one name
+-- has to answer for a due date. This table holds the *rest* of the team when a
+-- task is worked by several people, so the effective assignee list is
+-- `owner_id` plus these rows. Deliberately additive: no existing task needs a
+-- backfill, and the accountable person cannot drift out of step with itself.
+--
+-- Rows are hard-deleted like action_watchers: who was assigned when is already
+-- in the audit trail, and a soft delete would fight the UNIQUE constraint when
+-- somebody is taken off a task and put back on it.
+CREATE TABLE IF NOT EXISTS action_assignees (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  action_item_id TEXT NOT NULL REFERENCES action_items(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  assigned_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (action_item_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS ix_aassignee_user ON action_assignees(tenant_id, user_id);
+
+-- ---------------------------------------------- ACTION ITEMS: DAILY UPDATES
+-- One update per person per task per day, editable until the day is out. The
+-- six fields are the standup answered in writing: what moved, what is moving,
+-- what has not started, what is in the way, what happens next, and anything
+-- else. `status_at_update` freezes the task status as it stood when the update
+-- was written, so a progress history still reads correctly after the task has
+-- since been closed.
+CREATE TABLE IF NOT EXISTS action_updates (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  action_item_id TEXT NOT NULL REFERENCES action_items(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  update_date TEXT NOT NULL,               -- YYYY-MM-DD, the day being reported
+  completed_today TEXT,
+  in_progress TEXT,
+  pending TEXT,
+  blockers TEXT,
+  next_action TEXT,
+  remarks TEXT,
+  progress_pct INTEGER,                    -- 0-100, the person's own estimate
+  hours_spent REAL,
+  status_at_update TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  UNIQUE (tenant_id, action_item_id, user_id, update_date)
+);
+CREATE INDEX IF NOT EXISTS ix_aupdate_day ON action_updates(tenant_id, update_date);
+CREATE INDEX IF NOT EXISTS ix_aupdate_user ON action_updates(tenant_id, user_id, update_date);
+CREATE INDEX IF NOT EXISTS ix_aupdate_item ON action_updates(tenant_id, action_item_id, update_date);

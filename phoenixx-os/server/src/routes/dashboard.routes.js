@@ -174,6 +174,10 @@ router.get('/drilldown/:key', requires('dashboard', 'view'), (req, res) => {
 });
 
 // -------------------------------------------------------- personal home page
+/** On this person's plate: accountable for it, or working it with someone else. */
+const ASSIGNED = `(a.owner_id = ? OR EXISTS (
+  SELECT 1 FROM action_assignees aa WHERE aa.action_item_id = a.id AND aa.user_id = ?))`;
+
 /** The landing view: what this specific person has to do today. */
 router.get('/home', (req, res) => {
   const { tenantId, userId } = req.auth;
@@ -185,16 +189,16 @@ router.get('/home', (req, res) => {
       [tenantId, userId, today]) || null,
     counters: {
       due_today: Number(get(
-        `SELECT COUNT(*) AS n FROM action_items WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
-           AND status NOT IN ('done','cancelled') AND due_date = ?`, [tenantId, userId, today],
+        `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
+           AND a.status NOT IN ('done','cancelled') AND a.due_date = ?`, [tenantId, userId, userId, today],
       )?.n || 0),
       overdue: Number(get(
-        `SELECT COUNT(*) AS n FROM action_items WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
-           AND status NOT IN ('done','cancelled') AND due_date < ?`, [tenantId, userId, today],
+        `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
+           AND a.status NOT IN ('done','cancelled') AND a.due_date < ?`, [tenantId, userId, userId, today],
       )?.n || 0),
       in_progress: Number(get(
-        `SELECT COUNT(*) AS n FROM action_items WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
-           AND status = 'in_progress'`, [tenantId, userId],
+        `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
+           AND a.status = 'in_progress'`, [tenantId, userId, userId],
       )?.n || 0),
       follow_ups: Number(get(
         `SELECT COUNT(*) AS n FROM clients WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
@@ -209,17 +213,42 @@ router.get('/home', (req, res) => {
         [tenantId, userId],
       )?.n || 0),
       chat: totalUnread(tenantId, userId),
+      // Open work assigned to this person with nothing written about it today.
+      needs_update: Number(get(
+        `SELECT COUNT(*) AS n FROM action_items a
+          WHERE a.tenant_id = ? AND a.deleted_at IS NULL AND a.status NOT IN ('done','cancelled')
+            AND (a.owner_id = ? OR EXISTS (SELECT 1 FROM action_assignees aa
+                   WHERE aa.action_item_id = a.id AND aa.user_id = ?))
+            AND NOT EXISTS (SELECT 1 FROM action_updates au WHERE au.action_item_id = a.id
+                   AND au.user_id = ? AND au.update_date = ? AND au.deleted_at IS NULL)`,
+        [tenantId, userId, userId, userId, today],
+      )?.n || 0),
     },
+    /**
+     * What is on this person today. Includes work assigned to them alongside
+     * somebody else, and says which rows still owe a daily update, so My Day
+     * answers "what do I owe" and not only "what is due".
+     */
     today_items: all(
-      `SELECT a.*, c.name AS client_name, ac.name AS category_name, ac.color AS category_color
+      `SELECT a.*, c.name AS client_name, ac.name AS category_name, ac.color AS category_color,
+              u.name AS owner_name, cb.name AS created_by_name,
+              (a.owner_id = ?) AS accountable,
+              EXISTS (SELECT 1 FROM action_updates au WHERE au.action_item_id = a.id
+                        AND au.user_id = ? AND au.update_date = ? AND au.deleted_at IS NULL) AS has_update_today
          FROM action_items a
          LEFT JOIN clients c ON c.id = a.client_id
+         LEFT JOIN users u ON u.id = a.owner_id
+         LEFT JOIN users cb ON cb.id = a.created_by
          LEFT JOIN action_categories ac ON ac.id = a.category_id
-        WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
+        WHERE a.tenant_id = ? AND a.deleted_at IS NULL
+          AND (a.owner_id = ? OR EXISTS (SELECT 1 FROM action_assignees aa
+                 WHERE aa.action_item_id = a.id AND aa.user_id = ?))
           AND a.status NOT IN ('done','cancelled') AND (a.due_date <= ? OR a.status = 'in_progress')
         ORDER BY a.due_date LIMIT 12`,
-      [tenantId, userId, today],
-    ),
+      [userId, userId, today, tenantId, userId, userId, today],
+    // SQLite hands back 0/1 for a boolean expression; the rest of the API
+    // speaks true/false, and a client should not have to know the difference.
+    ).map((r) => ({ ...r, accountable: !!r.accountable, has_update_today: !!r.has_update_today })),
     follow_ups: all(
       `SELECT id, name, next_action, next_action_date, health_score FROM clients
         WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL AND next_action_date <= ?

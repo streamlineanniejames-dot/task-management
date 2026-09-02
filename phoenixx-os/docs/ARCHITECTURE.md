@@ -102,6 +102,22 @@ and everyone in it; `direct` is keyed by the sorted pair of user ids, which is
 what makes "open a DM" idempotent. Unread is a single `last_read_at` per member
 rather than a read receipt per message, so a badge is one indexed COUNT.
 
+**Task assignment** is `action_items.owner_id` plus `action_assignees`. The owner
+column stays the single accountable person because the deadline engine, the
+escalation ladder and every overdue counter read it; the join table holds the
+rest of the team. Splitting it that way meant no migration on existing tasks and
+no way for "the accountable person" to be recorded twice and disagree. Rows are
+hard-deleted like `action_watchers` — who was assigned when is already in the
+audit trail, and a soft delete would fight the UNIQUE constraint the moment
+somebody is taken off a task and put back on.
+
+**Daily updates** (`action_updates`) are keyed
+`(tenant, task, user, update_date)`, so the upsert is a constraint rather than a
+convention. `update_date` is a stored date, not derived from `created_at`:
+writing up yesterday at nine tomorrow morning should still land on yesterday.
+`status_at_update` freezes the task status as it stood, so a progress history
+still reads correctly once the task has been closed.
+
 **Reimbursements** are three tables. `reimbursements` holds the claim and its
 current `status`; `reimbursement_events` holds every transition — who, when,
 from which status, to which, and the note — because a money decision should be

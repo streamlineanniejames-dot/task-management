@@ -246,6 +246,61 @@ export const weeklyEscalationReport = record('reports.weekly_escalation', async 
   return n;
 });
 
+// ------------------------------------------- A: daily update reminder
+/**
+ * End of day: anyone holding open tasks who has written nothing about them
+ * today gets one message listing them.
+ *
+ * One notification per person, not per task - five separate nudges about five
+ * tasks is how a reminder becomes noise people filter out. The dedupe key is
+ * the date, so a restart or a forced re-run cannot send it twice.
+ */
+export const dailyUpdateReminder = record('action_items.update_reminder', async () => {
+  const today = todayIso();
+  let sent = 0;
+
+  for (const tenantId of activeTenants()) {
+    // Everyone with at least one open task and no update logged today. The
+    // task list comes back with it so the message can name what is missing.
+    const pending = all(
+      `SELECT p.user_id, u.name, COUNT(*) AS n,
+              GROUP_CONCAT(p.title, ' · ') AS titles
+         FROM (
+           SELECT DISTINCT COALESCE(aa.user_id, a.owner_id) AS user_id, a.id, a.title
+             FROM action_items a
+             LEFT JOIN action_assignees aa ON aa.action_item_id = a.id
+            WHERE a.tenant_id = ? AND a.deleted_at IS NULL
+              AND a.status NOT IN ('done','cancelled')
+              AND COALESCE(aa.user_id, a.owner_id) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM action_updates au
+                 WHERE au.action_item_id = a.id
+                   AND au.user_id = COALESCE(aa.user_id, a.owner_id)
+                   AND au.update_date = ? AND au.deleted_at IS NULL)
+         ) p
+         JOIN users u ON u.id = p.user_id
+        WHERE u.deleted_at IS NULL AND u.status = 'active'
+        GROUP BY p.user_id`,
+      [tenantId, today],
+    );
+
+    for (const row of pending) {
+      const titles = String(row.titles || '').split(' · ').slice(0, 3).join(', ');
+      const more = Number(row.n) > 3 ? ` and ${Number(row.n) - 3} more` : '';
+      await notifyMany({
+        tenantId,
+        userIds: [row.user_id],
+        eventKey: 'action_item.update_due',
+        vars: { count: Number(row.n), titles: `${titles}${more}` },
+        link: '/action-items?tab=updates',
+        dedupeKey: `update_due:${today}`,
+      });
+      sent += 1;
+    }
+  }
+  return sent;
+});
+
 // -------------------------------------------------------- G1: scheduled reports
 export const scheduledReports = record('reports.scheduled', async () => {
   let n = 0;
@@ -419,6 +474,7 @@ const JOBS = [
   { key: 'invoices.recurring', atHourUtc: 1, fn: runRecurringInvoices },
   { key: 'crm.scores', atHourUtc: 2, fn: recomputeScores },
   { key: 'dashboard.intel', atHourUtc: 2, fn: refreshDashboardIntel },
+  { key: 'action_items.update_reminder', atHourUtc: 12, fn: dailyUpdateReminder }, // 17:30 IST
   { key: 'notifications.daily_digest', atHourUtc: 3, fn: dailyDigest },   // 08:30 IST
   { key: 'reports.scheduled', atHourUtc: 3, fn: scheduledReports },
   { key: 'reports.weekly_escalation', atHourUtc: 4, onDayOfWeek: 1, fn: weeklyEscalationReport },
@@ -475,6 +531,7 @@ export const JOB_REGISTRY = {
   'crm.scores': recomputeScores,
   'dashboard.intel': refreshDashboardIntel,
   'action_items.recurring': rollRecurringActionItems,
+  'action_items.update_reminder': dailyUpdateReminder,
   'notifications.daily_digest': dailyDigest,
   'reports.scheduled': scheduledReports,
   'reports.weekly_escalation': weeklyEscalationReport,

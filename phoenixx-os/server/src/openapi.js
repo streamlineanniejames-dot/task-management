@@ -94,7 +94,8 @@ export const openapi = {
   ],
   tags: [
     { name: 'Auth', description: 'Sign-in, tokens, 2FA, tenant signup' },
-    { name: 'Action Items', description: 'Module A - action items, comments, escalation' },
+    { name: 'Action Items', description: 'Module A - action items, assignment, comments, escalation' },
+    { name: 'Daily Updates', description: 'Module A - the written standup against an assigned task' },
     { name: 'Meetings', description: 'Module A - meetings and MOM' },
     { name: 'Notifications', description: 'Module B - deadlines, alerts, escalations, webhooks' },
     { name: 'HR', description: 'Module C - attendance, leave, performance, hiring' },
@@ -192,12 +193,82 @@ export const openapi = {
       get: listOp('Action Items', 'List action items', [
         { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Comma separated: open,in_progress,blocked,done,cancelled' },
         { name: 'priority', in: 'query', schema: { type: 'string' } },
-        { name: 'owner_id', in: 'query', schema: { type: 'string' } },
+        { name: 'owner_id', in: 'query', schema: { type: 'string' }, description: 'Accountable for it' },
+        { name: 'assigned_to', in: 'query', schema: { type: 'string' }, description: 'On it at all - accountable or working it' },
+        { name: 'assigned_to_me', in: 'query', schema: { type: 'boolean' } },
+        { name: 'needs_update', in: 'query', schema: { type: 'boolean' }, description: 'Mine, open, and no update logged today' },
         { name: 'client_id', in: 'query', schema: { type: 'string' } },
         { name: 'overdue', in: 'query', schema: { type: 'boolean' } },
         { name: 'search', in: 'query', schema: { type: 'string' } },
       ]),
       post: simpleOp('Action Items', 'Create an action item', 'post'),
+    },
+    '/action-items/{id}/updates': {
+      get: simpleOp('Daily Updates', "Every update written against a task, newest first"),
+      post: {
+        tags: ['Daily Updates'],
+        summary: 'Log or top up your update for a day',
+        description: [
+          'One update per person per task per day, upserted. A field left out keeps its',
+          'current value; send null to clear it. At least one of the written fields must',
+          'end up non-empty. Only people assigned to the task may post.',
+          '',
+          'Sending `status` moves the task on in the same call, which is how "I finished it"',
+          'and a task still sitting open are kept from drifting apart.',
+        ].join('\n'),
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  update_date: { type: 'string', format: 'date', description: 'The day being reported. Defaults to today; never in the future.' },
+                  completed_today: { type: 'string' },
+                  in_progress: { type: 'string' },
+                  pending: { type: 'string' },
+                  blockers: { type: 'string', description: 'Notifies the accountable owner and the reporting manager, once a day' },
+                  next_action: { type: 'string' },
+                  remarks: { type: 'string' },
+                  progress_pct: { type: 'integer', minimum: 0, maximum: 100 },
+                  hours_spent: { type: 'number', minimum: 0, maximum: 24 },
+                  status: { type: 'string', enum: ['open', 'in_progress', 'blocked', 'done', 'cancelled'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'An existing update for that day was topped up' },
+          201: { description: 'A new update was logged' },
+          403: { description: 'Not assigned to this task' },
+        },
+      },
+    },
+    '/action-items/updates/{updateId}': {
+      delete: simpleOp('Daily Updates', 'Withdraw an update you wrote', 'delete'),
+    },
+    '/action-items/updates/mine': {
+      get: {
+        tags: ['Daily Updates'],
+        summary: "The employee view: my tasks, what owes an update today, what I have written",
+        parameters: [{ name: 'date', in: 'query', schema: { type: 'string', format: 'date' } }],
+        responses: { 200: { description: 'tasks, needs_update, due_today, submitted, recent' } },
+      },
+    },
+    '/action-items/updates/team': {
+      get: {
+        tags: ['Daily Updates'],
+        summary: 'The manager view: one day, one row per person, including who said nothing',
+        description: 'Direct reports for a manager, the whole workspace for an admin. Refused to an employee.',
+        parameters: [
+          { name: 'date', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'user_id', in: 'query', schema: { type: 'string' }, description: 'Narrow to one person' },
+        ],
+        responses: { 200: { description: 'people[] with updates, missing, blockers and progress' }, 403: { description: 'Employees have no team to review' } },
+      },
+    },
+    '/action-items/updates/export': {
+      get: { tags: ['Daily Updates'], summary: 'The board as CSV over a date range', responses: { 200: { description: 'text/csv' } } },
     },
     '/action-items/{id}': {
       get: simpleOp('Action Items', 'One item with comments, watchers, escalations'),

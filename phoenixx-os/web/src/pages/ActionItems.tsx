@@ -2,26 +2,65 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Filter, Download, ArrowUpRight, MessageSquare, Paperclip, X, Repeat,
-  CheckCircle2, ListChecks, LayoutGrid, List, AlertTriangle, Trash2,
+  Plus, Filter, Download, ArrowUpRight, X, MessageSquare, Paperclip, Repeat,
+  CheckCircle2, ListChecks, LayoutGrid, List, AlertTriangle, Trash2, Users2, User,
+  ClipboardList, CircleAlert, PencilLine, Clock,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { date, relative, daysUntil, dateTime } from '../lib/format';
+import { DailyUpdateModal, UpdateCard, NeedsUpdateRow } from '../components/DailyUpdate';
 import {
   Avatar, AvatarWithName, Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, Drawer,
   EmptyState, ErrorState, Field, Input, Modal, PageHeader, SearchInput, Select, StatusBadge,
-  Table, TableSkeleton, TD, TH, THead, TR, Textarea, useToast, cx, Tabs,
+  Table, TableSkeleton, TD, TH, THead, TR, Textarea, useToast, cx, Tabs, Meter,
 } from '../components/ui';
 
 const STATUSES = ['open', 'in_progress', 'blocked', 'done', 'cancelled'];
 const PRIORITIES = ['urgent', 'high', 'medium', 'low'];
+
+/** Overlapping faces for a task worked by more than one person. */
+export function AssigneeStack({ assignees, max = 4 }: { assignees: any[]; max?: number }) {
+  if (!assignees?.length) return <span className="text-[12.5px] text-subtle">Unassigned</span>;
+  const shown = assignees.slice(0, max);
+  const rest = assignees.length - shown.length;
+  return (
+    <span className="flex items-center">
+      {shown.map((a) => (
+        <span key={a.user_id} className="-ml-1.5 first:ml-0 rounded-full ring-2 ring-[var(--raised)]"
+          title={`${a.name}${a.accountable ? ' · accountable' : ''}`}>
+          <Avatar name={a.name} url={a.avatar_url} size={24} />
+        </span>
+      ))}
+      {rest > 0 && (
+        <span className="-ml-1.5 grid h-6 w-6 place-items-center rounded-full bg-sunken ring-2
+                         ring-[var(--raised)] text-[10.5px] font-medium text-muted tabular">
+          +{rest}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export default function ActionItems() {
   const { can, user } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
+
+  // Three jobs on one screen: the register, my own daily updates, and - for a
+  // manager - the team's. The tab lives in the URL so the reminder can link
+  // straight at it.
+  const tab = params.get('tab') === 'updates' ? 'updates'
+    : params.get('tab') === 'team' ? 'team' : 'tasks';
+  const setTab = (id: string) => {
+    const next = new URLSearchParams(params);
+    if (id === 'tasks') next.delete('tab'); else next.set('tab', id);
+    next.delete('open');
+    setParams(next, { replace: true });
+  };
+  // Only somebody who can see beyond their own rows has a team to review.
+  const canReviewTeam = user?.role !== 'employee' && user?.role !== 'client';
 
   const [view, setView] = useState<'list' | 'board'>('list');
   const [search, setSearch] = useState('');
@@ -61,12 +100,15 @@ export default function ActionItems() {
   const { data: meta } = useQuery({
     queryKey: ['action-item-meta'],
     queryFn: async () => {
-      const [categories, directory, clients] = await Promise.all([
+      const [categories, directory, clients, projects] = await Promise.all([
         api.get('/settings/action-categories').then((r) => r.data),
         api.get('/users/directory').then((r) => r.data),
         api.get('/crm/clients', { limit: 200 }).then((r) => r.data).catch(() => []),
+        // Teams come from the projects module - there is no second list of
+        // teams to keep in step with it.
+        api.get('/projects').then((r) => r.data).catch(() => []),
       ]);
-      return { categories, directory, clients };
+      return { categories, directory, clients, projects };
     },
     staleTime: 300_000,
   });
@@ -82,9 +124,19 @@ export default function ActionItems() {
     onError: (e: any) => toast.error(e.message),
   });
 
+  // Same query key as the tab itself, so React Query serves both from one
+  // request and one cache entry - a badge that disagrees with the list it
+  // points at is worse than no badge.
+  const { data: mineMeta } = useQuery({
+    queryKey: ['my-updates'],
+    queryFn: () => api.get('/action-items/updates/mine').then((r) => r.data),
+    staleTime: 30_000,
+  });
+
   const items = data?.data || [];
   const summary = data?.meta?.summary || {};
   const pageMeta = data?.meta || {};
+  const owed = mineMeta?.needs_update?.length || 0;
 
   useEffect(() => {
     const open = params.get('open');
@@ -104,7 +156,14 @@ export default function ActionItems() {
             <span className="text-subtle">{summary.done ?? 0} done</span>
           </span>
         }
-        actions={
+        tabs={
+          <Tabs active={tab} onChange={setTab} tabs={[
+            { id: 'tasks', label: 'All tasks' },
+            { id: 'updates', label: 'My daily updates', count: owed || undefined },
+            ...(canReviewTeam ? [{ id: 'team', label: 'Team updates' }] : []),
+          ]} />
+        }
+        actions={tab !== 'tasks' ? null : (
           <>
             <div className="flex rounded-md border border-line-strong overflow-hidden">
               <button onClick={() => setView('list')} aria-label="List view" aria-pressed={view === 'list'}
@@ -133,9 +192,14 @@ export default function ActionItems() {
               </Button>
             )}
           </>
-        }
+        )}
       />
 
+      {tab === 'updates' && <MyUpdatesView />}
+      {tab === 'team' && canReviewTeam && <TeamUpdatesView />}
+
+      {tab === 'tasks' && (
+        <>
       {/* -------------------------------------------------------- filters */}
       <Card className="mb-4">
         <div className="flex flex-wrap items-center gap-2 p-3">
@@ -228,8 +292,9 @@ export default function ActionItems() {
                         onChange={(v) => setSelected(v ? items.map((i: any) => i.id) : [])} />
                     </TH>
                     <TH>Item</TH>
-                    <TH width="150px">Owner</TH>
-                    <TH width="150px">Client</TH>
+                    <TH width="160px">Assigned to</TH>
+                    <TH width="120px">Created by</TH>
+                    <TH width="140px">Client</TH>
                     <TH width="118px">Due</TH>
                     <TH width="110px">Priority</TH>
                     <TH width="120px">Status</TH>
@@ -271,9 +336,18 @@ export default function ActionItems() {
                             </span>
                           </button>
                         </TD>
-                        <TD>{item.owner_name
-                          ? <AvatarWithName name={item.owner_name} url={item.owner_avatar} size={24} />
-                          : <span className="text-subtle">Unassigned</span>}</TD>
+                        <TD>
+                          {item.owner_name ? (
+                            <span className="flex items-center gap-1.5">
+                              <AvatarWithName name={item.owner_name} url={item.owner_avatar} size={24}
+                                sub={item.extra_assignee_count > 0
+                                  ? `+${item.extra_assignee_count} more` : item.owner_designation} />
+                            </span>
+                          ) : <span className="text-subtle">Unassigned</span>}
+                        </TD>
+                        <TD><span className="text-muted truncate block max-w-[110px]">
+                          {item.created_by_name || '—'}
+                        </span></TD>
                         <TD><span className="text-muted truncate block max-w-[140px]">{item.client_name || '—'}</span></TD>
                         <TD>
                           <span className={cx('text-[13px]', overdue ? 'text-[var(--negative)] font-medium' : 'text-muted')}>
@@ -304,6 +378,8 @@ export default function ActionItems() {
               )}
             </Card>
           )}
+        </>
+      )}
 
       {createOpen && (
         <CreateItemModal meta={meta} onClose={() => {
@@ -381,7 +457,17 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
     title: '', description: '', owner_id: user?.id || '', client_id: '', category_id: '',
     priority: 'medium', due_date: '', recurrence: 'none', estimate_minutes: '',
   });
+  // Assigning to a team means a project team: everyone seated on it, with one
+  // of them still named accountable for the due date.
+  const [mode, setMode] = useState<'person' | 'team'>('person');
+  const [projectId, setProjectId] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const { data: team } = useQuery({
+    queryKey: ['project-team', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/members`).then((r) => r.data),
+    enabled: mode === 'team' && !!projectId,
+  });
 
   const create = useMutation({
     mutationFn: () => api.post('/action-items', {
@@ -394,6 +480,7 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
       due_date: form.due_date || null,
       recurrence: form.recurrence === 'none' ? null : form.recurrence,
       estimate_minutes: form.estimate_minutes ? Number(form.estimate_minutes) : null,
+      ...(mode === 'team' && projectId ? { assign_from_project_id: projectId } : {}),
     }),
     onSuccess: () => {
       toast.success('Action item created.');
@@ -411,11 +498,12 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
 
   return (
     <Modal open onClose={onClose} title="New action item"
-      subtitle="Owner, due date and category drive the reminder ladder and escalation"
+      subtitle="Who is responsible, by when — the assignee, due date and category drive reminders and escalation"
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" loading={create.isPending} disabled={form.title.trim().length < 2}
+          <Button variant="primary" loading={create.isPending}
+            disabled={form.title.trim().length < 2 || (mode === 'team' && (!projectId || !form.owner_id))}
             onClick={() => create.mutate()}>Create item</Button>
         </>
       }>
@@ -428,13 +516,72 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
           <Textarea value={form.description} onChange={(e) => set('description', e.target.value)}
             placeholder="Context, links, what 'done' looks like…" />
         </Field>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Owner">
+        {/* ------------------------------------------------- assignment */}
+        <div className="rounded-lg border border-line bg-sunken p-3">
+          <div className="mb-2.5 flex items-center gap-2">
+            <p className="label-cap">Assign to</p>
+            <div className="ml-auto flex rounded-md border border-line-strong overflow-hidden">
+              {([['person', 'One person', User], ['team', 'A project team', Users2]] as const).map(
+                ([id, label, Icon]) => (
+                  <button
+                    key={id} type="button" onClick={() => setMode(id)} aria-pressed={mode === id}
+                    className={cx('flex items-center gap-1.5 px-2.5 h-7 text-[12.5px] font-medium cursor-pointer',
+                      'transition-colors duration-150 first:border-r first:border-line',
+                      mode === id ? 'bg-brand-soft text-[var(--brand)]' : 'text-subtle hover:bg-raised')}
+                  >
+                    <Icon size={13} />{label}
+                  </button>
+                ),
+              )}
+            </div>
+          </div>
+
+          {mode === 'team' && (
+            <Field label="Project team" className="mb-3"
+              hint="Everyone seated on the project is assigned; pick who answers for it below">
+              <Select value={projectId} onChange={(e) => {
+                setProjectId(e.target.value);
+                set('owner_id', '');
+              }}>
+                <option value="">Choose a project…</option>
+                {meta?.projects?.map((p: any) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.client_name ? ` · ${p.client_name}` : ''} ({p.team_size} on team)
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
+
+          {mode === 'team' && !!team?.length && (
+            <ul className="mb-3 flex flex-wrap gap-1.5">
+              {team.map((m: any) => (
+                <li key={m.user_id}
+                  className="flex items-center gap-1.5 rounded-full border border-line bg-raised py-0.5 pl-0.5 pr-2.5">
+                  <Avatar name={m.name} url={m.avatar_url} size={20} />
+                  <span className="text-[12.5px] text-ink">{m.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <Field
+            label={mode === 'team' ? 'Accountable for it' : 'Assigned to'}
+            required={mode === 'team'}
+            hint={mode === 'team'
+              ? 'One name answers for the due date, even when several people work it'
+              : 'Who is responsible for getting this done'}
+          >
             <Select value={form.owner_id} onChange={(e) => set('owner_id', e.target.value)}>
-              <option value="">Unassigned</option>
-              {meta?.directory?.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              <option value="">{mode === 'team' ? 'Pick from the team…' : 'Unassigned'}</option>
+              {(mode === 'team' ? (team || []).map((m: any) => ({ id: m.user_id, name: m.name }))
+                : meta?.directory || []
+              ).map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </Select>
           </Field>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Client">
             <Select value={form.client_id} onChange={(e) => set('client_id', e.target.value)}>
               <option value="">No client</option>
@@ -475,6 +622,293 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
   );
 }
 
+/* =============================================== DAILY UPDATES: EMPLOYEE */
+/**
+ * "What is on me, what still owes an update, what I have already written."
+ * Deliberately three plain lists rather than a board: the point of this screen
+ * is to be finished with in two minutes at the end of the day.
+ */
+function MyUpdatesView() {
+  const [logging, setLogging] = useState<{ task: any; existing?: any } | null>(null);
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['my-updates'],
+    queryFn: () => api.get('/action-items/updates/mine').then((r) => r.data),
+  });
+
+  if (error) return <ErrorState error={error} retry={refetch} />;
+  if (isLoading || !data) return <Card><TableSkeleton cols={3} /></Card>;
+
+  const { needs_update: needs = [], submitted = [], due_today: due = [], tasks = [], recent = [] } = data;
+
+  return (
+    <>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-3">
+          <p className="label-cap">On my plate</p>
+          <p className="mt-1 text-[19px] font-semibold text-ink tabular">{tasks.length}</p>
+          <p className="text-[12px] text-subtle">open tasks assigned to me</p>
+        </Card>
+        <Card className="p-3">
+          <p className="label-cap">Due today or overdue</p>
+          <p className={cx('mt-1 text-[19px] font-semibold tabular',
+            due.length ? 'text-[var(--negative)]' : 'text-ink')}>{due.length}</p>
+        </Card>
+        <Card className="p-3">
+          <p className="label-cap">Needs my update</p>
+          <p className={cx('mt-1 text-[19px] font-semibold tabular',
+            needs.length ? 'text-[var(--warning)]' : 'text-[var(--positive)]')}>{needs.length}</p>
+          <p className="text-[12px] text-subtle">{needs.length ? 'not written up yet' : 'all caught up'}</p>
+        </Card>
+        <Card className="p-3">
+          <p className="label-cap">Logged today</p>
+          <p className="mt-1 text-[19px] font-semibold text-ink tabular">{submitted.length}</p>
+        </Card>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card className="min-w-0">
+          <CardHeader title="Needs today's update" icon={<CircleAlert size={16} />}
+            subtitle="Open work assigned to you that you have not written up" />
+          {!needs.length ? (
+            <EmptyState compact icon={<CheckCircle2 size={20} className="text-[var(--positive)]" />}
+              title="All caught up" message="Every task on you has an update logged for today." />
+          ) : (
+            <ul className="divide-y divide-[var(--border)]">
+              {needs.map((t: any) => (
+                <NeedsUpdateRow key={t.id} task={t} onLog={() => setLogging({ task: t })} />
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card className="min-w-0">
+          <CardHeader title="My updates today" icon={<ClipboardList size={16} />}
+            subtitle={submitted.length ? 'Click one to top it up' : undefined} />
+          {!submitted.length ? (
+            <EmptyState compact icon={<PencilLine size={20} />} title="Nothing written yet"
+              message="Log an update against a task and it appears here." />
+          ) : (
+            <div className="space-y-2.5 p-3">
+              {submitted.map((u: any) => (
+                <button key={u.id} className="block w-full text-left cursor-pointer"
+                  onClick={() => setLogging({
+                    task: { id: u.action_item_id, title: u.task_title, status: u.task_status },
+                    existing: u,
+                  })}>
+                  <UpdateCard update={u} showTask compact />
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {recent.length > 0 && (
+          <Card className="min-w-0 lg:col-span-2">
+            <CardHeader title="Earlier updates" icon={<Clock size={16} />}
+              subtitle="What you reported on previous days" />
+            <div className="space-y-2.5 p-3">
+              {recent.slice(0, 12).map((u: any) => (
+                <div key={u.id}>
+                  <p className="mb-1 text-[12px] font-medium text-subtle">{date(u.update_date, 'long')}</p>
+                  <UpdateCard update={u} showTask compact />
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {logging && (
+        <DailyUpdateModal task={logging.task} existing={logging.existing}
+          onClose={() => setLogging(null)} />
+      )}
+    </>
+  );
+}
+
+/* ================================================ DAILY UPDATES: MANAGER */
+/**
+ * One day, one row per person: what they are carrying, what they said, what is
+ * blocking them, and what happens next. People who wrote nothing are shown as
+ * loudly as people who did — silence is the thing a manager needs to see.
+ */
+function TeamUpdatesView() {
+  const { can } = useAuth();
+  const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [only, setOnly] = useState<'all' | 'silent' | 'blocked'>('all');
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['team-updates', day],
+    queryFn: () => api.get('/action-items/updates/team', { date: day }).then((r) => r.data),
+  });
+
+  if (error) return <ErrorState error={error} retry={refetch} />;
+  if (isLoading || !data) return <Card><TableSkeleton cols={5} /></Card>;
+
+  const s = data.summary || {};
+  const shown = (data.people || []).filter((p: any) => {
+    if (only === 'silent') return p.status === 'silent';
+    if (only === 'blocked') return p.blockers.length > 0;
+    return p.status !== 'no_open_tasks' || p.updates.length;
+  });
+
+  const shift = (days: number) => {
+    const d = new Date(`${day}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    const next = d.toISOString().slice(0, 10);
+    if (next <= new Date().toISOString().slice(0, 10)) setDay(next);
+  };
+
+  return (
+    <>
+      <Card className="mb-4">
+        <div className="flex flex-wrap items-center gap-2 p-3">
+          <div className="flex items-center gap-1">
+            <Button size="sm" onClick={() => shift(-1)} aria-label="Previous day">←</Button>
+            <Input type="date" value={day} max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setDay(e.target.value)} className="w-[150px]" aria-label="Day" />
+            <Button size="sm" onClick={() => shift(1)} aria-label="Next day">→</Button>
+          </div>
+
+          <Tabs active={only} onChange={(id) => setOnly(id as any)} className="border-0" tabs={[
+            { id: 'all', label: 'Everyone', count: s.people },
+            { id: 'silent', label: 'No update', count: s.silent || undefined },
+            { id: 'blocked', label: 'Blocked', count: s.blocked || undefined },
+          ]} />
+
+          {can('action_items', 'export') && (
+            <Button size="sm" icon={<Download size={14} />} className="ml-auto"
+              onClick={() => api.download('/action-items/updates/export', `daily-updates-${day}.csv`,
+                { from: day, to: day })}>
+              Export
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-3">
+          <p className="label-cap">Updated</p>
+          <p className="mt-1 text-[19px] font-semibold text-[var(--positive)] tabular">{s.updated ?? 0}</p>
+          <p className="text-[12px] text-subtle">of {s.people ?? 0} people</p>
+        </Card>
+        <Card className="p-3">
+          <p className="label-cap">No update</p>
+          <p className={cx('mt-1 text-[19px] font-semibold tabular',
+            s.silent ? 'text-[var(--warning)]' : 'text-ink')}>{s.silent ?? 0}</p>
+          <p className="text-[12px] text-subtle">have open work</p>
+        </Card>
+        <Card className="p-3">
+          <p className="label-cap">Reporting blockers</p>
+          <p className={cx('mt-1 text-[19px] font-semibold tabular',
+            s.blocked ? 'text-[var(--negative)]' : 'text-ink')}>{s.blocked ?? 0}</p>
+        </Card>
+        <Card className="p-3">
+          <p className="label-cap">Hours logged</p>
+          <p className="mt-1 text-[19px] font-semibold text-ink tabular">{s.hours_logged ?? 0}</p>
+        </Card>
+      </div>
+
+      {!shown.length ? (
+        <Card><EmptyState icon={<Users2 size={20} />} title="Nobody to show"
+          message={only === 'all'
+            ? 'No one on your team has open work on this day.'
+            : 'Nothing matches that filter for this day.'} /></Card>
+      ) : (
+        <div className="space-y-3">
+          {shown.map((p: any) => (
+            <PersonUpdateCard key={p.user.id} row={p}
+              open={expanded === p.user.id}
+              onToggle={() => setExpanded(expanded === p.user.id ? null : p.user.id)} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function PersonUpdateCard({ row, open, onToggle }: { row: any; open: boolean; onToggle: () => void }) {
+  const tone = row.status === 'updated' ? 'positive' : row.status === 'silent' ? 'warning' : 'neutral';
+  const label = row.status === 'updated' ? 'updated'
+    : row.status === 'silent' ? 'no update' : 'no open tasks';
+
+  // The most recent update carries the headline answers for the collapsed row.
+  const latest = row.updates[0];
+
+  return (
+    <Card>
+      <button onClick={onToggle} aria-expanded={open}
+        className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left cursor-pointer row-hover">
+        <Avatar name={row.user.name} url={row.user.avatar_url} size={32} />
+        <span className="min-w-0">
+          <span className="block text-[14px] font-medium text-ink">{row.user.name}</span>
+          <span className="block text-[12px] text-subtle">{row.user.designation || 'Team member'}</span>
+        </span>
+
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Badge tone={tone} dot>{label}</Badge>
+          {row.blockers.length > 0 && <Badge tone="negative">{row.blockers.length} blocker{row.blockers.length > 1 ? 's' : ''}</Badge>}
+          {row.overdue_tasks > 0 && <Badge tone="negative">{row.overdue_tasks} overdue</Badge>}
+        </span>
+
+        <span className="ml-auto flex items-center gap-4 text-[12.5px] text-subtle">
+          <span className="tabular">{row.open_tasks} open</span>
+          {row.avg_progress_pct != null && (
+            <span className="hidden items-center gap-2 sm:flex">
+              <Meter value={row.avg_progress_pct} className="w-20" />
+              <span className="tabular w-9 text-right">{row.avg_progress_pct}%</span>
+            </span>
+          )}
+          {row.hours_logged > 0 && <span className="tabular">{row.hours_logged}h</span>}
+        </span>
+      </button>
+
+      {/* Collapsed: the one line a manager scans for. Expanded: everything. */}
+      {!open && latest && (
+        <div className="border-t border-line px-4 py-2.5">
+          <p className="line-clamp-2 text-[13px] text-muted">
+            <span className="font-medium text-ink">{latest.task_title}</span>
+            {latest.completed_today && ` — ${latest.completed_today}`}
+          </p>
+          {latest.next_action && (
+            <p className="mt-0.5 text-[12.5px] text-subtle">
+              <span className="font-medium">Next:</span> {latest.next_action}
+            </p>
+          )}
+        </div>
+      )}
+
+      {open && (
+        <div className="space-y-3 border-t border-line p-4">
+          {row.updates.length > 0 ? (
+            row.updates.map((u: any) => <UpdateCard key={u.id} update={u} showTask />)
+          ) : (
+            <p className="text-[13px] text-subtle">Nothing written for this day.</p>
+          )}
+
+          {row.missing.length > 0 && (
+            <div className="rounded-lg border border-dashed border-line p-3">
+              <p className="mb-1.5 text-[12.5px] font-medium text-[var(--warning)]">
+                Open with no update on this day
+              </p>
+              <ul className="space-y-1">
+                {row.missing.map((t: any) => (
+                  <li key={t.id} className="flex items-center gap-2 text-[13px] text-muted">
+                    <span className="truncate">{t.title}</span>
+                    <StatusBadge status={t.status} className="ml-auto shrink-0" />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /* --------------------------------------------------------------- drawer */
 function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () => void }) {
   const qc = useQueryClient();
@@ -483,6 +917,7 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
   const [comment, setComment] = useState('');
   const [escalateOpen, setEscalateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
 
   const { data: item, isLoading } = useQuery({
     queryKey: ['action-item', id],
@@ -519,6 +954,8 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
 
   const days = daysUntil(item.due_date);
   const overdue = days != null && days < 0 && !['done', 'cancelled'].includes(item.status);
+  // Only people on the task write updates against it.
+  const onTask = (item.assignees || []).some((a: any) => a.user_id === user?.id);
 
   return (
     <>
@@ -536,6 +973,11 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
           <>
             {can('action_items', 'delete') && (
               <Button variant="ghost" icon={<Trash2 size={15} />} onClick={() => setDeleteOpen(true)}>Delete</Button>
+            )}
+            {onTask && item.status !== 'done' && (
+              <Button icon={<PencilLine size={15} />} onClick={() => setLogOpen(true)}>
+                {item.my_update_today ? "Edit today's update" : 'Log daily update'}
+              </Button>
             )}
             {can('action_items', 'edit') && item.status !== 'done' && (
               <>
@@ -573,6 +1015,39 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
             </div>
           )}
 
+          {/* ------------------------------------------ who is on this */}
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="label-cap">Assigned to</p>
+              <p className="text-[12px] text-subtle">
+                Raised by {item.created_by_name || 'someone'} · {date(item.created_at)}
+              </p>
+            </div>
+            {!item.assignees?.length ? (
+              <p className="rounded-md border border-dashed border-line px-3 py-2.5 text-center text-[13px] text-subtle">
+                Nobody is assigned yet.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {item.assignees.map((a: any) => (
+                  <li key={a.user_id}
+                    className="flex items-center gap-2.5 rounded-md border border-line bg-sunken px-3 py-2">
+                    <Avatar name={a.name} url={a.avatar_url} size={26} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13.5px] text-ink">{a.name}</span>
+                      <span className="block truncate text-[12px] text-subtle">
+                        {a.designation || 'Team member'}
+                      </span>
+                    </span>
+                    {a.accountable
+                      ? <Badge tone="brand">accountable</Badge>
+                      : <Badge tone="neutral">working on it</Badge>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           {can('action_items', 'edit') && (
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Status">
@@ -585,7 +1060,7 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
                   {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                 </Select>
               </Field>
-              <Field label="Owner">
+              <Field label="Accountable" hint="One name answers for the due date">
                 <Select value={item.owner_id || ''} onChange={(e) => update.mutate({ owner_id: e.target.value || null })}>
                   <option value="">Unassigned</option>
                   {meta?.directory?.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -630,6 +1105,35 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
             </div>
           )}
 
+          {/* ---------------------------------------------- daily updates */}
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="label-cap">
+                Daily updates {item.updates?.length > 0 && `(${item.updates.length})`}
+              </p>
+              {onTask && item.status !== 'done' && (
+                <Button size="sm" variant={item.my_update_today ? 'secondary' : 'primary'}
+                  icon={<PencilLine size={14} />} onClick={() => setLogOpen(true)}>
+                  {item.my_update_today ? 'Edit mine' : 'Log update'}
+                </Button>
+              )}
+            </div>
+            {!item.updates?.length ? (
+              <p className="rounded-md border border-dashed border-line px-3 py-4 text-center text-[13px] text-subtle">
+                No progress has been written up on this task yet.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                {item.updates.map((u: any) => (
+                  <div key={u.id}>
+                    <p className="mb-1 text-[12px] font-medium text-subtle">{date(u.update_date, 'long')}</p>
+                    <UpdateCard update={u} showPerson compact />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* --------------------------------------------------- comments */}
           <div>
             <p className="label-cap mb-2">Comments {item.comments?.length > 0 && `(${item.comments.length})`}</p>
@@ -663,6 +1167,11 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
       </Drawer>
 
       {escalateOpen && <EscalateModal id={id} item={item} meta={meta} onClose={() => setEscalateOpen(false)} />}
+
+      {logOpen && (
+        <DailyUpdateModal task={item} existing={item.my_update_today}
+          onClose={() => setLogOpen(false)} onSaved={invalidate} />
+      )}
 
       <ConfirmDialog
         open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={() => remove.mutate()}
