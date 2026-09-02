@@ -105,7 +105,9 @@ export const openapi = {
     { name: 'Invoices', description: 'Module F - invoicing, GST, payments' },
     { name: 'Chat', description: 'Module B - project rooms, company broadcasts, direct messages' },
     { name: 'Finance', description: 'Module F - costs, profitability, receivables' },
-    { name: 'Projects', description: 'Module F - projects and their delivery teams' },
+    { name: 'Projects', description: 'Module F - projects and their delivery teams (employees read-only)' },
+    { name: 'Reimbursements', description: 'Module I - employee expense claims, approval chain and payment' },
+    { name: 'My Day', description: "The signed-in person's own private daily to-do list" },
     { name: 'Reports', description: 'Module G - internal and client-facing reporting' },
     { name: 'Dashboard', description: 'Module H - Overview Traction Dashboard' },
     { name: 'Settings', description: 'Tenant configuration, roles, audit' },
@@ -347,7 +349,75 @@ export const openapi = {
       },
     },
     '/finance/receivables': { get: simpleOp('Finance', 'AR ageing buckets and DSO') },
-    '/finance/projects': { get: simpleOp('Finance', 'Projects with invoiced and cost roll-ups (alias of /projects)'), post: simpleOp('Finance', 'Create a project', 'post') },
+    '/finance/projects': { get: simpleOp('Finance', 'Projects with invoiced and cost roll-ups (alias of /projects)'), post: simpleOp('Finance', 'Create a project - requires projects:create', 'post') },
+
+    '/todos': {
+      get: {
+        tags: ['My Day'],
+        summary: "The caller's own to-dos for a day. Never anyone else's, whatever the role.",
+        parameters: [
+          { name: 'date', in: 'query', schema: { type: 'string', format: 'date' }, description: 'Defaults to today' },
+          { name: 'include_carry_over', in: 'query', schema: { type: 'boolean', default: true }, description: 'Also return items still open from earlier days' },
+        ],
+        responses: { 200: { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/Envelope' } } } } },
+      },
+      post: simpleOp('My Day', 'Add a personal to-do (title, optional time and priority)', 'post'),
+    },
+    '/todos/all': { get: listOp('My Day', "Every one of the caller's own to-dos, filterable by status and date range") },
+    '/todos/{id}': {
+      patch: simpleOp('My Day', 'Edit one of your own to-dos', 'patch'),
+      delete: simpleOp('My Day', 'Delete one of your own to-dos', 'delete'),
+    },
+    '/todos/{id}/toggle': { post: simpleOp('My Day', 'Tick or untick the item', 'post') },
+    '/todos/{id}/move': { post: simpleOp('My Day', 'Move an unfinished item to another day', 'post') },
+    '/todos/clear-completed': { post: simpleOp('My Day', "Clear the day's finished items", 'post') },
+
+    '/finance/reimbursements': {
+      get: listOp('Reimbursements', 'Expense claims the caller may see: own, own team, or all for finance', [
+        { name: 'queue', in: 'query', schema: { type: 'string', enum: ['manager', 'finance'] }, description: 'The approval queue to show' },
+        { name: 'mine', in: 'query', schema: { type: 'boolean' }, description: "Narrow to the caller's own claims" },
+        { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Comma separated: draft,submitted,manager_approved,approved,paid,rejected,cancelled' },
+        { name: 'user_id', in: 'query', schema: { type: 'string' } },
+        { name: 'category_id', in: 'query', schema: { type: 'string' } },
+        { name: 'from', in: 'query', schema: { type: 'string', format: 'date' } },
+        { name: 'to', in: 'query', schema: { type: 'string', format: 'date' } },
+        { name: 'search', in: 'query', schema: { type: 'string' } },
+      ]),
+      post: simpleOp('Reimbursements', 'Raise a claim. Send submit:true to file it straight away.', 'post'),
+    },
+    '/finance/reimbursements/categories': {
+      get: simpleOp('Reimbursements', 'Expense categories, and whether each needs a bill attached'),
+      post: simpleOp('Reimbursements', 'Add a category (finance and admins)', 'post'),
+    },
+    '/finance/reimbursements/categories/{id}': { patch: simpleOp('Reimbursements', 'Edit or retire a category', 'patch') },
+    '/finance/reimbursements/queues': { get: simpleOp('Reimbursements', 'Badge counts for the claim queues this caller owns') },
+    '/finance/reimbursements/reports': {
+      get: {
+        tags: ['Reimbursements'],
+        summary: 'Expense and reimbursement report, aggregated over the rows the caller may see',
+        parameters: [
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'status', in: 'query', schema: { type: 'string' } },
+          { name: 'category_id', in: 'query', schema: { type: 'string' } },
+          { name: 'user_id', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Totals plus breakdowns by status, category, month and person' } },
+      },
+    },
+    '/finance/reimbursements/reports/export': {
+      get: { tags: ['Reimbursements'], summary: 'The same rows as CSV', responses: { 200: { description: 'text/csv' } } },
+    },
+    '/finance/reimbursements/{id}': {
+      get: simpleOp('Reimbursements', 'One claim with its documents, full history and what this caller may do next'),
+      patch: simpleOp('Reimbursements', 'Edit your own draft or rejected claim', 'patch'),
+      delete: simpleOp('Reimbursements', 'Delete your own draft', 'delete'),
+    },
+    '/finance/reimbursements/{id}/submit': { post: simpleOp('Reimbursements', 'File the claim: assigns a number and routes it to the manager, or to finance when there is none', 'post') },
+    '/finance/reimbursements/{id}/withdraw': { post: simpleOp('Reimbursements', 'Pull back a claim nobody has decided on yet', 'post') },
+    '/finance/reimbursements/{id}/manager-decision': { post: simpleOp('Reimbursements', 'Gate 1 - the reporting manager approves or rejects (a rejection must say why)', 'post') },
+    '/finance/reimbursements/{id}/finance-decision': { post: simpleOp('Reimbursements', 'Gate 2 - finance approves (optionally for a lower amount) or rejects', 'post') },
+    '/finance/reimbursements/{id}/pay': { post: simpleOp('Reimbursements', 'Record the payment and mark the claim paid', 'post') },
 
     '/chat/channels': {
       get: listOp('Chat', 'Every conversation the caller is in, newest first, with unread counts'),

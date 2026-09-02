@@ -7,6 +7,7 @@ import { requires } from '../middleware/rbac.js';
 import { profitability } from '../services/analytics.js';
 import { projectsRouter } from './projects.routes.js';
 import { syncHrCosts } from '../services/invoicing.js';
+import { reimbursementsRouter } from './reimbursements.routes.js';
 
 const router = Router();
 
@@ -212,6 +213,11 @@ router.get('/receivables', requires('invoices', 'view'), (req, res) => {
     dso_days: revenue90 ? round1((outstanding / revenue90) * 90) : 0,
   });
 });
+
+// ======================================================== I: REIMBURSEMENTS
+// Employee expense claims and the approval chain behind them. Mounted here so
+// the whole finance surface sits under one prefix.
+router.use('/reimbursements', reimbursementsRouter);
 
 // ============================================================== F: PROJECTS
 // Projects and their delivery teams live in their own module now; keeping the

@@ -217,7 +217,65 @@ same way they apply to tasks.
 
 ---
 
-## 8. Monthly close
+## 8. Reimbursement (PRD workflow I)
+
+An employee spends their own money on company business and asks for it back.
+Two gates stand between the claim and the payout.
+
+```
+draft ──▶ submitted ──▶ manager_approved ──▶ approved ──▶ paid
+  │          │  gate 1        │  gate 2          │  finance
+  │          │  manager       │  finance         │
+  │          ▼                ▼                  │
+  │      rejected         rejected               │
+  └──▶ deleted        (with a reason, always)    └── payment recorded:
+       (draft only)                                  method, reference, date
+```
+
+- **Routing.** On submit the claim takes a number (`REIMB-<year>-<seq>`, so a
+  draft never burns one) and goes to the claimant's reporting manager. With no
+  manager on file it skips straight to the finance desk rather than sitting in
+  a queue nobody owns — and the trail records that it did.
+- **Gate 1, the manager.** Holding `reimbursements:approve` is not enough on its
+  own: the claim has to be routed to them or belong to one of their reports.
+  Nobody decides their own claim. Finance-side admins can step in, which is what
+  keeps a claim moving while a manager is away.
+- **Gate 2, finance.** Verifies the bills, then approves — optionally for less
+  than was claimed — or rejects. A payment can never exceed the approved amount.
+- **Rejection always carries a reason**, because the claimant is the one who has
+  to act on it. They can fix the claim and send it round again; resubmitting
+  clears the old rejection.
+- **Withdrawal** is the claimant's own escape hatch while nobody has decided.
+- **Editing stops at submission.** Once a claim is in a queue the numbers an
+  approver is looking at must not move under them.
+- **Documents.** Bills hang off the claim as attachments. A category can require
+  one, in which case submission is refused until a bill is attached. A receipt
+  is exactly as private as the claim: the claimant, the approving manager and
+  the finance desk, and nobody else — enforced on the listing *and* on the raw
+  file URL, so guessing the path is not a way round it.
+- **Every transition is logged** to `reimbursement_events` with who, when, from
+  which status, to which, and any note. `status` answers "where is it now";
+  the events answer "how did it get there".
+- **Notifications** at each hand-off: to the manager on submit, to the finance
+  desk on manager approval, to the claimant on every decision and on payment.
+
+---
+
+## 9. My Day
+
+Each person's own daily to-do list — call the client back, write the EOD report.
+Deliberately not action items: nothing here is assigned, escalated, reported on
+or rolled into anyone's dashboard.
+
+Privacy is structural rather than a permission. Every statement pins
+`user_id = <the caller>`, and no query parameter, role or module action widens
+it — an owner reading someone else's list would need a new endpoint, not a new
+permission. Unfinished items carry forward onto the next day so they are visible
+rather than quietly lost, and are counted separately so it is obvious they did.
+
+---
+
+## 10. Monthly close
 
 Runs 04:00 UTC on the 1st, over the previous month, for every active tenant:
 
@@ -232,7 +290,7 @@ exists, so it is safe to force from the admin console.
 
 ---
 
-## 9. Notifications
+## 11. Notifications
 
 One delivery path for everything above.
 
@@ -254,7 +312,7 @@ event ──► preference check (per user, per channel, per event key)
 
 ---
 
-## 10. Access and tenancy
+## 12. Access and tenancy
 
 Every workflow above runs inside a tenant.
 
@@ -262,11 +320,19 @@ Every workflow above runs inside a tenant.
   query, so no route hand-writes `tenant_id = ?`.
 - **Cross-tenant reads return 404, not 403** — another tenant's records do not
   exist for you rather than existing-and-refused.
-- Permissions are `module × action` (23 modules × 6 actions) driven by role
+- Permissions are `module × action` (26 modules × 6 actions) driven by role
   templates: `super_admin`, `owner`, `manager`, `finance`, `hr`, `employee`,
   `client`. Higher plans overlay `custom_roles.permissions` on top.
 - Employees are additionally scope-filtered to their own records inside the
   modules they can see.
+- **`projects` is its own module, not part of `crm`.** Who may run a project is
+  a different question from who may work a deal. An employee holds `view` only:
+  they see every project and every seat on every team, and cannot create, edit,
+  restaff or delete one. Both `/projects` and the older `/finance/projects`
+  mount carry the same guards.
+- **`reimbursements` and `reimbursement_finance` are separate modules**, so
+  approving your team's claims and running the finance desk are distinct
+  powers. A manager holds the first and not the second.
 
 **Onboarding paths.** Signup provisions a tenant. Team invites send a tokenised
 `/accept-invite` link. Password recovery goes through a per-account security
@@ -275,7 +341,7 @@ production, every invite you send points at the recipient's own machine.
 
 ---
 
-## 11. Sync and offline
+## 13. Sync and offline
 
 Mobile uses the same API. `sync.routes.js` exposes a delta endpoint keyed on a
 cursor; the client replays queued mutations with idempotency keys on reconnect,
@@ -283,7 +349,7 @@ so a mutation made on a train is applied once, not twice or never.
 
 ---
 
-## 12. Where a workflow can silently stop
+## 14. Where a workflow can silently stop
 
 Honest list of the failure modes, since none of them raise an alarm on their own:
 
@@ -296,3 +362,5 @@ Honest list of the failure modes, since none of them raise an alarm on their own
 | Invite and share links point at localhost | `WEB_BASE_URL` |
 | Recurring invoices stopped | `recurring_invoices.active`, `next_run_date` in the future |
 | Data lost after a restart | Free-tier ephemeral disk; see `DEPLOY.md` and the snapshot service |
+| Claims stuck at "awaiting manager" | `users.manager_id` unset, or the manager is inactive — finance can step in |
+| A claim will not submit | Its category requires a bill and none is attached |

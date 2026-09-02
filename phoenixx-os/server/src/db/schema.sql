@@ -1323,3 +1323,110 @@ CREATE TABLE IF NOT EXISTS job_runs (
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_jobruns ON job_runs(job_key, started_at DESC);
+
+-- ------------------------------------------------ MY DAY: PERSONAL TO-DOS
+-- A private daily to-do list. Deliberately its own table rather than a flavour
+-- of action_items: company work is assigned, escalated, reported on and visible
+-- to managers, whereas these are the person's own reminders. Every read path
+-- filters on user_id and no permission widens that - not even owner.
+CREATE TABLE IF NOT EXISTS personal_todos (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  todo_date TEXT NOT NULL,                 -- YYYY-MM-DD, the day it belongs to
+  due_time TEXT,                           -- HH:MM, optional
+  priority TEXT NOT NULL DEFAULT 'normal', -- low|normal|high
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending|completed
+  sort REAL NOT NULL DEFAULT 0,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_todo_user_day ON personal_todos(tenant_id, user_id, todo_date, status);
+
+-- ------------------------------------------ MODULE I: EXPENSE REIMBURSEMENT
+-- What an employee spent on the company's behalf, and its journey to being
+-- paid back:  draft -> submitted -> manager approval -> finance review
+--                   -> approved -> paid,  with rejection possible at either
+-- approval gate. `status` names where the request currently sits; the full
+-- trail lives in reimbursement_events so nothing about a money decision is
+-- reconstructed from timestamps alone.
+CREATE TABLE IF NOT EXISTS expense_categories (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  name TEXT NOT NULL,
+  code TEXT NOT NULL,
+  description TEXT,
+  requires_receipt INTEGER NOT NULL DEFAULT 1,
+  cap_minor INTEGER,                       -- soft per-claim ceiling, warns only
+  color TEXT DEFAULT '#3B82F6',
+  active INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE (tenant_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS reimbursements (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  number TEXT,                             -- REIMB-0001, assigned on submit
+  user_id TEXT NOT NULL REFERENCES users(id),
+  category_id TEXT REFERENCES expense_categories(id),
+  expense_date TEXT NOT NULL,              -- YYYY-MM-DD, when the money went out
+  amount_minor INTEGER NOT NULL,           -- claimed, minor units (AR6)
+  description TEXT NOT NULL,
+  merchant TEXT,
+  client_id TEXT,                          -- optional: billable back to a client
+  project_id TEXT,
+  payment_mode TEXT,                       -- cash|card|upi|netbanking|other
+  status TEXT NOT NULL DEFAULT 'draft',
+  -- draft|submitted|manager_approved|approved|paid|rejected|cancelled
+  submitted_at TEXT,
+  manager_id TEXT REFERENCES users(id),    -- who owes the first decision
+  manager_decision TEXT,                   -- approved|rejected
+  manager_decided_at TEXT,
+  manager_decided_by TEXT REFERENCES users(id),
+  manager_note TEXT,
+  finance_decision TEXT,                   -- approved|rejected
+  finance_decided_at TEXT,
+  finance_decided_by TEXT REFERENCES users(id),
+  finance_note TEXT,
+  approved_minor INTEGER,                  -- finance may settle a lower amount
+  rejection_reason TEXT,
+  paid_at TEXT,
+  paid_by TEXT REFERENCES users(id),
+  paid_minor INTEGER,
+  payment_method TEXT,                     -- bank_transfer|upi|cash|payroll|other
+  payment_reference TEXT,
+  payment_note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_reimb_tenant ON reimbursements(tenant_id, status, expense_date);
+CREATE INDEX IF NOT EXISTS ix_reimb_user ON reimbursements(tenant_id, user_id, status);
+CREATE INDEX IF NOT EXISTS ix_reimb_manager ON reimbursements(tenant_id, manager_id, status);
+
+CREATE TABLE IF NOT EXISTS reimbursement_events (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  reimbursement_id TEXT NOT NULL REFERENCES reimbursements(id),
+  actor_id TEXT REFERENCES users(id),
+  actor_name TEXT,
+  action TEXT NOT NULL,                    -- created|updated|submitted|manager_approved|...
+  from_status TEXT,
+  to_status TEXT,
+  note TEXT,
+  meta TEXT,                               -- json
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_reimb_event ON reimbursement_events(tenant_id, reimbursement_id, created_at);
+
+CREATE TABLE IF NOT EXISTS reimbursement_counters (
+  tenant_id TEXT NOT NULL,
+  year TEXT NOT NULL,
+  next_number INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (tenant_id, year)
+);

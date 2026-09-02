@@ -13,6 +13,7 @@ import {
   useToast, cx, Stat,
 } from '../components/ui';
 import MiniChat from '../components/MiniChat';
+import PersonalTodos from '../components/PersonalTodos';
 
 /**
  * The landing page answers one question: what does *this person* need to do
@@ -121,6 +122,11 @@ export default function Home() {
       <div className="grid gap-5 lg:grid-cols-4">
         {/* --------------------------------------------------- work queues */}
         <div className="min-w-0 space-y-5 lg:col-span-1">
+          {/* The personal list sits above the assigned work on purpose: the
+              first thing someone does with this page is add what they already
+              know they have to do today. */}
+          <PersonalTodos />
+
           <Card>
             <CardHeader
               title="What needs you today"
@@ -293,6 +299,7 @@ function HomeSkeleton() {
       </div>
       <div className="grid gap-5 lg:grid-cols-4">
         <div className="space-y-5 lg:col-span-1">
+          <Skeleton className="h-52" />
           <Skeleton className="h-64" />
           <Skeleton className="h-44" />
         </div>

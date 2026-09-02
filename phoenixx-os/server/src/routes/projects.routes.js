@@ -18,6 +18,14 @@ const router = Router();
  *
  * Mounted twice: at `/projects` (canonical) and at `/finance/projects` so the
  * older path used by the cost & profit screens keeps working.
+ *
+ * Permissions come from the `projects` module rather than `crm`, because who
+ * may run a project is a different question from who may work a deal. An
+ * employee holds `view` only: they can see every project and its team but
+ * cannot create, edit, restaff or delete one. Managers, finance-side admins
+ * and owners hold the write actions. Both mounts carry these guards, and every
+ * write path below is guarded server-side - hiding the buttons is presentation,
+ * not enforcement.
  */
 
 // ------------------------------------------------------------------- seats
@@ -106,7 +114,7 @@ function rosterFor(tenantId, projectIds) {
   return byProject;
 }
 
-router.get('/', requires('crm', 'view'), (req, res) => {
+router.get('/', requires('projects', 'view'), (req, res) => {
   const filters = ['p.tenant_id = ?', 'p.deleted_at IS NULL'];
   const params = [req.auth.tenantId];
   if (req.query.client_id) { filters.push('p.client_id = ?'); params.push(req.query.client_id); }
@@ -132,7 +140,7 @@ router.get('/', requires('crm', 'view'), (req, res) => {
 router.get('/seats', (req, res) => ok(res, SEATS));
 
 /** Who is on what, across every project - the staffing view. */
-router.get('/workload', requires('crm', 'view'), (req, res) => {
+router.get('/workload', requires('projects', 'view'), (req, res) => {
   const people = all(
     `SELECT u.id, u.name, u.email, u.avatar_url, u.designation, u.role, sl.name AS service_line_name
        FROM users u
@@ -167,7 +175,7 @@ router.get('/workload', requires('crm', 'view'), (req, res) => {
   }));
 });
 
-router.get('/:id', requires('crm', 'view'), (req, res) => {
+router.get('/:id', requires('projects', 'view'), (req, res) => {
   const project = get(`${PROJECT_SELECT} WHERE p.id = ? AND p.tenant_id = ? AND p.deleted_at IS NULL`,
     [req.params.id, req.auth.tenantId]);
   if (!project) throw notFound('Project');
@@ -187,7 +195,7 @@ router.get('/:id', requires('crm', 'view'), (req, res) => {
   });
 });
 
-router.post('/', requires('crm', 'create'), (req, res) => {
+router.post('/', requires('projects', 'create'), (req, res) => {
   const body = validate(projectSchema, req.body);
   const id = uuid();
   const at = nowIso();
@@ -214,7 +222,7 @@ router.post('/', requires('crm', 'create'), (req, res) => {
   return created(res, get(`${PROJECT_SELECT} WHERE p.id = ?`, [id]));
 });
 
-router.patch('/:id', requires('crm', 'edit'), (req, res) => {
+router.patch('/:id', requires('projects', 'edit'), (req, res) => {
   const r = repo('projects', req.auth.tenantId);
   const before = r.findById(req.params.id);
   if (!before) throw notFound('Project');
@@ -247,7 +255,7 @@ router.patch('/:id', requires('crm', 'edit'), (req, res) => {
   return ok(res, get(`${PROJECT_SELECT} WHERE p.id = ?`, [after.id]));
 });
 
-router.delete('/:id', requires('crm', 'delete'), (req, res) => {
+router.delete('/:id', requires('projects', 'delete'), (req, res) => {
   const at = nowIso();
   tx(() => {
     repo('projects', req.auth.tenantId).softDelete(req.params.id, at);
@@ -357,13 +365,13 @@ function addMember(req, projectId, body) {
   return { id, user, existed: !!existing };
 }
 
-router.get('/:id/members', requires('crm', 'view'), (req, res) => {
+router.get('/:id/members', requires('projects', 'view'), (req, res) => {
   projectOr404(req.auth.tenantId, req.params.id);
   return ok(res, membersOf(req.auth.tenantId, req.params.id));
 });
 
 /** Everyone who could still be added - the directory minus the current team. */
-router.get('/:id/available', requires('crm', 'view'), (req, res) => {
+router.get('/:id/available', requires('projects', 'view'), (req, res) => {
   projectOr404(req.auth.tenantId, req.params.id);
   return ok(res, all(
     `SELECT u.id, u.name, u.email, u.role, u.designation, u.avatar_url, u.service_line_id,
@@ -385,7 +393,7 @@ router.get('/:id/available', requires('crm', 'view'), (req, res) => {
   ));
 });
 
-router.post('/:id/members', requires('crm', 'edit'), (req, res) => {
+router.post('/:id/members', requires('projects', 'edit'), (req, res) => {
   projectOr404(req.auth.tenantId, req.params.id);
   const body = validate(memberSchema, req.body);
   const { id, user, existed } = tx(() => addMember(req, req.params.id, body));
@@ -402,7 +410,7 @@ router.post('/:id/members', requires('crm', 'edit'), (req, res) => {
 });
 
 /** Bulk add - staffing a new project one seat at a time is tedious. */
-router.post('/:id/members/bulk', requires('crm', 'edit'), (req, res) => {
+router.post('/:id/members/bulk', requires('projects', 'edit'), (req, res) => {
   projectOr404(req.auth.tenantId, req.params.id);
   const body = validate(z.object({ members: z.array(memberSchema).min(1).max(50) }), req.body);
   tx(() => { for (const m of body.members) addMember(req, req.params.id, m); });
@@ -413,7 +421,7 @@ router.post('/:id/members/bulk', requires('crm', 'edit'), (req, res) => {
   return created(res, membersOf(req.auth.tenantId, req.params.id));
 });
 
-router.patch('/:id/members/:memberId', requires('crm', 'edit'), (req, res) => {
+router.patch('/:id/members/:memberId', requires('projects', 'edit'), (req, res) => {
   projectOr404(req.auth.tenantId, req.params.id);
   const before = get(
     'SELECT * FROM project_members WHERE id = ? AND project_id = ? AND tenant_id = ? AND deleted_at IS NULL',
@@ -439,7 +447,7 @@ router.patch('/:id/members/:memberId', requires('crm', 'edit'), (req, res) => {
   return ok(res, get(`${MEMBER_SELECT} WHERE pm.id = ?`, [before.id]));
 });
 
-router.delete('/:id/members/:memberId', requires('crm', 'edit'), (req, res) => {
+router.delete('/:id/members/:memberId', requires('projects', 'edit'), (req, res) => {
   projectOr404(req.auth.tenantId, req.params.id);
   const before = get(
     'SELECT * FROM project_members WHERE id = ? AND project_id = ? AND tenant_id = ? AND deleted_at IS NULL',
@@ -469,7 +477,7 @@ router.delete('/:id/members/:memberId', requires('crm', 'edit'), (req, res) => {
   return ok(res, { ok: true, open_items: openItems });
 });
 
-router.get('/:id/members/export/csv', requires('crm', 'view'), (req, res) => {
+router.get('/:id/members/export/csv', requires('projects', 'view'), (req, res) => {
   const project = projectOr404(req.auth.tenantId, req.params.id);
   const rows = membersOf(req.auth.tenantId, req.params.id).map((m) => ({
     project: project.name,

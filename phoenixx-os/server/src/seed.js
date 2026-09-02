@@ -995,6 +995,155 @@ function seedPhoenixx() {
   }
   console.log(`✓ 2 open roles, ${candidates.length} candidates`);
 
+  // ------------------------------------------------------- reimbursements
+  // One claim sitting at each stage of the chain, so every queue in the
+  // Finance module has something in it on a fresh install.
+  const expenseCats = Object.fromEntries(
+    all('SELECT id, code FROM expense_categories WHERE tenant_id = ?', [tenantId]).map((c) => [c.code, c.id]),
+  );
+
+  const claims = [
+    {
+      by: 'priya@phoenixxit.com', cat: 'travel', amount: 8_450, daysAgo: 3, status: 'manager_approved',
+      description: 'Return flight to Chennai for the Meridian quarterly review',
+      merchant: 'IndiGo', managerNote: 'Trip was agreed in the account plan',
+    },
+    {
+      by: 'rahul@phoenixxit.com', cat: 'local_conveyance', amount: 1_180, daysAgo: 1, status: 'submitted',
+      description: 'Cabs to and from the Cotton India shoot location',
+      merchant: 'Uber',
+    },
+    {
+      by: 'aishwarya@phoenixxit.com', cat: 'meals', amount: 3_260, daysAgo: 6, status: 'approved',
+      description: 'Working lunch with the ThermaCool marketing team',
+      merchant: 'Hotel Annapoorna', managerNote: 'Client was present, fine to claim',
+    },
+    {
+      by: 'vignesh@phoenixxit.com', cat: 'software', amount: 2_499, daysAgo: 14, status: 'paid',
+      description: 'Postman team licence for the ThermaCool API work, bought on a personal card',
+      merchant: 'Postman', managerNote: 'Approved, move it onto the company card next cycle',
+    },
+    {
+      by: 'sundar@phoenixxit.com', cat: 'client_hosting', amount: 5_800, daysAgo: 9, status: 'rejected',
+      description: 'Dinner with a prospect after the pitch',
+      merchant: 'The Residency', rejection: 'No bill attached, and the prospect is not yet in the CRM',
+    },
+    {
+      by: 'nithya@phoenixxit.com', cat: 'communication', amount: 999, daysAgo: 0, status: 'draft',
+      description: "Work share of this month’s mobile bill",
+      merchant: 'Airtel',
+    },
+  ];
+
+  let claimSeq = 0;
+  for (const c of claims) {
+    const id = uuid();
+    const userId = users[c.by];
+    const managerId = get('SELECT manager_id FROM users WHERE id = ?', [userId])?.manager_id ?? null;
+    const expenseDate = addDays(new Date(), -c.daysAgo).toISOString().slice(0, 10);
+    const raisedAt = addDays(new Date(), -c.daysAgo).toISOString();
+    const amount = rupees(c.amount);
+    const filed = c.status !== 'draft';
+    const number = filed ? `REIMB-${new Date().getFullYear()}-${String(++claimSeq).padStart(4, '0')}` : null;
+
+    const managerDecided = ['manager_approved', 'approved', 'paid'].includes(c.status);
+    const financeDecided = ['approved', 'paid'].includes(c.status);
+    const decidedAt = addDays(new Date(), -Math.max(0, c.daysAgo - 1)).toISOString();
+
+    run(
+      `INSERT INTO reimbursements (id, tenant_id, number, user_id, category_id, expense_date, amount_minor,
+         description, merchant, payment_mode, status, submitted_at, manager_id, manager_decision,
+         manager_decided_at, manager_decided_by, manager_note, finance_decision, finance_decided_at,
+         finance_decided_by, approved_minor, rejection_reason, paid_at, paid_by, paid_minor,
+         payment_method, payment_reference, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?, 'upi', ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, tenantId, number, userId, expenseCats[c.cat], expenseDate, amount,
+        c.description, c.merchant, c.status, filed ? raisedAt : null, managerId,
+        managerDecided ? 'approved' : c.status === 'rejected' ? 'rejected' : null,
+        managerDecided || c.status === 'rejected' ? decidedAt : null,
+        managerDecided || c.status === 'rejected' ? (managerId ?? ownerId) : null,
+        c.managerNote ?? c.rejection ?? null,
+        financeDecided ? 'approved' : null, financeDecided ? decidedAt : null,
+        financeDecided ? users['meera@phoenixxit.com'] : null,
+        financeDecided ? amount : null, c.rejection ?? null,
+        c.status === 'paid' ? decidedAt : null,
+        c.status === 'paid' ? users['meera@phoenixxit.com'] : null,
+        c.status === 'paid' ? amount : null,
+        c.status === 'paid' ? 'bank_transfer' : null,
+        c.status === 'paid' ? 'UTR2026041188' : null,
+        raisedAt, ts],
+    );
+
+    const trail = [['created', null, 'draft', null, raisedAt]];
+    if (filed) trail.push(['submitted', 'draft', managerId ? 'submitted' : 'manager_approved', null, raisedAt]);
+    if (managerDecided) trail.push(['manager_approved', 'submitted', 'manager_approved', c.managerNote ?? null, decidedAt]);
+    if (c.status === 'rejected') trail.push(['manager_rejected', 'submitted', 'rejected', c.rejection, decidedAt]);
+    if (financeDecided) trail.push(['finance_approved', 'manager_approved', 'approved', null, decidedAt]);
+    if (c.status === 'paid') trail.push(['paid', 'approved', 'paid', 'Paid with the month-end run', decidedAt]);
+
+    for (const [action, from, to, note, at] of trail) {
+      const actorId = action.startsWith('finance') || action === 'paid'
+        ? users['meera@phoenixxit.com']
+        : action.startsWith('manager') ? (managerId ?? ownerId) : userId;
+      run(
+        `INSERT INTO reimbursement_events (id, tenant_id, reimbursement_id, actor_id, actor_name,
+           action, from_status, to_status, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [uuid(), tenantId, id, actorId,
+          get('SELECT name FROM users WHERE id = ?', [actorId])?.name ?? null,
+          action, from, to, note, at],
+      );
+    }
+  }
+  run('INSERT INTO reimbursement_counters (tenant_id, year, next_number) VALUES (?,?,?)',
+    [tenantId, String(new Date().getFullYear()), claimSeq]);
+  console.log(`✓ ${claims.length} reimbursement claims across every stage of the chain`);
+
+  // --------------------------------------------------------- My Day to-dos
+  // A personal list is private to one person, so every demo account that is
+  // worth signing in as gets its own.
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const personalLists = {
+    'arun@phoenixxit.com': [
+      { title: 'Review the month-end numbers before the board note', time: '09:30', priority: 'high' },
+      { title: 'Call Cotton India about the renewal', time: '11:00' },
+      { title: 'Sign off the two open offers', priority: 'high' },
+      { title: 'Block Friday afternoon for FY planning', done: true },
+    ],
+    'divya@phoenixxit.com': [
+      { title: 'Clear the reimbursement approvals sitting with me', time: '10:00', priority: 'high' },
+      { title: 'Walk through the campaign plan with Priya', time: '15:30' },
+      { title: 'Prepare EOD report', time: '18:00' },
+      { title: 'Confirm the ThermaCool UAT slot', done: true },
+    ],
+    'priya@phoenixxit.com': [
+      { title: 'Call client', time: '10:30', priority: 'high' },
+      { title: "Review today’s work" },
+      { title: 'Follow up with HR on the leave balance', priority: 'low' },
+      { title: 'Prepare EOD report', time: '18:00' },
+      { title: 'Complete documentation', done: true },
+    ],
+    'meera@phoenixxit.com': [
+      { title: 'Clear the finance review queue', time: '09:00', priority: 'high' },
+      { title: "Reconcile last week’s reimbursement payouts" },
+      { title: 'Chase the two overdue invoices', priority: 'high' },
+    ],
+  };
+
+  let todoCount = 0;
+  for (const [email, list] of Object.entries(personalLists)) {
+    for (const [i, t] of list.entries()) {
+      run(
+        `INSERT INTO personal_todos (id, tenant_id, user_id, title, todo_date, due_time, priority,
+           status, sort, completed_at, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [uuid(), tenantId, users[email], t.title, todayDate, t.time ?? null, t.priority || 'normal',
+          t.done ? 'completed' : 'pending', i, t.done ? ts : null, ts, ts],
+      );
+      todoCount++;
+    }
+  }
+  console.log(`✓ ${todoCount} personal My Day to-dos across ${Object.keys(personalLists).length} accounts`);
+
   return tenantId;
 }
 

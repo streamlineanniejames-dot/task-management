@@ -134,6 +134,22 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Payment received - {{number}}',
     body: 'Payment of {{amount}} recorded against invoice {{number}} ({{client}}).',
   },
+  'reimbursement.submitted': {
+    subject: 'Reimbursement {{number}} from {{employee}}',
+    body: '{{employee}} has claimed {{amount}} for "{{description}}" spent on {{expense_date}}. It is waiting on your approval.',
+  },
+  'reimbursement.finance_review': {
+    subject: 'Reimbursement {{number}} ready for finance review',
+    body: '{{number}} ({{employee}}, {{amount}}) was approved by {{decided_by}} and is now in finance review.',
+  },
+  'reimbursement.decided': {
+    subject: 'Reimbursement {{number}} {{status}}',
+    body: 'Your claim {{number}} for {{amount}} was {{status}} by {{decided_by}} at {{stage}} review.{{note}}',
+  },
+  'reimbursement.paid': {
+    subject: 'Reimbursement {{number}} paid',
+    body: '{{amount}} has been paid to you against {{number}} by {{method}}{{reference}}.',
+  },
   'lead.no_next_action': {
     subject: 'Lead without next action: {{client}}',
     body: '{{client}} has no next action set. Every lead must always carry a next action + date.',

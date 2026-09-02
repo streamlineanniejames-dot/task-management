@@ -7,6 +7,7 @@ import { uuid, nowIso, todayIso } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, ApiError } from '../lib/http.js';
 import { config } from '../config.js';
 import { syncDeadline } from './actionItems.routes.js';
+import { canAccessReimbursement } from './reimbursements.routes.js';
 
 const router = Router();
 
@@ -274,6 +275,25 @@ router.get('/bootstrap', (req, res) => {
 /** A5/A6 - attachments, including mobile voice notes. */
 const fileRouter = Router();
 
+/**
+ * A few entities carry documents that are private to a subset of the tenant,
+ * so being signed in is not enough to read them. A receipt is exactly as
+ * private as the reimbursement claim it hangs off: the claimant, their
+ * approving manager and the finance desk, and nobody else in the workspace.
+ *
+ * Anything not listed here keeps the previous behaviour - visible to the
+ * tenant - which is what a meeting recording or an action-item file is.
+ */
+const ENTITY_GUARDS = {
+  reimbursement: (auth, entityId) => canAccessReimbursement(auth, entityId),
+};
+
+function assertEntityAccess(req, entity, entityId) {
+  const guard = ENTITY_GUARDS[entity];
+  if (!guard) return;
+  if (!entityId || !guard(req.auth, entityId)) throw notFound('File');
+}
+
 fileRouter.post('/', (req, res) => {
   const body = validate(z.object({
     entity: z.string().min(2).max(40),
@@ -285,6 +305,8 @@ fileRouter.post('/', (req, res) => {
     // a pre-signed S3 upload and stores only the returned key.
     content_base64: z.string().max(20_000_000),
   }), req.body);
+
+  assertEntityAccess(req, body.entity, body.entity_id);
 
   const buffer = Buffer.from(body.content_base64, 'base64');
   if (buffer.length > 15 * 1024 * 1024) throw badRequest('Files are limited to 15 MB');
@@ -306,17 +328,21 @@ fileRouter.post('/', (req, res) => {
   return created(res, { ...get('SELECT * FROM attachments WHERE id = ?', [id]), url: `/api/v1/files/${rel}` });
 });
 
-fileRouter.get('/list', (req, res) => ok(res, all(
-  `SELECT a.*, u.name AS uploaded_by_name FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by
-    WHERE a.tenant_id = ? AND a.entity = ? AND a.entity_id = ? AND a.deleted_at IS NULL
-    ORDER BY a.created_at DESC`,
-  [req.auth.tenantId, req.query.entity, req.query.entity_id],
-).map((a) => ({ ...a, url: `/api/v1/files/${a.storage_path}` }))));
+fileRouter.get('/list', (req, res) => {
+  assertEntityAccess(req, String(req.query.entity || ''), String(req.query.entity_id || ''));
+  return ok(res, all(
+    `SELECT a.*, u.name AS uploaded_by_name FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by
+      WHERE a.tenant_id = ? AND a.entity = ? AND a.entity_id = ? AND a.deleted_at IS NULL
+      ORDER BY a.created_at DESC`,
+    [req.auth.tenantId, req.query.entity, req.query.entity_id],
+  ).map((a) => ({ ...a, url: `/api/v1/files/${a.storage_path}` })));
+});
 
 fileRouter.delete('/:id', (req, res) => {
   const att = get('SELECT * FROM attachments WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL',
     [req.params.id, req.auth.tenantId]);
   if (!att) throw notFound('Attachment');
+  assertEntityAccess(req, att.entity, att.entity_id);
   run('UPDATE attachments SET deleted_at = ? WHERE id = ?', [nowIso(), att.id]);
   return ok(res, { ok: true });
 });
@@ -331,10 +357,15 @@ fileRouter.get('/*splat', (req, res, next) => {
     if (!abs.startsWith(path.resolve(config.storageDir))) throw new ApiError(400, 'bad_path', 'Invalid file path');
     if (!fs.existsSync(abs)) throw notFound('File');
 
-    // Attachments live under attachments/<tenant_id>/ - enforce ownership.
+    // Attachments live under attachments/<tenant_id>/ - enforce ownership, then
+    // whatever narrower rule the entity it belongs to imposes. Guessing the URL
+    // must not be a way around a claim's privacy.
     if (safe.startsWith('attachments/')) {
       const owner = safe.split('/')[1];
       if (owner !== req.auth.tenantId) throw notFound('File');
+      const att = get('SELECT entity, entity_id FROM attachments WHERE tenant_id = ? AND storage_path = ?',
+        [req.auth.tenantId, safe]);
+      if (att) assertEntityAccess(req, att.entity, att.entity_id);
     } else {
       // Generated documents are looked up by their recorded path.
       const known = get(

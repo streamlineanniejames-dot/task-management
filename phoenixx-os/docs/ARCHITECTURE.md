@@ -102,6 +102,23 @@ and everyone in it; `direct` is keyed by the sorted pair of user ids, which is
 what makes "open a DM" idempotent. Unread is a single `last_read_at` per member
 rather than a read receipt per message, so a badge is one indexed COUNT.
 
+**Reimbursements** are three tables. `reimbursements` holds the claim and its
+current `status`; `reimbursement_events` holds every transition — who, when,
+from which status, to which, and the note — because a money decision should be
+readable as a story rather than reconstructed from a scatter of timestamps on
+the row. `expense_categories` is per-tenant reference data, seeded at
+provisioning and back-filled lazily for workspaces that predate the module.
+Bills reuse `attachments` with `entity = 'reimbursement'`; the file routes carry
+a per-entity access guard so a receipt is exactly as private as the claim it
+hangs off, on the listing and on the raw URL alike.
+
+**Personal to-dos** (`personal_todos`) are their own table rather than a flavour
+of `action_items`. Company work is assigned, escalated, reported on and visible
+to managers; a personal list is none of those things, and giving the two the
+same table would have made every existing action-item query responsible for
+excluding it. Privacy here is structural, not a permission: every statement pins
+`user_id`, and no role widens it.
+
 **JSON columns** carry the deliberately flexible parts — SOP checklists, KPI
 definitions, report metric lists, notification preferences. These map to `jsonb`
 in Postgres.

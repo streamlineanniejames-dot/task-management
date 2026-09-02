@@ -5,7 +5,7 @@ import {
   LayoutDashboard, ListChecks, CalendarDays, Users2, FileText, Receipt, Wallet,
   BookOpenCheck, BarChart3, Settings, Bell, Menu, X, LogOut, Sun, Moon, Search,
   Building2, ShieldCheck, ChevronDown, CreditCard, Clock, AlertTriangle, Target, CheckCircle2,
-  FolderKanban, MessagesSquare, Contact,
+  FolderKanban, MessagesSquare, Contact, FileSpreadsheet, History, Send, Landmark,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -37,13 +37,22 @@ export function useTheme() {
 }
 
 /* ------------------------------------------------------------ navigation */
-type NavItem = { to: string; label: string; icon: any; module?: string; badge?: 'overdue' | 'approvals' | 'chat' };
+type NavItem = {
+  to: string; label: string; icon: any;
+  /** Hidden unless the caller can view this module. */
+  module?: string;
+  /** Hidden unless the caller can take this action on `module`. */
+  action?: string;
+  /** Match the path exactly. Needed wherever one nav path prefixes another. */
+  exact?: boolean;
+  badge?: 'overdue' | 'approvals' | 'chat' | 'reimb_manager' | 'reimb_finance';
+};
 
 const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: 'Work',
     items: [
-      { to: '/', label: 'My day', icon: LayoutDashboard },
+      { to: '/', label: 'My day', icon: LayoutDashboard, exact: true },
       { to: '/action-items', label: 'Action items', icon: ListChecks, module: 'action_items', badge: 'overdue' },
       { to: '/meetings', label: 'Meetings & MOM', icon: CalendarDays, module: 'meetings' },
       { to: '/deadlines', label: 'Deadlines', icon: Clock, module: 'deadlines' },
@@ -58,14 +67,28 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/clients', label: 'Clients', icon: Contact, module: 'crm' },
       { to: '/crm', label: 'CRM pipeline', icon: Users2, module: 'crm' },
       { to: '/proposals', label: 'Proposals', icon: FileText, module: 'proposals' },
-      { to: '/projects', label: 'Projects & teams', icon: FolderKanban, module: 'crm' },
+      { to: '/projects', label: 'Projects & teams', icon: FolderKanban, module: 'projects' },
     ],
   },
   {
     section: 'Money',
     items: [
       { to: '/invoices', label: 'Invoices', icon: Receipt, module: 'invoices' },
-      { to: '/finance', label: 'Cost & profit', icon: Wallet, module: 'costs' },
+      // Exact: /finance/reimbursements/* is a different section entirely.
+      { to: '/finance', label: 'Cost & profit', icon: Wallet, module: 'costs', exact: true },
+    ],
+  },
+  {
+    // Its own section, not a tab inside Cost & profit: everybody in the
+    // workspace files an expense claim, whereas almost nobody reads a P&L.
+    section: 'Finance',
+    items: [
+      { to: '/finance/reimbursements/new', label: 'Reimbursement', icon: Send, module: 'reimbursements', action: 'create' },
+      { to: '/finance/reimbursements', label: 'My reimbursements', icon: Receipt, module: 'reimbursements', exact: true },
+      { to: '/finance/reimbursements/approvals', label: 'Pending approvals', icon: ShieldCheck, module: 'reimbursements', action: 'approve', badge: 'reimb_manager' },
+      { to: '/finance/reimbursements/review', label: 'Finance review', icon: Landmark, module: 'reimbursement_finance', badge: 'reimb_finance' },
+      { to: '/finance/reimbursements/history', label: 'Reimbursement history', icon: History, module: 'reimbursements' },
+      { to: '/finance/reimbursements/reports', label: 'Expense & reimbursement reports', icon: FileSpreadsheet, module: 'reimbursements', action: 'export' },
     ],
   },
   {
@@ -112,6 +135,16 @@ export default function Layout() {
     staleTime: 60_000,
   });
 
+  // Claim queues are their own call: the roles that can see them are a
+  // different set from the ones the home counters serve.
+  const { data: claimQueues } = useQuery({
+    queryKey: ['reimbursements', 'queues'],
+    queryFn: () => api.get('/finance/reimbursements/queues').then((r) => r.data),
+    enabled: can('reimbursements', 'view'),
+    refetchInterval: 180_000,
+    staleTime: 120_000,
+  });
+
   const counters = home?.counters || {};
   const approvals = home?.pending_approvals || {};
   const approvalCount = (approvals.leave || 0) + (approvals.regularizations || 0);
@@ -120,10 +153,14 @@ export default function Layout() {
     if (kind === 'overdue') return counters.overdue || 0;
     if (kind === 'approvals') return approvalCount;
     if (kind === 'chat') return counters.chat || 0;
+    if (kind === 'reimb_manager') return claimQueues?.manager_pending || 0;
+    if (kind === 'reimb_finance') return (claimQueues?.finance_pending || 0) + (claimQueues?.awaiting_payment || 0);
     return 0;
   };
 
-  const visible = (item: NavItem) => !item.module || can(item.module, 'view');
+  // The same permission the API enforces decides whether an entry is drawn.
+  // Hiding it is a courtesy; the server refuses the call either way.
+  const visible = (item: NavItem) => !item.module || can(item.module, item.action || 'view');
 
   const isSuperAdmin = user?.role === 'super_admin';
 
@@ -179,7 +216,7 @@ export default function Layout() {
                     return (
                       <li key={item.to}>
                         <NavLink
-                          to={item.to} end={item.to === '/'}
+                          to={item.to} end={!!item.exact}
                           className={({ isActive }) => cx(
                             'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13.5px] font-medium',
                             'transition-colors duration-150 cursor-pointer',

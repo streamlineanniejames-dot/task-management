@@ -25,6 +25,7 @@ const Projects = lazy(() => import('./pages/Projects'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const Finance = lazy(() => import('./pages/Finance'));
+const Reimbursements = lazy(() => import('./pages/Reimbursements'));
 const HR = lazy(() => import('./pages/HR'));
 const Team = lazy(() => import('./pages/Team'));
 const SOP = lazy(() => import('./pages/SOP'));
@@ -105,6 +106,11 @@ export default function App() {
         <Route path="invoices" element={<Suspense fallback={<FullPageSpinner />}><Invoices /></Suspense>} />
         <Route path="invoices/:id" element={<Suspense fallback={<FullPageSpinner />}><InvoiceDetail /></Suspense>} />
         <Route path="finance" element={<Suspense fallback={<FullPageSpinner />}><Finance /></Suspense>} />
+        {/* The Finance module's own views. Each left-nav entry lands on one of
+            them, and the page falls back to "mine" for a role that cannot use
+            the one asked for. */}
+        <Route path="finance/reimbursements" element={<Suspense fallback={<FullPageSpinner />}><Reimbursements /></Suspense>} />
+        <Route path="finance/reimbursements/:view" element={<Suspense fallback={<FullPageSpinner />}><Reimbursements /></Suspense>} />
         <Route path="hr" element={<Suspense fallback={<FullPageSpinner />}><HR /></Suspense>} />
         <Route path="team" element={<Suspense fallback={<FullPageSpinner />}><Team /></Suspense>} />
         <Route path="sop" element={<Suspense fallback={<FullPageSpinner />}><SOP /></Suspense>} />

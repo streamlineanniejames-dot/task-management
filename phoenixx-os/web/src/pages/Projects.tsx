@@ -74,6 +74,9 @@ const allocationTone = (pct: number) => (pct > 100 ? 'negative' : pct >= 80 ? 'w
 /* =================================================================== PAGE */
 export default function Projects() {
   const { can } = useAuth();
+  // Employees hold `view` on projects and nothing else. Rather than silently
+  // dropping every button, say so once - otherwise the page just looks broken.
+  const readOnly = !can('projects', 'create') && !can('projects', 'edit');
   const { id: routeId } = useParams();
   const navigate = useNavigate();
   const [tab, setTab] = useState('projects');
@@ -99,10 +102,17 @@ export default function Projects() {
     <>
       <PageHeader
         title="Projects & teams"
-        subtitle={data
-          ? `${data.length} project${data.length === 1 ? '' : 's'} · ${staffed} staffed · every seat named`
-          : 'Build a team per project and name who manages, leads and delivers it'}
-        actions={can('crm', 'create') && (
+        subtitle={(
+          <span className="flex flex-wrap items-center gap-2">
+            <span>
+              {data
+                ? `${data.length} project${data.length === 1 ? '' : 's'} · ${staffed} staffed · every seat named`
+                : 'Build a team per project and name who manages, leads and delivers it'}
+            </span>
+            {readOnly && <Badge tone="neutral">Read-only · managers and admins make changes</Badge>}
+          </span>
+        )}
+        actions={can('projects', 'create') && (
           <Button variant="primary" icon={<Plus size={15} />} onClick={() => setCreateOpen(true)}>
             New project
           </Button>
@@ -136,7 +146,7 @@ export default function Projects() {
                 <Card>
                   <EmptyState icon={<FolderKanban size={20} />} title="No projects yet"
                     message="A project holds the scope, the budget and the team delivering it."
-                    action={can('crm', 'create') && (
+                    action={can('projects', 'create') && (
                       <Button variant="primary" icon={<Plus size={15} />} onClick={() => setCreateOpen(true)}>
                         New project
                       </Button>
@@ -422,7 +432,7 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
     return <Drawer open onClose={onClose} title="Loading…"><div className="p-4"><TableSkeleton rows={4} cols={2} /></div></Drawer>;
   }
 
-  const editable = can('crm', 'edit');
+  const editable = can('projects', 'edit');
 
   return (
     <>

@@ -62,7 +62,7 @@ phoenixx-os/
 └── docs/       Architecture, workflows, the development cycle, PRD traceability
 ```
 
-### The eight modules
+### The nine modules
 
 | | Module | Where it lives |
 |---|---|---|
@@ -71,9 +71,13 @@ phoenixx-os/
 | **C** | Attendance, leave, performance, hiring | `hr` |
 | **D** | SOP library and KPI/KRA definitions | `sop` |
 | **E** | CRM pipeline, proposals, client scoring | `crm`, `proposals` |
-| **F** | Invoicing, costs, profitability | `invoices`, `finance` |
+| **F** | Invoicing, costs, profitability, projects | `invoices`, `finance`, `projects` |
 | **G** | Internal and client-facing reporting | `reports` |
 | **H** | Overview traction dashboard | `dashboard` |
+| **I** | Expense reimbursement, approval chain, payout | `finance/reimbursements` |
+
+Plus **My Day** (`todos`) — each person's own private daily list, which belongs
+to nobody's module because it is nobody else's business.
 
 ### Documentation
 
@@ -129,6 +133,37 @@ list. That is what makes "why did we lose them" answerable across a year of
 records instead of a hundred differently-worded notes. The API rejects a churn
 without a reason code.
 
+### The reimbursement chain
+
+An expense claim passes two gates before money moves:
+
+```
+draft ─▶ submitted ─▶ manager_approved ─▶ approved ─▶ paid
+           manager        finance          finance     finance
+```
+
+Either gate can reject instead, and a rejection has to carry a reason. The
+claimant can withdraw while nobody has decided, and can fix and resubmit a
+rejected claim. With no reporting manager on file the first gate is skipped
+rather than left in a queue nobody owns.
+
+`status` says where a claim sits now; `reimbursement_events` holds the whole
+trail, because a money decision should never have to be reconstructed from a
+set of timestamps. Three separate questions decide what a caller may do, and
+all three are answered server-side on every request: whose rows they can see
+(own / own team / all), whether they may act at the manager gate, and whether
+they may act at the finance desk. A receipt is exactly as private as the claim
+it hangs off — guessing the file URL does not get round that.
+
+### Read-only projects
+
+Who may run a project is a different question from who may work a deal, so
+projects have their own permission module rather than borrowing `crm`. An
+employee holds `view`: they see every project and every seat on every team, and
+cannot create, edit, restaff or delete one. Both mounts (`/projects` and the
+older `/finance/projects`) carry the same guards — hiding the buttons is
+presentation, not enforcement.
+
 ### Tenant isolation
 
 The access token carries `tenant_id`; a repository layer injects it into every
@@ -144,9 +179,10 @@ for this at both the service and API layers.
 npm test
 ```
 
-244 tests across GST computation, invoice numbering, client scoring, invoicing,
-billing, database snapshots and API integration (auth, RBAC, tenant isolation,
-idempotency, mobile sync, audit trail).
+296 tests across GST computation, invoice numbering, client scoring, invoicing,
+billing, reimbursement approval and payment, project permissions, personal
+to-do privacy, database snapshots and API integration (auth, RBAC, tenant
+isolation, idempotency, mobile sync, audit trail).
 
 The PRD asks for ≥70% coverage on scoring, invoicing and billing logic:
 

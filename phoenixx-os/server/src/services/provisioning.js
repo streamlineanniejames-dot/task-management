@@ -63,6 +63,22 @@ export const REASON_CODE_PACK = [
   { category: 'grievance', code: 'COMMUNICATION', label: 'Communication gap', severity: 2 },
 ];
 
+/** Module I - what an employee can claim back, and whether a bill is required. */
+export const EXPENSE_CATEGORY_PACK = [
+  { code: 'travel', name: 'Travel', color: '#3B82F6', description: 'Flights, trains, cabs and fuel for company travel' },
+  { code: 'local_conveyance', name: 'Local conveyance', color: '#0EA5E9', description: 'Autos, cabs and mileage within the city', requires_receipt: 0 },
+  { code: 'accommodation', name: 'Accommodation', color: '#8B5CF6', description: 'Hotel stays while travelling for work' },
+  { code: 'meals', name: 'Meals & entertainment', color: '#F59E0B', description: 'Client meals and team meals on company business' },
+  { code: 'client_hosting', name: 'Client hosting', color: '#EC4899', description: 'Hosting a client: venue, gifts, hospitality' },
+  { code: 'software', name: 'Software & subscriptions', color: '#10B981', description: 'Tools bought personally and used for work' },
+  { code: 'equipment', name: 'Equipment & hardware', color: '#0F766E', description: 'Peripherals, accessories and small hardware' },
+  { code: 'office_supplies', name: 'Office supplies', color: '#64748B', description: 'Stationery, printing and consumables' },
+  { code: 'training', name: 'Training & certification', color: '#7C3AED', description: 'Courses, exams and conference passes' },
+  { code: 'communication', name: 'Phone & internet', color: '#2563EB', description: 'Work share of mobile and broadband bills' },
+  { code: 'marketing', name: 'Marketing spend', color: '#DB2777', description: 'Ad spend or campaign costs paid personally' },
+  { code: 'other', name: 'Other', color: '#94A3B8', description: 'Anything the categories above do not cover' },
+];
+
 export const LEAVE_TYPE_PACK = [
   { code: 'CL', name: 'Casual Leave', annual_quota: 12, color: '#3B82F6' },
   { code: 'SL', name: 'Sick Leave', annual_quota: 8, color: '#EF4444' },
@@ -326,6 +342,14 @@ export function seedTenantContent(tenantId, { ownerId = null } = {}) {
       `INSERT INTO leave_types (id, tenant_id, name, code, annual_quota, paid, color, created_at)
        VALUES (?,?,?,?,?,?,?,?)`,
       [uuid(), tenantId, lt.name, lt.code, lt.annual_quota, lt.paid ?? 1, lt.color, ts],
+    );
+  }
+
+  for (const [i, ec] of EXPENSE_CATEGORY_PACK.entries()) {
+    run(
+      `INSERT INTO expense_categories (id, tenant_id, name, code, description, requires_receipt,
+         color, sort, created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [uuid(), tenantId, ec.name, ec.code, ec.description, ec.requires_receipt ?? 1, ec.color, i, ts],
     );
   }
 

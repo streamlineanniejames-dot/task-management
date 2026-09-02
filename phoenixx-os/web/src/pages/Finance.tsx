@@ -50,7 +50,7 @@ export default function Finance() {
       {tab === 'profitability' && <ProfitabilityTab />}
       {tab === 'costs' && <CostsTab canEdit={can('costs', 'create')} />}
       {tab === 'receivables' && <ReceivablesTab />}
-      {tab === 'projects' && <ProjectsTab canEdit={can('crm', 'create')} />}
+      {tab === 'projects' && <ProjectsTab canEdit={can('projects', 'create')} />}
     </>
   );
 }

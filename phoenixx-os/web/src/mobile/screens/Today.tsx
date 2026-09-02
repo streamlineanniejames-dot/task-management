@@ -9,11 +9,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CalendarCheck, CalendarClock, CheckCircle2, MapPin, PhoneCall, Users, Video,
+  CalendarCheck, CalendarClock, CheckCircle2, Circle, ListTodo, MapPin, PhoneCall, Plus, Users, Video, X,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { date as fmtDate, time as fmtTime } from '../../lib/format';
 import { useToast } from '../../components/ui';
+import { clock } from '../../components/PersonalTodos';
 import { openUrl } from '../../lib/openUrl';
 import { HOME_KEY, useHomeFeed } from '../MobileApp';
 import {
@@ -33,6 +34,12 @@ export default function MobileToday() {
     staleTime: 30_000,
   });
 
+  const todos = useQuery({
+    queryKey: TODOS_KEY,
+    queryFn: () => api.get('/todos').then((r) => r.data),
+    staleTime: 30_000,
+  });
+
   if (isLoading) return <Loading label="Loading today" />;
   if (error) return <div className="p-4"><ErrorNote error={error} retry={refetch} /></div>;
 
@@ -43,6 +50,10 @@ export default function MobileToday() {
   return (
     <>
       <Screen title="Today" subtitle={fmtDate(new Date().toISOString(), 'long')}>
+
+        {/* The personal list first: it is the one thing on this screen that is
+            entirely the reader's own, and the reason to open it before a call. */}
+        <MyList items={todos.data || []} />
 
         <Section title={`Meetings${meetings.length ? ` · ${meetings.length}` : ''}`}>
           <List empty={<Empty icon={<CalendarCheck size={22} />} title="No meetings today"
@@ -158,6 +169,92 @@ function OverdueList({ items }: { items: any[] }) {
         />
       ))}
     </List>
+  );
+}
+
+/* ------------------------------------------------------------- my list */
+/**
+ * My Day's personal to-dos on a phone. One field, one checkbox, nothing else -
+ * these are somebody's own reminders and are never seen by anyone else, so the
+ * whole surface is add, tick, remove.
+ */
+export const TODOS_KEY = ['m', 'todos'];
+
+function MyList({ items }: { items: any[] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [title, setTitle] = useState('');
+
+  const refresh = () => qc.invalidateQueries({ queryKey: TODOS_KEY });
+  const fail = (e: any) => toast.error(e.message);
+
+  const add = useMutation({
+    mutationFn: (text: string) => api.post('/todos', { title: text }),
+    onSuccess: () => { setTitle(''); refresh(); },
+    onError: fail,
+  });
+  const toggle = useMutation({
+    mutationFn: (id: string) => api.post(`/todos/${id}/toggle`),
+    onSuccess: refresh,
+    onError: fail,
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.del(`/todos/${id}`),
+    onSuccess: refresh,
+    onError: fail,
+  });
+
+  const pending = items.filter((t) => t.status === 'pending');
+  const done = items.filter((t) => t.status === 'completed');
+
+  return (
+    <Section title={`My list${pending.length ? ` · ${pending.length} to go` : ''}`}>
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (title.trim()) add.mutate(title.trim()); }}
+        className="mb-2 flex items-center gap-2"
+      >
+        <input
+          className={`${inputClass} flex-1`} value={title} maxLength={200}
+          placeholder="Add something for today…" aria-label="New personal to-do"
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <MButton type="submit" variant="primary" disabled={!title.trim()} loading={add.isPending}
+          icon={<Plus size={16} />}>Add</MButton>
+      </form>
+
+      <List empty={<Empty icon={<ListTodo size={22} />} title="Nothing on your list"
+        message="Private to you, and separate from your assigned work." />}>
+        {[...pending, ...done].map((t) => (
+          <Row
+            key={t.id}
+            leading={(
+              <button
+                type="button"
+                onClick={() => toggle.mutate(t.id)}
+                aria-label={t.status === 'completed' ? `Reopen ${t.title}` : `Mark ${t.title} done`}
+                aria-pressed={t.status === 'completed'}
+                className={t.status === 'completed' ? 'text-positive' : 'text-subtle'}
+              >
+                {t.status === 'completed' ? <CheckCircle2 size={22} /> : <Circle size={22} />}
+              </button>
+            )}
+            title={(
+              <span className={t.status === 'completed' ? 'text-subtle line-through' : undefined}>
+                {t.title}
+              </span>
+            )}
+            meta={[clock(t.due_time), t.priority !== 'normal' ? t.priority : null]
+              .filter(Boolean).join(' · ') || undefined}
+            right={(
+              <button type="button" onClick={() => remove.mutate(t.id)}
+                aria-label={`Delete ${t.title}`} className="text-subtle active:text-negative">
+                <X size={18} />
+              </button>
+            )}
+          />
+        ))}
+      </List>
+    </Section>
   );
 }
 
