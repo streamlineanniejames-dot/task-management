@@ -43,7 +43,7 @@ Other commands:
 
 ```bash
 npm run reset     # drop the database and re-seed from scratch
-npm test          # 142 tests
+npm test          # 244 tests
 npm run build     # production build of the web app
 ```
 
@@ -59,7 +59,7 @@ phoenixx-os/
 ├── server/     Node + Express API, SQLite, background job runner
 ├── web/        React + TypeScript + Tailwind (the full product)
 ├── mobile/     React Native (Expo) — the six highest-frequency actions
-└── docs/       Architecture and a PRD traceability matrix
+└── docs/       Architecture, workflows, the development cycle, PRD traceability
 ```
 
 ### The eight modules
@@ -74,6 +74,16 @@ phoenixx-os/
 | **F** | Invoicing, costs, profitability | `invoices`, `finance` |
 | **G** | Internal and client-facing reporting | `reports` |
 | **H** | Overview traction dashboard | `dashboard` |
+
+### Documentation
+
+| Document | Answers |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the system is built, and every deliberate deviation from the PRD |
+| [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | What it does on its own — state machines, the deadline ladder, the scheduled jobs |
+| [docs/SDLC.md](docs/SDLC.md) | How a change gets built, tested and shipped, and where the process still has gaps |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Hosting it, on the free tier or with a real disk |
+| [docs/PRD-COVERAGE.md](docs/PRD-COVERAGE.md) | Which requirement is satisfied where |
 
 ---
 
@@ -134,9 +144,9 @@ for this at both the service and API layers.
 npm test
 ```
 
-142 tests across GST computation, invoice numbering, client scoring, invoicing,
-billing and API integration (auth, RBAC, tenant isolation, idempotency, mobile
-sync, audit trail).
+244 tests across GST computation, invoice numbering, client scoring, invoicing,
+billing, database snapshots and API integration (auth, RBAC, tenant isolation,
+idempotency, mobile sync, audit trail).
 
 The PRD asks for ≥70% coverage on scoring, invoicing and billing logic:
 
