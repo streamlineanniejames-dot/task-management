@@ -74,6 +74,22 @@ const StatusPill = ({ status }: { status?: string }) => {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+/** What the attachments endpoint accepts. Checked here so a 6 MB photo of a
+ *  bill is refused while the person is still looking at the form, rather than
+ *  half way through saving the claim. */
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
+
+/** Sub-kilobyte files are not "0 KB" - the smallest real size is 1. */
+const fileSize = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+/** Splits a picked batch into what can be sent and what is too big. */
+function sift(picked: File[]) {
+  return {
+    ok: picked.filter((f) => f.size <= MAX_FILE_BYTES),
+    tooBig: picked.filter((f) => f.size > MAX_FILE_BYTES),
+  };
+}
+
 /* =================================================================== PAGE */
 export default function Reimbursements() {
   const { can } = useAuth();
@@ -355,22 +371,40 @@ function ComposeModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const amountMinor = Math.round(Number(form.amount || 0) * 100);
   const overCap = category?.cap_minor && amountMinor > category.cap_minor;
 
+  /**
+   * Saving is three calls - create, upload each bill, submit - and any of them
+   * can fail. Holding the claim id and the bills already up means pressing the
+   * button again carries on from where it stopped instead of raising a second
+   * claim for the same expense.
+   */
+  const draftId = useRef<string | null>(null);
+  const uploaded = useRef<Set<string>>(new Set());
+
   const create = useMutation({
     mutationFn: async (submit: boolean) => {
-      const { data: claim } = await api.post(BASE, {
-        ...(form.category_id ? { category_id: form.category_id } : {}),
-        expense_date: form.expense_date,
-        amount_minor: amountMinor,
-        description: form.description.trim(),
-        ...(form.merchant.trim() ? { merchant: form.merchant.trim() } : {}),
-        ...(form.payment_mode ? { payment_mode: form.payment_mode } : {}),
-      });
+      if (!draftId.current) {
+        const { data } = await api.post(BASE, {
+          ...(form.category_id ? { category_id: form.category_id } : {}),
+          expense_date: form.expense_date,
+          amount_minor: amountMinor,
+          description: form.description.trim(),
+          ...(form.merchant.trim() ? { merchant: form.merchant.trim() } : {}),
+          ...(form.payment_mode ? { payment_mode: form.payment_mode } : {}),
+        });
+        draftId.current = data.id;
+      }
+      const id = draftId.current!;
 
       // Bills go up before the claim is filed, so a category that requires a
-      // receipt does not bounce the submission back at the person.
-      for (const file of files) await uploadDocument(claim.id, file);
-      if (submit) await api.post(`${BASE}/${claim.id}/submit`, {});
-      return claim;
+      // receipt does not bounce the submission straight back at the person.
+      for (const [i, file] of files.entries()) {
+        const key = `${i}:${file.name}:${file.size}`;
+        if (uploaded.current.has(key)) continue;
+        await uploadDocument(id, file);
+        uploaded.current.add(key);
+      }
+      if (submit) await api.post(`${BASE}/${id}/submit`, {});
+      return { id };
     },
     onSuccess: (claim, submit) => {
       toast.success(submit ? 'Reimbursement submitted.' : 'Saved as a draft.');
@@ -451,9 +485,18 @@ function ComposeModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
           <input
             ref={fileRef} type="file" multiple className="hidden"
             accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
+            // Read the picked files before resetting the input, never inside the
+            // updater: React runs that later, by which point clearing `value`
+            // has already emptied `files` and the attachment is silently lost.
+            // The reset is what lets the same file be picked twice in a row.
             onChange={(e) => {
-              setFiles((prev) => [...prev, ...Array.from(e.target.files || [])]);
+              const { ok, tooBig } = sift(Array.from(e.target.files || []));
               e.target.value = '';
+              if (tooBig.length) {
+                toast.error(`${tooBig.map((f) => f.name).join(', ')} is over 15 MB. `
+                  + 'Send a photo of the bill rather than the original scan.');
+              }
+              if (ok.length) setFiles((prev) => [...prev, ...ok]);
             }}
           />
           <Button icon={<Upload size={15} />} onClick={() => fileRef.current?.click()}>Attach a file</Button>
@@ -465,7 +508,7 @@ function ComposeModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
                   className="flex items-center gap-2 rounded-md border border-line bg-sunken px-2.5 py-1.5">
                   <FileText size={14} className="shrink-0 text-subtle" />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{f.name}</span>
-                  <span className="shrink-0 text-[11.5px] text-subtle tabular">{Math.round(f.size / 1024)} KB</span>
+                  <span className="shrink-0 text-[11.5px] text-subtle tabular">{fileSize(f.size)}</span>
                   <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
                     aria-label={`Remove ${f.name}`}
                     className="shrink-0 text-subtle hover:text-[var(--negative)] cursor-pointer">
@@ -730,7 +773,12 @@ function Documents({ claim, canUpload, onChange }: { claim: any; canUpload: bool
           <>
             <input ref={fileRef} type="file" multiple className="hidden"
               accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
-              onChange={(e) => { upload.mutate(Array.from(e.target.files || [])); e.target.value = ''; }} />
+              onChange={(e) => {
+                const { ok, tooBig } = sift(Array.from(e.target.files || []));
+                e.target.value = '';
+                if (tooBig.length) toast.error(`${tooBig.map((f) => f.name).join(', ')} is over 15 MB.`);
+                if (ok.length) upload.mutate(ok);
+              }} />
             <Button size="sm" icon={<Upload size={14} />} loading={upload.isPending}
               onClick={() => fileRef.current?.click()}>Attach</Button>
           </>
@@ -749,7 +797,7 @@ function Documents({ claim, canUpload, onChange }: { claim: any; canUpload: bool
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] text-ink">{d.filename}</span>
                 <span className="text-[11.5px] text-subtle">
-                  {Math.max(1, Math.round(d.size_bytes / 1024))} KB · {d.uploaded_by_name} · {relative(d.created_at)}
+                  {fileSize(d.size_bytes)} · {d.uploaded_by_name} · {relative(d.created_at)}
                 </span>
               </span>
               <Button size="sm" variant="ghost" icon={<Download size={14} />}
