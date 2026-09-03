@@ -277,6 +277,21 @@ CREATE TABLE IF NOT EXISTS action_categories (
   UNIQUE (tenant_id, code)
 );
 
+/**
+ * One-off data migrations that have already run, by key.
+ *
+ * Most repairs in db/index.js are naturally self-limiting - they carry a WHERE
+ * clause that stops matching once they have done their work. A few are not:
+ * correcting a default that people are then free to change back means the
+ * repair has to know it has already happened, or it would undo their choice on
+ * the next restart. Those record themselves here.
+ */
+CREATE TABLE IF NOT EXISTS schema_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  applied_at TEXT NOT NULL
+);
+
 -- ---------------------------------------------------------------- MODULE A
 CREATE TABLE IF NOT EXISTS action_items (
   id TEXT PRIMARY KEY,

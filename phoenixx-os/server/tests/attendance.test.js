@@ -59,6 +59,15 @@ const clockOffset = (minutes) => {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 };
 
+/** The next Saturday on or after today, on the workspace calendar. */
+const saturdayOn = () => {
+  let d = today();
+  while (attendance.weekdayOf(d) !== 6) {
+    d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  }
+  return d;
+};
+
 /** One employee, one day, as HR sees it. */
 const dayFor = (userId, date) => api.get(
   `/hr/attendance/day?user_id=${userId}&date=${date}`, { token: hr.token },
@@ -467,6 +476,55 @@ describe('attendance that predates this workflow', () => {
     const cell = reg.body.data.rows.find((r) => r.user.id === priya.id)
       .cells.find((c) => c.date === old);
     assert.equal(cell.status, 'present');
+  });
+});
+
+// ------------------------------------------------------ Saturday is worked
+describe('the working week', () => {
+  test('a new workspace has Sunday off and Saturday on', () => {
+    const fresh = 'tenant-fresh-week';
+    db.run('INSERT INTO tenants (id,name,slug,status,created_at,updated_at) VALUES (?,?,?,?,?,?)',
+      [fresh, 'Fresh Co', `fresh-${Date.now()}`, 'active', new Date().toISOString(), new Date().toISOString()]);
+    assert.deepEqual(attendance.weekOffDays(fresh), [0], 'Sunday alone');
+    assert.equal(attendance.dayKind(fresh, saturdayOn()).kind, 'working');
+  });
+
+  test('a workspace still carrying the old Sat+Sun default is corrected on boot', () => {
+    const legacy = 'tenant-legacy-week';
+    db.run('INSERT INTO tenants (id,name,slug,status,created_at,updated_at) VALUES (?,?,?,?,?,?)',
+      [legacy, 'Legacy Co', `legacy-${Date.now()}`, 'active', new Date().toISOString(), new Date().toISOString()]);
+    db.run("UPDATE tenants SET week_off_days = '[0,6]' WHERE id = ?", [legacy]);
+    db.run("DELETE FROM schema_meta WHERE key = 'week_off_saturday_is_working'");
+
+    db.migrate();
+    assert.deepEqual(attendance.weekOffDays(legacy), [0], 'Saturday is a working day again');
+  });
+
+  test('but a deliberate choice of Saturday off is not overruled by a restart', () => {
+    const chosen = 'tenant-chose-saturday';
+    db.run('INSERT INTO tenants (id,name,slug,status,created_at,updated_at) VALUES (?,?,?,?,?,?)',
+      [chosen, 'Six Day Co', `sixday-${Date.now()}`, 'active', new Date().toISOString(), new Date().toISOString()]);
+    db.run("UPDATE tenants SET week_off_days = '[0,6]' WHERE id = ?", [chosen]);
+
+    db.migrate();
+    assert.deepEqual(attendance.weekOffDays(chosen), [0, 6],
+      'the correction runs once, not on every boot');
+  });
+
+  test('a Saturday off is a holiday somebody adds, not a standing rule', async () => {
+    const sat = saturdayOn();
+    assert.equal(attendance.dayKind(tenantId, sat).kind, 'working');
+
+    const res = await api.post('/hr/holidays',
+      { holiday_date: sat, name: 'Second Saturday' }, { token: hr.token });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+
+    const day = await dayFor(chandru.id, sat);
+    assert.equal(day.body.data.day_kind, 'holiday');
+    assert.equal(day.body.data.holiday.name, 'Second Saturday');
+
+    await api.del(`/hr/holidays/${res.body.data.id}`, { token: hr.token });
+    assert.equal(attendance.dayKind(tenantId, sat).kind, 'working', 'and back to a working day');
   });
 });
 

@@ -64,6 +64,32 @@ function backfill() {
   // Resolved per tenant because the day ends at a different moment in each
   // workspace timezone. Idempotent: only rows with no instant are touched.
   if (tableExists('action_items') && hasColumn('action_items', 'due_at')) backfillDueAt();
+
+  /**
+   * Saturday is a working day.
+   *
+   * The first cut of the attendance update gave existing workspaces Saturday
+   * and Sunday off, on the reasoning that their register had always shown it
+   * that way. That was the wrong call: the working week here is six days, and
+   * a Saturday nobody works is a holiday HR adds, not a standing rule. This
+   * corrects that default once.
+   *
+   * Guarded by a marker rather than a WHERE clause, because the value it fixes
+   * is one HR is then free to choose deliberately - without the marker, every
+   * restart would overrule them.
+   */
+  once('week_off_saturday_is_working', () => {
+    db.exec(`UPDATE tenants SET week_off_days = '[0]' WHERE week_off_days = '[0,6]'`);
+  });
+}
+
+/** Runs `fn` the first time this database sees `key`, and never again. */
+function once(key, fn) {
+  if (!tableExists('schema_meta')) return;
+  if (db.prepare('SELECT key FROM schema_meta WHERE key = ?').get(key)) return;
+  fn();
+  db.prepare('INSERT INTO schema_meta (key, value, applied_at) VALUES (?,?,?)')
+    .run(key, 'applied', new Date().toISOString());
 }
 
 function backfillDueAt() {
@@ -138,10 +164,10 @@ const ADDED_COLUMNS = [
   ['tenants', 'work_start', "TEXT NOT NULL DEFAULT '09:30'"],
   ['tenants', 'work_end', "TEXT NOT NULL DEFAULT '18:30'"],
   ['tenants', 'late_grace_minutes', 'INTEGER NOT NULL DEFAULT 10'],
-  // JSON weekday numbers, 0 = Sunday. A workspace upgrading into this keeps
-  // Saturday off, because that is what its register has always shown; a new
-  // one starts on Sunday-only, which is what the product now specifies.
-  ['tenants', 'week_off_days', "TEXT NOT NULL DEFAULT '[0,6]'"],
+  // JSON weekday numbers, 0 = Sunday. Sunday alone is the weekly off: a six-day
+  // week is the norm here, and a Saturday that is not worked is a holiday
+  // somebody puts on the calendar rather than a standing rule.
+  ['tenants', 'week_off_days', "TEXT NOT NULL DEFAULT '[0]'"],
   ['users', 'work_start', 'TEXT'],
   ['users', 'work_end', 'TEXT'],
   ['users', 'grace_minutes', 'INTEGER'],
