@@ -3,6 +3,7 @@ import {
   uuid, nowIso, todayIso, monthIso, addDays, addMonths, startOfMonth, endOfMonth, pct, round1,
 } from '../lib/util.js';
 import { config } from '../config.js';
+import { DEFAULT_TZ, dueAtIso } from '../lib/dueTime.js';
 import { runDeadlineLadder, upsertDeadline, raiseEscalation } from './deadlines.js';
 import { scoreAllClients } from './scoring.js';
 import { detectImprovementFlags, snapshotMetrics } from './analytics.js';
@@ -50,10 +51,11 @@ export const rollRecurringActionItems = record('action_items.recurring', () => {
   let created = 0;
 
   const templates = all(
-    `SELECT * FROM action_items
-      WHERE deleted_at IS NULL AND recurrence IS NOT NULL AND recurrence != 'none'
-        AND status = 'done' AND (recurrence_until IS NULL OR recurrence_until >= ?)`,
-    [today],
+    `SELECT a.*, COALESCE(t.timezone, ?) AS tz FROM action_items a
+       LEFT JOIN tenants t ON t.id = a.tenant_id
+      WHERE a.deleted_at IS NULL AND a.recurrence IS NOT NULL AND a.recurrence != 'none'
+        AND a.status = 'done' AND (a.recurrence_until IS NULL OR a.recurrence_until >= ?)`,
+    [DEFAULT_TZ, today],
   );
 
   for (const t of templates) {
@@ -70,14 +72,19 @@ export const rollRecurringActionItems = record('action_items.recurring', () => {
     );
     if (exists) continue;
 
+    // The time of day is part of what repeats: a standup due at 9:30 is due at
+    // 9:30 again tomorrow, not merely "sometime tomorrow".
+    const nextDueAt = dueAtIso(nextDue, t.due_time, t.tz);
+
     const id = uuid();
     run(
       `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id,
-         project_id, category_id, priority, status, due_date, recurrence, recurrence_until,
+         project_id, category_id, priority, status, due_date, due_time, due_at, recurrence, recurrence_until,
          recurrence_parent_id, source_type, estimate_minutes, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?,?,?,?, 'recurring', ?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?,?,?,?,?,?, 'recurring', ?,?,?)`,
       [id, t.tenant_id, t.title, t.description, t.owner_id, t.created_by, t.client_id, t.project_id,
-        t.category_id, t.priority, nextDue, t.recurrence, t.recurrence_until, parentId,
+        t.category_id, t.priority, nextDue, t.due_time ?? null, nextDueAt,
+        t.recurrence, t.recurrence_until, parentId,
         t.estimate_minutes, nowIso(), nowIso()],
     );
 
@@ -88,11 +95,16 @@ export const rollRecurringActionItems = record('action_items.recurring', () => {
       sourceType: 'action_item',
       sourceId: id,
       title: t.title,
-      dueAt: nextDue,
+      dueAt: nextDueAt || nextDue,
       ownerId: t.owner_id,
       escalateToId: owner?.manager_id,
       escalationDays: category?.escalation_days ?? 3,
-      meta: { priority: t.priority },
+      meta: {
+        priority: t.priority,
+        timed: !!t.due_time,
+        due_date: nextDue,
+        due_time: t.due_time || null,
+      },
     });
     created++;
   }

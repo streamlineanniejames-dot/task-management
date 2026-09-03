@@ -8,7 +8,10 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { date, relative, daysUntil, dateTime } from '../lib/format';
+import {
+  date, relative, dateTime, clockTime, dueLabel, dueFull, isOverdue,
+  workspaceToday, workspaceTime,
+} from '../lib/format';
 import { DailyUpdateModal, UpdateCard, NeedsUpdateRow } from '../components/DailyUpdate';
 import {
   Avatar, AvatarWithName, Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, Drawer,
@@ -18,6 +21,109 @@ import {
 
 const STATUSES = ['open', 'in_progress', 'blocked', 'done', 'cancelled'];
 const PRIORITIES = ['urgent', 'high', 'medium', 'low'];
+
+/* ==================================================== DUE DATE + DUE TIME */
+/**
+ * The due date and the time on it, as one thing - because that is what people
+ * mean by "when". Two rules live here and nowhere else in the UI:
+ *
+ *  - a task due *today* has to name a time. "Today" stops being a plan the
+ *    moment the morning is gone, and the assignee deserves to know which end of
+ *    the day is meant.
+ *  - that time cannot already have passed. The picker's floor moves with the
+ *    clock, so 2pm is unavailable at 3pm without anyone having to be told.
+ *
+ * A future day may carry a time or not; leaving it blank means end of that day,
+ * which is exactly what a due date without a time has always meant. The server
+ * enforces the same two rules - this is the courtesy, not the guard.
+ */
+export function dueError(dueDate: string, dueTime: string): string {
+  if (!dueDate || dueDate !== workspaceToday()) return '';
+  if (!dueTime) return 'A task due today needs a time — say when today it is wanted by';
+  if (dueTime < workspaceTime()) {
+    return `${clockTime(dueTime)} has already passed — it is ${clockTime(workspaceTime())} now`;
+  }
+  return '';
+}
+
+function DueFields({ dueDate, dueTime, onChange, error }: {
+  dueDate: string;
+  dueTime: string;
+  onChange: (next: { due_date: string; due_time: string }) => void;
+  error?: string;
+}) {
+  const today = workspaceToday();
+  const isToday = dueDate === today;
+
+  return (
+    <div className="rounded-lg border border-line bg-sunken p-3">
+      <p className="label-cap mb-2.5">Due</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Due date">
+          <Input
+            type="date" value={dueDate}
+            onChange={(e) => onChange({ due_date: e.target.value, due_time: dueTime })}
+          />
+        </Field>
+        <Field label="Due time" required={isToday} error={error}>
+          <Input
+            type="time"
+            value={dueTime}
+            // The floor only applies to today; a 9am slot next Tuesday is fine.
+            min={isToday ? workspaceTime() : undefined}
+            disabled={!dueDate}
+            onChange={(e) => onChange({ due_date: dueDate, due_time: e.target.value })}
+          />
+        </Field>
+      </div>
+      {!error && (
+        <p className="mt-2 text-[12.5px] text-subtle">
+          {!dueDate ? 'Leave both blank for work with no deadline.'
+            : isToday ? 'Required for a same-day task — it goes overdue the minute this time passes.'
+              : 'Optional. Left blank, it is due by the end of that day.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The drawer's version, where every field saves the moment it changes. The date
+ * and the time have to travel together - sending a new date on its own would be
+ * rejected the instant somebody moved a task to today, and the person editing
+ * would see a server error for a form they had not finished filling in. So the
+ * pair is held locally and sent once it makes sense.
+ */
+function DueEditor({ item, onSave }: {
+  item: { due_date?: string | null; due_time?: string | null };
+  onSave: (patch: { due_date: string | null; due_time: string | null }) => void;
+}) {
+  const stored = { d: item.due_date || '', t: item.due_time || '' };
+  const [draft, setDraft] = useState(stored);
+
+  // Follow the item when it changes underneath us - a save landing, or somebody
+  // else moving the date - without stamping on a half-finished edit.
+  useEffect(() => { setDraft({ d: item.due_date || '', t: item.due_time || '' }); },
+    [item.due_date, item.due_time]);
+
+  const problem = dueError(draft.d, draft.t);
+
+  const commit = (next: { d: string; t: string }) => {
+    setDraft(next);
+    if (dueError(next.d, next.t)) return;
+    if (next.d === stored.d && next.t === stored.t) return;
+    onSave({ due_date: next.d || null, due_time: next.d ? (next.t || null) : null });
+  };
+
+  return (
+    <DueFields
+      dueDate={draft.d}
+      dueTime={draft.t}
+      error={problem}
+      onChange={({ due_date: d, due_time: t }) => commit({ d, t: d ? t : '' })}
+    />
+  );
+}
 
 /** Overlapping faces for a task worked by more than one person. */
 export function AssigneeStack({ assignees, max = 4 }: { assignees: any[]; max?: number }) {
@@ -320,8 +426,7 @@ export default function ActionItems() {
                 </THead>
                 <tbody>
                   {items.map((item: any) => {
-                    const days = daysUntil(item.due_date);
-                    const overdue = days != null && days < 0 && !['done', 'cancelled'].includes(item.status);
+                    const overdue = isOverdue(item);
                     return (
                       <TR key={item.id}>
                         <TD>
@@ -374,8 +479,9 @@ export default function ActionItems() {
                         </span></TD>
                         <TD><span className="text-muted truncate block max-w-[140px]">{item.client_name || '—'}</span></TD>
                         <TD>
-                          <span className={cx('text-[13px]', overdue ? 'text-[var(--negative)] font-medium' : 'text-muted')}>
-                            {item.due_date ? (overdue ? `${Math.abs(days!)}d overdue` : relative(item.due_date)) : '—'}
+                          <span className={cx('text-[13px]', overdue ? 'text-[var(--negative)] font-medium' : 'text-muted')}
+                            title={dueFull(item)}>
+                            {dueLabel(item)}
                           </span>
                         </TD>
                         <TD>
@@ -439,8 +545,7 @@ function BoardView({ items, onOpen }: { items: any[]; onOpen: (id: string) => vo
                 </div>
               )}
               {col.map((item) => {
-                const days = daysUntil(item.due_date);
-                const overdue = days != null && days < 0 && item.status !== 'done';
+                const overdue = isOverdue(item);
                 return (
                   <button key={item.id} onClick={() => onOpen(item.id)}
                     className="card w-full p-3 text-left cursor-pointer transition-colors duration-150 hover:border-line-strong">
@@ -455,8 +560,9 @@ function BoardView({ items, onOpen }: { items: any[]; onOpen: (id: string) => vo
                       {item.owner_name ? <Avatar name={item.owner_name} url={item.owner_avatar} size={22} />
                         : <span className="text-[11.5px] text-subtle">Unassigned</span>}
                       {item.due_date && (
-                        <span className={cx('text-[11.5px] tabular', overdue ? 'text-[var(--negative)] font-medium' : 'text-subtle')}>
-                          {overdue ? `${Math.abs(days!)}d over` : relative(item.due_date)}
+                        <span className={cx('text-[11.5px] tabular', overdue ? 'text-[var(--negative)] font-medium' : 'text-subtle')}
+                          title={dueFull(item)}>
+                          {dueLabel(item)}
                         </span>
                       )}
                     </div>
@@ -734,7 +840,7 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
 
   const [form, setForm] = useState({
     title: '', description: '', owner_id: user?.id || '', client_id: '', category_id: '',
-    priority: 'medium', due_date: '', recurrence: 'none', estimate_minutes: '',
+    priority: 'medium', due_date: '', due_time: '', recurrence: 'none', estimate_minutes: '',
   });
   // Assigning to a team means a project team: everyone seated on it, with one
   // of them still named accountable for the due date.
@@ -757,6 +863,7 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
       category_id: form.category_id || null,
       priority: form.priority,
       due_date: form.due_date || null,
+      due_time: form.due_date ? (form.due_time || null) : null,
       recurrence: form.recurrence === 'none' ? null : form.recurrence,
       estimate_minutes: form.estimate_minutes ? Number(form.estimate_minutes) : null,
       ...(mode === 'team' && projectId ? { assign_from_project_id: projectId } : {}),
@@ -775,6 +882,11 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
 
   const set = (k: string, v: string) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: '' })); };
 
+  // Checked as they type rather than only on submit: a same-day task with no
+  // time is the common case, and finding out after pressing Create is a worse
+  // way to learn it.
+  const dueProblem = dueError(form.due_date, form.due_time);
+
   return (
     <Modal open onClose={onClose} title="New action item"
       subtitle="Who is responsible, by when — the assignee, due date and category drive reminders and escalation"
@@ -782,7 +894,8 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={create.isPending}
-            disabled={form.title.trim().length < 2 || (mode === 'team' && (!projectId || !form.owner_id))}
+            disabled={form.title.trim().length < 2 || !!dueProblem
+              || (mode === 'team' && (!projectId || !form.owner_id))}
             onClick={() => create.mutate()}>Create item</Button>
         </>
       }>
@@ -880,10 +993,7 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
               {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
             </Select>
           </Field>
-          <Field label="Due date" error={errors.due_date}>
-            <Input type="date" value={form.due_date} onChange={(e) => set('due_date', e.target.value)} />
-          </Field>
-          <Field label="Repeats">
+          <Field label="Repeats" hint={form.due_time ? `Each one falls due at ${clockTime(form.due_time)}` : undefined}>
             <Select value={form.recurrence} onChange={(e) => set('recurrence', e.target.value)}>
               <option value="none">Does not repeat</option>
               <option value="daily">Daily</option>
@@ -892,6 +1002,19 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
             </Select>
           </Field>
         </div>
+
+        {/* Date and time together: one question, asked once. */}
+        <DueFields
+          dueDate={form.due_date}
+          dueTime={form.due_time}
+          error={dueProblem || errors.due_time || errors.due_date}
+          onChange={({ due_date: d, due_time: t }) => {
+            // Clearing the date clears the time with it - a time on no day is
+            // not a deadline, and leaving one behind only confuses the next edit.
+            setForm((f) => ({ ...f, due_date: d, due_time: d ? t : '' }));
+            setErrors((e) => ({ ...e, due_date: '', due_time: '' }));
+          }}
+        />
         <Field label="Estimated effort (minutes)" hint="Feeds team utilisation on the dashboard">
           <Input type="number" min={0} step={30} value={form.estimate_minutes}
             onChange={(e) => set('estimate_minutes', e.target.value)} placeholder="120" />
@@ -1237,8 +1360,7 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
     return <Drawer open onClose={onClose} title="Loading…"><div className="p-4"><TableSkeleton rows={4} cols={2} /></div></Drawer>;
   }
 
-  const days = daysUntil(item.due_date);
-  const overdue = days != null && days < 0 && !['done', 'cancelled'].includes(item.status);
+  const overdue = isOverdue(item);
   // Only people on the task write updates against it.
   const onTask = (item.assignees || []).some((a: any) => a.user_id === user?.id);
   // A task somebody raised for themselves signs itself off; one raised for
@@ -1290,7 +1412,7 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
               <AlertTriangle size={16} className="mt-0.5 text-[var(--negative)] shrink-0" />
               <div>
                 <p className="text-[13px] font-medium text-[var(--negative)]">
-                  {Math.abs(days!)} day{Math.abs(days!) > 1 ? 's' : ''} overdue
+                  {dueLabel(item)} — was due {dueFull(item)}
                 </p>
                 {item.deadline && (
                   <p className="text-[12.5px] text-muted mt-0.5">
@@ -1404,14 +1526,15 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
                   {meta?.directory?.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </Select>
               </Field>
-              <Field label="Due date">
-                <Input type="date" value={item.due_date || ''}
-                  onChange={(e) => update.mutate({ due_date: e.target.value || null })} />
-              </Field>
             </div>
           )}
 
+          {can('action_items', 'edit') && (
+            <DueEditor item={item} onSave={(patch) => update.mutate(patch)} />
+          )}
+
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg bg-sunken p-3.5 text-[13px]">
+            <Detail label="Due" value={item.due_date ? dueFull(item) : null} />
             <Detail label="Client" value={item.client_name} />
             <Detail label="Project" value={item.project_name} />
             <Detail label="Category" value={item.category_name} />

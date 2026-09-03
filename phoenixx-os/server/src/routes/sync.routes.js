@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { get, all, run, tx, hasColumn } from '../db/index.js';
 import { uuid, nowIso, todayIso } from '../lib/util.js';
+import { DEFAULT_TZ, DUE_TIME_RE, dueAtIso } from '../lib/dueTime.js';
 import { ok, created, validate, notFound, badRequest, ApiError } from '../lib/http.js';
 import { config } from '../config.js';
 import { syncDeadline } from './actionItems.routes.js';
@@ -130,20 +131,31 @@ router.post('/queue', (req, res) => {
   });
 });
 
+/** The workspace clock a queued offline edit should be resolved against. */
+const tenantTz = (tenantId) => get('SELECT timezone FROM tenants WHERE id = ?', [tenantId])?.timezone
+  || DEFAULT_TZ;
+
 function applyOperation({ tenantId, userId, op, auth }) {
   const ts = nowIso();
 
   switch (op.type) {
     case 'action_item.create': {
       const id = op.payload.id || uuid();
+      // An offline task keeps whatever hour it was written down for; the
+      // instant is worked out here, against the workspace clock, because the
+      // phone that queued it may have been in another timezone entirely.
+      const dueDate = op.payload.due_date ?? null;
+      const dueTime = DUE_TIME_RE.test(String(op.payload.due_time || '')) ? op.payload.due_time : null;
       run(
         `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id,
-           category_id, priority, status, due_date, source_type, estimate_minutes, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?, 'open', ?, 'mobile_offline', ?, ?, ?)`,
+           category_id, priority, status, due_date, due_time, due_at, source_type, estimate_minutes,
+           created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?, 'open', ?,?,?, 'mobile_offline', ?, ?, ?)`,
         [id, tenantId, op.payload.title, op.payload.description ?? null,
           op.payload.owner_id || userId, userId, op.payload.client_id ?? null,
           op.payload.category_id ?? null, op.payload.priority || 'medium',
-          op.payload.due_date ?? null, op.payload.estimate_minutes ?? null,
+          dueDate, dueTime, dueAtIso(dueDate, dueTime, tenantTz(tenantId)),
+          op.payload.estimate_minutes ?? null,
           op.created_at || ts, ts],
       );
       const item = get('SELECT * FROM action_items WHERE id = ?', [id]);
@@ -163,6 +175,15 @@ function applyOperation({ tenantId, userId, op, auth }) {
         ? { status: 'done', completed_at: op.created_at || ts, updated_at: ts }
         : { ...op.payload, id: undefined, updated_at: ts };
       delete patch.id;
+      // A queued edit that moved the due date or time has to move the instant
+      // with it, or the item would be reminded on and escalated at the old one.
+      if (patch.due_date !== undefined || patch.due_time !== undefined) {
+        const dueDate = (patch.due_date !== undefined ? patch.due_date : item.due_date) || null;
+        const dueTime = (patch.due_time !== undefined ? patch.due_time : item.due_time) || null;
+        patch.due_date = dueDate;
+        patch.due_time = dueTime;
+        patch.due_at = dueAtIso(dueDate, dueTime, tenantTz(tenantId));
+      }
 
       const cols = Object.keys(patch).filter((c) => patch[c] !== undefined);
       run(`UPDATE action_items SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ? AND tenant_id = ?`,

@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { date as fmtDate } from '../../lib/format';
+import {
+  date as fmtDate, clockTime, workspaceToday, workspaceTime,
+} from '../../lib/format';
 import { useToast } from '../../components/ui';
 import { HOME_KEY, useHomeFeed } from '../MobileApp';
 import {
@@ -104,7 +106,9 @@ export default function MobileHome() {
                 title={it.title}
                 meta={[
                   it.client_name,
-                  it.due_date ? `due ${fmtDate(it.due_date, 'day')}` : null,
+                  it.due_date
+                    ? `due ${fmtDate(it.due_date, 'day')}${it.due_time ? `, ${clockTime(it.due_time)}` : ''}`
+                    : null,
                 ].filter(Boolean).join(' · ')}
                 right={(
                   <span className="flex items-center gap-2">
@@ -209,17 +213,34 @@ function Tile2({ icon, label, count, tone, onClick }: {
   );
 }
 
+/** The next whole hour on the workspace clock, capped inside the same day. */
+const nextHour = () => {
+  const [h] = workspaceTime().split(':').map(Number);
+  return h >= 22 ? '23:59' : `${String(h + 1).padStart(2, '0')}:00`;
+};
+
 function CreateTaskSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [title, setTitle] = useState('');
-  const [dueDate, setDueDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState(workspaceToday());
+  // The sheet opens on today, so it opens needing a time. An hour ahead, on the
+  // hour, is the answer most people would have typed anyway.
+  const [dueTime, setDueTime] = useState(nextHour);
   const [priority, setPriority] = useState<typeof PRIORITIES[number]>('medium');
+
+  const isToday = dueDate === workspaceToday();
+  const dueProblem = !isToday ? ''
+    : !dueTime ? 'A task due today needs a time.'
+      : dueTime < workspaceTime()
+        ? `${clockTime(dueTime)} has already passed — it is ${clockTime(workspaceTime())} now.`
+        : '';
 
   const create = useMutation({
     mutationFn: () => api.post('/action-items', {
       title: title.trim(),
       due_date: dueDate || null,
+      due_time: dueDate ? (dueTime || null) : null,
       priority,
     }),
     onSuccess: () => {
@@ -227,6 +248,7 @@ function CreateTaskSheet({ open, onClose }: { open: boolean; onClose: () => void
       qc.invalidateQueries({ queryKey: HOME_KEY });
       setTitle('');
       setPriority('medium');
+      setDueTime(nextHour());
       onClose();
     },
     onError: (e: any) => toast.error(e.message),
@@ -237,7 +259,7 @@ function CreateTaskSheet({ open, onClose }: { open: boolean; onClose: () => void
       open={open} onClose={onClose} title="New task"
       footer={(
         <MButton variant="primary" full loading={create.isPending}
-          disabled={title.trim().length < 2} onClick={() => create.mutate()}>
+          disabled={title.trim().length < 2 || !!dueProblem} onClick={() => create.mutate()}>
           Create task
         </MButton>
       )}
@@ -248,10 +270,25 @@ function CreateTaskSheet({ open, onClose }: { open: boolean; onClose: () => void
           onChange={(e) => setTitle(e.target.value)} />
       </MField>
 
-      <MField label="Due date">
-        <input type="date" className={inputClass} value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)} />
-      </MField>
+      <div className="grid grid-cols-2 gap-3">
+        <MField label="Due date">
+          <input type="date" className={inputClass} value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)} />
+        </MField>
+        <MField label={isToday ? 'Due time *' : 'Due time'}>
+          <input type="time" className={inputClass} value={dueTime} disabled={!dueDate}
+            min={isToday ? workspaceTime() : undefined}
+            onChange={(e) => setDueTime(e.target.value)} />
+        </MField>
+      </div>
+      {dueProblem
+        ? <p className="-mt-1 mb-3 text-[12px] text-[var(--negative)]">{dueProblem}</p>
+        : (
+          <p className="-mt-1 mb-3 text-[12px] text-subtle">
+            {isToday ? 'A same-day task goes overdue the minute this time passes.'
+              : 'Optional — left blank it is due by the end of that day.'}
+          </p>
+        )}
 
       <MField label="Priority">
         <div className="grid grid-cols-4 gap-2">

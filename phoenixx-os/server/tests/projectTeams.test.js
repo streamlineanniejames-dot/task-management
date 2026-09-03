@@ -166,7 +166,9 @@ describe('taking someone off a team', () => {
 
     const item = await api.post('/action-items', {
       title: 'Ship the campaign', owner_id: priya.id, client_id: client.id,
-      project_id: p.id, due_date: new Date().toISOString().slice(0, 10),
+      // Tomorrow, deliberately: this test is about who may leave a project, and
+      // a due date of today would drag the same-day time rule into it.
+      project_id: p.id, due_date: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
     }, { token });
     assert.equal(item.status, 201, JSON.stringify(item.body));
 

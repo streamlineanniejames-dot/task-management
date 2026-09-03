@@ -12,7 +12,7 @@ import {
   CalendarCheck, CalendarClock, CheckCircle2, Circle, ListTodo, MapPin, PhoneCall, Plus, Users, Video, X,
 } from 'lucide-react';
 import { api } from '../../lib/api';
-import { date as fmtDate, time as fmtTime } from '../../lib/format';
+import { date as fmtDate, time as fmtTime, clockTime, dueLabel } from '../../lib/format';
 import { useToast } from '../../components/ui';
 import { clock } from '../../components/PersonalTodos';
 import { openUrl } from '../../lib/openUrl';
@@ -122,7 +122,10 @@ export default function MobileToday() {
             <List>
               {(mine.data.upcoming as any[]).slice(0, 6).map((it) => (
                 <Row key={it.id} title={it.title}
-                  meta={[it.client_name, `due ${fmtDate(it.due_date, 'day')}`].filter(Boolean).join(' · ')}
+                  meta={[
+                    it.client_name,
+                    `due ${fmtDate(it.due_date, 'day')}${it.due_time ? `, ${clockTime(it.due_time)}` : ''}`,
+                  ].filter(Boolean).join(' · ')}
                   right={<CalendarClock size={16} />} />
               ))}
             </List>
@@ -162,7 +165,11 @@ function OverdueList({ items }: { items: any[] }) {
         <Row
           key={it.id}
           title={it.title}
-          meta={[it.client_name, `was due ${fmtDate(it.due_date, 'day')}`].filter(Boolean).join(' · ')}
+          meta={[
+            it.client_name,
+            `was due ${fmtDate(it.due_date, 'day')}${it.due_time ? `, ${clockTime(it.due_time)}` : ''}`,
+            dueLabel(it),
+          ].filter(Boolean).join(' · ')}
           right={(
             <button type="button" aria-label={`Mark ${it.title} done`}
               onClick={() => complete.mutate(it.id)} className="text-subtle active:text-positive">

@@ -279,7 +279,12 @@ CREATE TABLE IF NOT EXISTS action_items (
   category_id TEXT REFERENCES action_categories(id),
   priority TEXT NOT NULL DEFAULT 'medium', -- low|medium|high|urgent
   status TEXT NOT NULL DEFAULT 'open',     -- open|in_progress|blocked|done|cancelled
-  due_date TEXT,
+  -- The due date is three columns, not one: the workspace-local day, the
+  -- optional workspace-local time on it, and the UTC instant the two resolve
+  -- to. See lib/dueTime.js for why every one of them earns its place.
+  due_date TEXT,                           -- YYYY-MM-DD, workspace-local
+  due_time TEXT,                           -- HH:MM 24h, workspace-local, or NULL
+  due_at TEXT,                             -- UTC instant; end of day when untimed
   started_at TEXT,
   completed_at TEXT,
   -- Done is the assignee's word; validated is the creator's. NULL until the
@@ -307,6 +312,11 @@ CREATE TABLE IF NOT EXISTS action_items (
 CREATE INDEX IF NOT EXISTS ix_ai_tenant_status ON action_items(tenant_id, status, due_date);
 CREATE INDEX IF NOT EXISTS ix_ai_owner ON action_items(tenant_id, owner_id, status);
 CREATE INDEX IF NOT EXISTS ix_ai_updated ON action_items(tenant_id, updated_at);
+-- ix_ai_due_at, over the new due_at column, is created in db/index.js instead:
+-- this file runs before the additive ALTERs, so on an existing database the
+-- column it indexes does not exist yet.
+
+
 
 CREATE TABLE IF NOT EXISTS action_watchers (
   id TEXT PRIMARY KEY,

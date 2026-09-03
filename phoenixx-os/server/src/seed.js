@@ -26,6 +26,7 @@ if (reset) {
 
 const { db, get, all, run, migrate, tx } = await import('./db/index.js');
 const { uuid, nowIso, todayIso, addDays, addMonths, monthIso, startOfMonth } = await import('./lib/util.js');
+const { DEFAULT_TZ, dueAtIso } = await import('./lib/dueTime.js');
 const { provisionTenant } = await import('./services/provisioning.js');
 const { createInvoice, syncHrCosts } = await import('./services/invoicing.js');
 const { scoreAllClients } = await import('./services/scoring.js');
@@ -522,10 +523,10 @@ function seedPhoenixx() {
     { title: 'Publish August performance report for Cotton India', client: 'Cotton India Textiles', owner: 'priya@phoenixxit.com', cat: 'delivery', pri: 'high', due: 1 },
     { title: 'Creative refresh - Aroma Kitchens festive campaign', client: 'Aroma Kitchens & Catering', owner: 'rahul@phoenixxit.com', cat: 'delivery', pri: 'urgent', due: -4 },
     { title: 'Resolve delivery-delay grievance with Aroma Kitchens', client: 'Aroma Kitchens & Catering', owner: 'divya@phoenixxit.com', cat: 'grievance', pri: 'urgent', due: -2 },
-    { title: 'Send automation proposal to Vertex Precision', client: 'Vertex Precision Tools', owner: 'vignesh@phoenixxit.com', cat: 'outreach_pitch', pri: 'high', due: 0 },
+    { title: 'Send automation proposal to Vertex Precision', client: 'Vertex Precision Tools', owner: 'vignesh@phoenixxit.com', cat: 'outreach_pitch', pri: 'high', due: 0, at: '16:00' },
     { title: 'Follow up: Kadambari Silks branding case studies', client: 'Kadambari Silks', owner: 'sundar@phoenixxit.com', cat: 'follow_up', pri: 'medium', due: 1 },
     { title: 'Southern Spice pitch deck walkthrough', client: 'Southern Spice Restaurants', owner: 'sundar@phoenixxit.com', cat: 'outreach_pitch', pri: 'high', due: -1 },
-    { title: 'ThermaCool UAT round 2 with client team', client: 'ThermaCool HVAC Systems', owner: 'vignesh@phoenixxit.com', cat: 'delivery', pri: 'high', due: 3 },
+    { title: 'ThermaCool UAT round 2 with client team', client: 'ThermaCool HVAC Systems', owner: 'vignesh@phoenixxit.com', cat: 'delivery', pri: 'high', due: 3, at: '15:00' },
     { title: 'Nilgiri Estate onboarding kickoff call', client: 'Nilgiri Estate Resorts', owner: 'karthik@phoenixxit.com', cat: 'delivery', pri: 'medium', due: 2 },
     { title: 'Weave & Co. Q3 catalogue shoot planning', client: 'Weave & Co. Ecommerce', owner: 'aishwarya@phoenixxit.com', cat: 'delivery', pri: 'medium', due: 5 },
     { title: 'Chase payment on PHX invoice - Kongu Steel', client: 'Kongu Steel Traders', owner: 'meera@phoenixxit.com', cat: 'follow_up', pri: 'high', due: -6 },
@@ -534,30 +535,36 @@ function seedPhoenixx() {
     { title: 'Quarterly tooling cost review', owner: 'meera@phoenixxit.com', cat: 'internal', pri: 'low', due: 12 },
     { title: 'Interview shortlist for Performance Marketer role', owner: 'sanjay@phoenixxit.com', cat: 'internal', pri: 'medium', due: 2 },
     { title: 'Sree Balaji microsite content sign-off', client: 'Sree Balaji Constructions', owner: 'aishwarya@phoenixxit.com', cat: 'delivery', pri: 'medium', due: 6 },
-    { title: 'GreenBuild Infra discovery call', client: 'GreenBuild Infra', owner: 'nithya@phoenixxit.com', cat: 'follow_up', pri: 'medium', due: 0 },
+    { title: 'GreenBuild Infra discovery call', client: 'GreenBuild Infra', owner: 'nithya@phoenixxit.com', cat: 'follow_up', pri: 'medium', due: 0, at: '11:30' },
   ];
 
   for (const it of items) {
     const id = uuid();
     const dueDate = addDays(new Date(), it.due).toISOString().slice(0, 10);
+    // `at` is the workspace-local hour a task is wanted by. A few carry one so
+    // the same-day workflow has something to show on a fresh install.
+    const dueTime = it.at ?? null;
+    const dueAt = dueAtIso(dueDate, dueTime, DEFAULT_TZ);
     run(
       `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id,
-         project_id, category_id, priority, status, due_date, recurrence, source_type,
+         project_id, category_id, priority, status, due_date, due_time, due_at, recurrence, source_type,
          estimate_minutes, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?,?, 'manual', ?, ?, ?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?,?,?,?, 'manual', ?, ?, ?)`,
       [id, tenantId, it.title, null, users[it.owner], ownerId,
         it.client ? clientIds[it.client] : null,
         it.client ? projectIds[it.client] ?? null : null,
-        cats[it.cat], it.pri, dueDate, it.recurrence ?? null,
+        cats[it.cat], it.pri, dueDate, dueTime, dueAt, it.recurrence ?? null,
         60 * (2 + Math.floor(Math.random() * 6)),
         addDays(new Date(), -(3 + Math.floor(Math.random() * 20))).toISOString(), ts],
     );
     const owner = get('SELECT manager_id FROM users WHERE id = ?', [users[it.owner]]);
     upsertDeadline({
-      tenantId, sourceType: 'action_item', sourceId: id, title: it.title, dueAt: dueDate,
+      tenantId, sourceType: 'action_item', sourceId: id, title: it.title, dueAt: dueAt || dueDate,
       ownerId: users[it.owner], escalateToId: owner?.manager_id,
       escalationDays: get('SELECT escalation_days FROM action_categories WHERE id = ?', [cats[it.cat]])?.escalation_days ?? 3,
-      meta: { priority: it.pri, client: it.client },
+      meta: {
+        priority: it.pri, client: it.client, timed: !!dueTime, due_date: dueDate, due_time: dueTime,
+      },
     });
   }
 
@@ -607,14 +614,14 @@ function seedPhoenixx() {
 
       run(
         `INSERT INTO action_items (id, tenant_id, title, owner_id, created_by, client_id, project_id,
-           category_id, priority, status, due_date, completed_at, source_type, estimate_minutes,
+           category_id, priority, status, due_date, due_at, completed_at, source_type, estimate_minutes,
            created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'manual', ?, ?, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'manual', ?, ?, ?)`,
         [uuid(), tenantId, `${title} - ${client.name.split(' ')[0]}`,
           users[owner.email], ownerId, clientIds[client.name], projectIds[client.name] ?? null,
           cats.delivery, pick(['low', 'medium', 'high'], i),
           done ? 'done' : (monthsAgo === 0 ? 'in_progress' : 'open'),
-          dueIso,
+          dueIso, dueAtIso(dueIso, null, DEFAULT_TZ),
           done ? addDays(dueIso, lateBy).toISOString() : null,
           estimate,
           addDays(dueIso, -12).toISOString(), ts],

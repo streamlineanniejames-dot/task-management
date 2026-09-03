@@ -157,6 +157,7 @@ router.post('/test', requires('settings', 'edit'), async (req, res) => {
     channels: [channel],
     vars: {
       title: 'Sample action item', priority: 'high', due_date: todayIso(), when: 'tomorrow',
+      due_time: '4:00 PM', due: `${todayIso()} · 4:00 PM`, overdue_for: '2 hours',
       client: 'Sample Client', number: 'PHX/2026-27/0001', amount: '₹1,18,000',
       balance: '₹18,000', days_overdue: 2, level: 1, reason: 'sample escalation',
       from: req.auth.name, days: 2, leave_type: 'Casual Leave', status: 'approved',

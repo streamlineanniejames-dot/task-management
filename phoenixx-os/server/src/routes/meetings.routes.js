@@ -4,6 +4,9 @@ import { get, all, run, repo, tx } from '../db/index.js';
 import { uuid, nowIso } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, audit, paginate, pageMeta } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
+import {
+  DEFAULT_TZ, DUE_DATE_RE, DUE_TIME_RE, dueAtIso, todayInTz, timeInTz, formatDueTime,
+} from '../lib/dueTime.js';
 import { upsertDeadline } from '../services/deadlines.js';
 import { notifyMany } from '../services/notifications.js';
 
@@ -107,11 +110,22 @@ router.post('/', requires('meetings', 'create'), (req, res) => {
 
   const attendeeIds = (body.attendees || []).map((a) => a.user_id).filter((x) => x && x !== userId);
   if (attendeeIds.length) {
+    // Read on the workspace clock: an invite that names the hour is worth more
+    // than one that only names the day.
+    const tz = req.tenant?.timezone || DEFAULT_TZ;
+    const at = new Date(body.scheduled_at);
+    const day = todayInTz(tz, at);
     notifyMany({
       tenantId,
       userIds: attendeeIds,
       eventKey: 'action_item.assigned',
-      vars: { title: `Meeting: ${body.title}`, priority: 'medium', due_date: body.scheduled_at.slice(0, 10) },
+      vars: {
+        title: `Meeting: ${body.title}`,
+        priority: 'medium',
+        due_date: day,
+        due_time: formatDueTime(timeInTz(tz, at)),
+        due: `${day} · ${formatDueTime(timeInTz(tz, at))}`,
+      },
       link: `/meetings/${id}`,
     }).catch(() => {});
   }
@@ -217,24 +231,30 @@ router.post('/:id/mom/:pointId/convert', requires('action_items', 'create'), (re
 
   const body = validate(z.object({
     owner_id: z.string().optional(),
-    due_date: z.string().optional(),
+    due_date: z.string().regex(DUE_DATE_RE).optional(),
+    /** A point can be converted straight onto an hour of the day. */
+    due_time: z.string().regex(DUE_TIME_RE).optional().nullable(),
     priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
     category_id: z.string().optional(),
   }), req.body || {});
 
   const id = uuid();
   const ts = nowIso();
+  const tz = req.tenant?.timezone || DEFAULT_TZ;
+  const dueDate = body.due_date || point.due_date || null;
+  const dueTime = body.due_time ?? null;
 
   tx(() => {
     run(
       `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id,
-         project_id, category_id, priority, status, due_date, source_type, source_id, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?, 'mom', ?, ?, ?)`,
+         project_id, category_id, priority, status, due_date, due_time, due_at, source_type, source_id,
+         created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?, 'open', ?,?,?, 'mom', ?, ?, ?)`,
       [id, tenantId, point.text.slice(0, 240),
         `From MOM of "${point.meeting_title}".`,
         body.owner_id || point.owner_id || userId, userId, point.client_id, point.project_id,
         body.category_id ?? null, body.priority || 'medium',
-        body.due_date || point.due_date || null, point.id, ts, ts],
+        dueDate, dueTime, dueAtIso(dueDate, dueTime, tz), point.id, ts, ts],
     );
     run('UPDATE mom_points SET action_item_id = ?, kind = ?, updated_at = ? WHERE id = ?',
       [id, 'action', ts, point.id]);
@@ -248,10 +268,15 @@ router.post('/:id/mom/:pointId/convert', requires('action_items', 'create'), (re
       sourceType: 'action_item',
       sourceId: id,
       title: item.title,
-      dueAt: item.due_date,
+      dueAt: item.due_at || item.due_date,
       ownerId: item.owner_id,
       escalateToId: owner?.manager_id,
-      meta: { priority: item.priority },
+      meta: {
+        priority: item.priority,
+        timed: !!item.due_time,
+        due_date: item.due_date,
+        due_time: item.due_time || null,
+      },
     });
   }
 
@@ -270,17 +295,18 @@ router.post('/:id/finalize', requires('meetings', 'edit'), (req, res) => {
     "SELECT * FROM mom_points WHERE meeting_id = ? AND kind = 'action' AND action_item_id IS NULL",
     [meeting.id],
   );
+  const tz = req.tenant?.timezone || DEFAULT_TZ;
   const createdIds = tx(() => {
     const out = [];
     for (const p of pending) {
       const id = uuid();
       run(
         `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id,
-           project_id, priority, status, due_date, source_type, source_id, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?, 'medium', 'open', ?, 'mom', ?, ?, ?)`,
+           project_id, priority, status, due_date, due_at, source_type, source_id, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?, 'medium', 'open', ?,?, 'mom', ?, ?, ?)`,
         [id, tenantId, p.text.slice(0, 240), `From MOM of "${meeting.title}".`,
           p.owner_id || userId, userId, meeting.client_id, meeting.project_id,
-          p.due_date, p.id, nowIso(), nowIso()],
+          p.due_date, dueAtIso(p.due_date, null, tz), p.id, nowIso(), nowIso()],
       );
       run('UPDATE mom_points SET action_item_id = ? WHERE id = ?', [id, p.id]);
       out.push(id);
@@ -295,7 +321,9 @@ router.post('/:id/finalize', requires('meetings', 'edit'), (req, res) => {
     if (item.due_date) {
       upsertDeadline({
         tenantId, sourceType: 'action_item', sourceId: id, title: item.title,
-        dueAt: item.due_date, ownerId: item.owner_id, meta: { priority: item.priority },
+        dueAt: item.due_at || item.due_date,
+        ownerId: item.owner_id,
+        meta: { priority: item.priority, timed: false, due_date: item.due_date, due_time: null },
       });
     }
   }

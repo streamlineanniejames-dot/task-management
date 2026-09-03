@@ -96,7 +96,7 @@ function providerFor(channel) {
 export const DEFAULT_TEMPLATES = {
   'action_item.assigned': {
     subject: 'New action item: {{title}}',
-    body: 'Hi {{user.name}}, you have been assigned "{{title}}" ({{priority}}) due {{due_date}}.',
+    body: 'Hi {{user.name}}, you have been assigned "{{title}}" ({{priority}}) due {{due}}.',
   },
   'action_item.update_due': {
     subject: 'Daily update pending on {{count}} task(s)',
@@ -120,11 +120,11 @@ export const DEFAULT_TEMPLATES = {
   },
   'action_item.due_soon': {
     subject: 'Due {{when}}: {{title}}',
-    body: 'Reminder - "{{title}}" is due {{when}} ({{due_date}}). Client: {{client}}.',
+    body: 'Reminder - "{{title}}" is due {{when}} ({{due}}). Client: {{client}}.',
   },
   'action_item.overdue': {
     subject: 'OVERDUE: {{title}}',
-    body: '"{{title}}" was due {{due_date}} and is now {{days_overdue}} day(s) overdue.',
+    body: '"{{title}}" was due {{due}} and is now {{overdue_for}} overdue.',
   },
   'chat.broadcast': {
     subject: 'Announcement from {{author}}',

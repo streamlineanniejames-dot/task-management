@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CircleAlert, Send } from 'lucide-react';
 import { api } from '../lib/api';
-import { relative, dateTime } from '../lib/format';
+import { relative, dateTime, dueLabel } from '../lib/format';
 import {
   Avatar, Badge, Button, Field, Input, Modal, Select, Textarea, cx, useToast,
 } from './ui';
@@ -217,7 +217,7 @@ export function NeedsUpdateRow({ task, onLog }: { task: any; onLog: () => void }
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13.5px] text-ink">{task.title}</span>
         <span className="text-[12px] text-subtle">
-          {[task.client_name, task.due_date && `due ${relative(task.due_date)}`].filter(Boolean).join(' · ')
+          {[task.client_name, task.due_date && `due ${dueLabel(task)}`].filter(Boolean).join(' · ')
             || 'no due date'}
         </span>
       </span>

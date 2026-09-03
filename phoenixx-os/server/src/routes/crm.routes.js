@@ -304,9 +304,9 @@ router.get('/clients/:id', requires('crm', 'view'), (req, res) => {
       [client.id],
     ),
     action_items: all(
-      `SELECT a.id, a.title, a.status, a.due_date, a.priority, u.name AS owner_name
+      `SELECT a.id, a.title, a.status, a.due_date, a.due_time, a.due_at, a.priority, u.name AS owner_name
          FROM action_items a LEFT JOIN users u ON u.id = a.owner_id
-        WHERE a.client_id = ? AND a.deleted_at IS NULL ORDER BY a.due_date LIMIT 30`,
+        WHERE a.client_id = ? AND a.deleted_at IS NULL ORDER BY a.due_at LIMIT 30`,
       [client.id],
     ),
     stage_history: all('SELECT * FROM stage_history WHERE client_id = ? ORDER BY changed_at DESC LIMIT 20', [client.id]),

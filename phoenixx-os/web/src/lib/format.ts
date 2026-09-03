@@ -100,6 +100,100 @@ export function daysUntil(iso?: string | null): number | null {
   return Math.round((target.getTime() - Date.now()) / 86_400_000);
 }
 
+// ------------------------------------------------------- due date + due time
+/**
+ * A due date is a day on the workspace calendar, optionally with a time on it.
+ * The server stores all three - the day, the time, and the instant they resolve
+ * to - and everything below reads them the same way, so a task reads "today ·
+ * 4:00 PM" on the register, on My Day and in the drawer without any of the
+ * three doing its own arithmetic.
+ */
+export type Due = {
+  due_date?: string | null;
+  due_time?: string | null;
+  due_at?: string | null;
+  is_overdue?: boolean;
+  status?: string | null;
+};
+
+const workspaceParts = (d = new Date()) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: timezone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+}).formatToParts(d).reduce<Record<string, string>>((a, p) => ({ ...a, [p.type]: p.value }), {});
+
+/** Today on the workspace calendar - the day a date picker's "today" means. */
+export function workspaceToday(d = new Date()) {
+  const p = workspaceParts(d);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/** The workspace clock right now as 'HH:MM' - the floor for a same-day time. */
+export function workspaceTime(d = new Date()) {
+  const p = workspaceParts(d);
+  return `${String(Number(p.hour) % 24).padStart(2, '0')}:${p.minute}`;
+}
+
+/** '16:00' as the reader would say it. */
+export function clockTime(hhmm?: string | null) {
+  if (!hhmm || !/^([01]\d|2[0-3]):[0-5]\d$/.test(hhmm)) return '';
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+/** Whole days from today to a workspace-local date. */
+export function daysAway(dateStr?: string | null): number | null {
+  if (!dateStr) return null;
+  return Math.round(
+    (Date.parse(`${dateStr}T00:00:00Z`) - Date.parse(`${workspaceToday()}T00:00:00Z`)) / 86_400_000,
+  );
+}
+
+/** Late or not, asked of the instant so a 4pm task is late at 4:01pm. */
+export function isOverdue(item?: Due | null) {
+  if (!item) return false;
+  if (['done', 'cancelled'].includes(item.status || '')) return false;
+  if (typeof item.is_overdue === 'boolean') return item.is_overdue;
+  return !!item.due_at && Date.parse(item.due_at) < Date.now();
+}
+
+/** How late something is, in the shortest unit that stays honest. */
+export function overdueBy(dueAt?: string | null) {
+  if (!dueAt) return '';
+  const minutes = Math.floor((Date.now() - Date.parse(dueAt)) / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m overdue`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h overdue`;
+  const days = Math.floor(hours / 24);
+  return `${days}d overdue`;
+}
+
+/** "today · 4:00 PM" / "tomorrow" / "in 3 days · 9:30 AM" / "2h overdue". */
+export function dueLabel(item?: Due | null) {
+  if (!item?.due_date) return '—';
+  if (isOverdue(item)) return overdueBy(item.due_at || `${item.due_date}T23:59:00`);
+
+  const days = daysAway(item.due_date);
+  const when = days === 0 ? 'today'
+    : days === 1 ? 'tomorrow'
+      : days != null && days > 1 && days < 30 ? `in ${days} days`
+        : date(item.due_date, 'day');
+
+  const at = clockTime(item.due_time);
+  return at ? `${when} · ${at}` : when;
+}
+
+/** The long form for a detail panel: "3 Sep 2026 · 4:00 PM". */
+export function dueFull(item?: Due | null) {
+  if (!item?.due_date) return '—';
+  const at = clockTime(item.due_time);
+  return at ? `${date(item.due_date)} · ${at}` : date(item.due_date);
+}
+
 export const monthLabel = (m?: string | null) => (m ? date(`${m}-01`, 'month') : '—');
 
 export const initials = (name?: string | null) =>

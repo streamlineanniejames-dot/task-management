@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { money, date, dateTime, relative, percent, titleCase, daysUntil } from '../lib/format';
+import { money, date, dateTime, relative, percent, titleCase, daysUntil, dueLabel } from '../lib/format';
 import {
   Avatar, Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Input, Meter,
   Modal, PageHeader, Select, StatusBadge, Table, TD, TH, THead, TR, Tabs, Textarea,
@@ -475,7 +475,7 @@ function WorkTab({ client }: { client: any }) {
                 <TR key={a.id} onClick={() => navigate(`/action-items?open=${a.id}`)}>
                   <TD className="font-medium">{a.title}</TD>
                   <TD><span className="text-muted text-[13px]">{a.owner_name || '—'}</span></TD>
-                  <TD><span className="text-muted text-[13px]">{relative(a.due_date)}</span></TD>
+                  <TD><span className="text-muted text-[13px]">{dueLabel(a)}</span></TD>
                   <TD><StatusBadge status={a.status} /></TD>
                 </TR>
               ))}

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config.js';
+import { dueAtIso, DEFAULT_TZ } from '../lib/dueTime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,7 +19,25 @@ export function migrate() {
   const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(sql);
   addColumns();
+  addIndexes();
   backfill();
+}
+
+/**
+ * Indexes over columns that arrive through `ADDED_COLUMNS`. They cannot live in
+ * schema.sql: that file is applied before the ALTERs, so on an existing
+ * database the column would not be there yet and the CREATE INDEX would fail
+ * the whole migration.
+ */
+const ADDED_INDEXES = [
+  // Overdue is asked of the instant now, on every list, counter and My Day.
+  ['action_items', 'due_at', 'CREATE INDEX IF NOT EXISTS ix_ai_due_at ON action_items(tenant_id, status, due_at)'],
+];
+
+function addIndexes() {
+  for (const [table, column, sql] of ADDED_INDEXES) {
+    if (tableExists(table) && hasColumn(table, column)) db.exec(sql);
+  }
 }
 
 /**
@@ -36,6 +55,27 @@ function backfill() {
                 SET validation_status = 'validated',
                     validated_at = COALESCE(completed_at, updated_at)
               WHERE status = 'done' AND validation_status IS NULL`);
+  }
+
+  // Every task that predates same-day scheduling has a date and no time, which
+  // has always meant "by the end of that day" - so that is the instant it gets.
+  // Resolved per tenant because the day ends at a different moment in each
+  // workspace timezone. Idempotent: only rows with no instant are touched.
+  if (tableExists('action_items') && hasColumn('action_items', 'due_at')) backfillDueAt();
+}
+
+function backfillDueAt() {
+  const stale = db.prepare(
+    `SELECT a.id, a.due_date, a.due_time, COALESCE(t.timezone, ?) AS tz
+       FROM action_items a LEFT JOIN tenants t ON t.id = a.tenant_id
+      WHERE a.due_date IS NOT NULL AND a.due_date != '' AND a.due_at IS NULL`,
+  ).all(DEFAULT_TZ);
+  if (!stale.length) return;
+
+  const stmt = db.prepare('UPDATE action_items SET due_at = ? WHERE id = ?');
+  for (const row of stale) {
+    const at = dueAtIso(row.due_date, row.due_time, row.tz);
+    if (at) stmt.run(at, row.id);
   }
 }
 
@@ -85,6 +125,12 @@ const ADDED_COLUMNS = [
   // How many times the work has come back for changes. Drives the "2nd
   // attempt" hint in the UI and is the number a manager actually wants.
   ['action_items', 'rework_count', 'INTEGER NOT NULL DEFAULT 0'],
+  // Same-day scheduling. `due_time` is the workspace-local 'HH:MM' the task is
+  // wanted by, NULL for a task that is simply due that day; `due_at` is the UTC
+  // instant the date and time resolve to and is what every overdue test reads.
+  // Both nullable: a task with no due date has neither.
+  ['action_items', 'due_time', 'TEXT'],
+  ['action_items', 'due_at', 'TEXT'],
 ];
 
 function addColumns() {

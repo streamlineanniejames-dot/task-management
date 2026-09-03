@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { date, dateTime, relative, time, daysUntil } from '../lib/format';
+import { date, dateTime, relative, time, daysUntil, dueLabel, dueFull, isOverdue } from '../lib/format';
 import {
   Badge, Button, Card, CardHeader, EmptyState, PageHeader, Skeleton, StatusBadge,
   useToast, cx, Stat,
@@ -147,8 +147,7 @@ export default function Home() {
             ) : (
               <ul className="divide-y divide-[var(--border)]">
                 {data.today_items.map((item: any) => {
-                  const days = daysUntil(item.due_date);
-                  const overdue = days != null && days < 0;
+                  const overdue = isOverdue(item);
                   return (
                     <li key={item.id} className="flex items-start gap-3 px-4 py-3 row-hover">
                       <button
@@ -171,8 +170,9 @@ export default function Home() {
                                 <Users2 size={11} />shared
                               </span>
                             )}
-                            <span className={cx(overdue && 'text-[var(--negative)] font-medium')}>
-                              {overdue ? `${Math.abs(days!)} day${Math.abs(days!) > 1 ? 's' : ''} overdue` : `due ${relative(item.due_date)}`}
+                            <span className={cx(overdue && 'text-[var(--negative)] font-medium')}
+                              title={dueFull(item)}>
+                              {overdue ? dueLabel(item) : `due ${dueLabel(item)}`}
                             </span>
                             {item.escalation_level > 0 && <Badge tone="negative">escalated L{item.escalation_level}</Badge>}
                           </div>

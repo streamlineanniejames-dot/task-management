@@ -3,8 +3,12 @@ import { z } from 'zod';
 import { get, all, run, repo, tx } from '../db/index.js';
 import { uuid, nowIso, todayIso, parseJson, toCsv } from '../lib/util.js';
 import {
-  ok, created, validate, notFound, badRequest, forbidden, audit, paginate, pageMeta, sortClause,
+  ok, created, validate, notFound, badRequest, forbidden, unprocessable, audit, paginate, pageMeta,
+  sortClause,
 } from '../lib/http.js';
+import {
+  DEFAULT_TZ, DUE_DATE_RE, DUE_TIME_RE, dueAtIso, todayInTz, timeInTz, formatDueTime, formatDue,
+} from '../lib/dueTime.js';
 import { requires, can } from '../middleware/rbac.js';
 import { scopeFilter } from '../middleware/auth.js';
 import { upsertDeadline, resolveDeadline, resolveEscalations, raiseEscalation } from '../services/deadlines.js';
@@ -33,7 +37,12 @@ const itemSchema = z.object({
   category_id: z.string().optional().nullable(),
   priority: z.enum(PRIORITIES).optional(),
   status: z.enum(STATUSES).optional(),
-  due_date: z.string().optional().nullable(),
+  /** The workspace-local day it is wanted by. */
+  due_date: z.union([z.string().regex(DUE_DATE_RE, 'Use a date like 2026-09-03'), z.literal('')])
+    .optional().nullable(),
+  /** The workspace-local time on that day, 24-hour. Optional except today. */
+  due_time: z.union([z.string().regex(DUE_TIME_RE, 'Use a time like 16:00'), z.literal('')])
+    .optional().nullable(),
   recurrence: z.enum(['none', 'daily', 'weekly', 'monthly']).optional().nullable(),
   recurrence_until: z.string().optional().nullable(),
   estimate_minutes: z.number().int().min(0).optional().nullable(),
@@ -45,7 +54,10 @@ const itemSchema = z.object({
 });
 
 const SORTS = {
-  due_date: 'a.due_date',
+  // Sorting by "due" means by the moment it is due, so two tasks on the same
+  // day come back in the order they are actually wanted.
+  due_date: 'a.due_at',
+  due_at: 'a.due_at',
   created_at: 'a.created_at',
   updated_at: 'a.updated_at',
   priority: `CASE a.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`,
@@ -71,6 +83,71 @@ const SELECT = `
     LEFT JOIN clients c ON c.id = a.client_id
     LEFT JOIN projects p ON p.id = a.project_id
     LEFT JOIN action_categories ac ON ac.id = a.category_id`;
+
+// ======================================================== DUE DATE + TIME
+/** The workspace clock. Every due-time rule is read against this, not the
+ *  server's timezone and not the browser's. */
+const tzOf = (req) => req.tenant?.timezone || DEFAULT_TZ;
+
+/**
+ * Works out the three due columns from whatever the caller sent, and enforces
+ * the two rules that only bite on the day somebody is standing in:
+ *
+ *  - a task due *today* has to say what time today, because "today" on its own
+ *    is not a plan once the morning is gone; and
+ *  - that time cannot already have passed.
+ *
+ * A future day may carry a time or not - both are ordinary - and a past day is
+ * left alone entirely, because backdating is how work that was always late gets
+ * recorded honestly. The rules are checked only when the due date or time is
+ * actually changing, so editing the priority of a task whose 4pm slot went by
+ * an hour ago is not blocked by a field nobody touched.
+ *
+ * Returns a patch of the three columns, or `{}` when neither was sent.
+ */
+function resolveDue(req, body, before = null) {
+  const touchesDate = body.due_date !== undefined;
+  const touchesTime = body.due_time !== undefined;
+  if (!touchesDate && !touchesTime) return {};
+
+  const tz = tzOf(req);
+  const dueDate = (touchesDate ? body.due_date : before?.due_date) || null;
+  const dueTime = (touchesTime ? body.due_time : before?.due_time) || null;
+
+  // No date means no deadline at all - a stray time would be a time on nothing.
+  if (!dueDate) return { due_date: null, due_time: null, due_at: null };
+
+  const changed = !before
+    || dueDate !== (before.due_date || null)
+    || dueTime !== (before.due_time || null);
+
+  if (changed && dueDate === todayInTz(tz)) {
+    const now = timeInTz(tz);
+    if (!dueTime) {
+      throw unprocessable('Validation failed', [{
+        field: 'due_time',
+        message: 'A task due today needs a time — say when today it is wanted by',
+      }]);
+    }
+    // 'HH:MM' on a 24-hour clock compares correctly as plain text.
+    if (dueTime < now) {
+      throw unprocessable('Validation failed', [{
+        field: 'due_time',
+        message: `${formatDueTime(dueTime)} has already passed — it is ${formatDueTime(now)} now`,
+      }]);
+    }
+  }
+
+  return { due_date: dueDate, due_time: dueTime, due_at: dueAtIso(dueDate, dueTime, tz) };
+}
+
+/**
+ * Overdue is a question about an instant, never about a day: a task due at 4pm
+ * is late at 4:01pm, and one due "Tuesday" is late once Tuesday is out. Both
+ * fall out of the same comparison because an untimed task stores the end of its
+ * own day as its instant.
+ */
+const OVERDUE_SQL = "a.due_at IS NOT NULL AND a.due_at < ? AND a.status NOT IN ('done','cancelled')";
 
 /** SQL that is true when :user is on the task, as owner or as an extra. */
 const IS_ASSIGNED = `(a.owner_id = ? OR EXISTS (
@@ -159,6 +236,9 @@ function notifyAssigned(req, item, userIds) {
       title: item.title,
       priority: item.priority,
       due_date: item.due_date || 'no date',
+      due_time: formatDueTime(item.due_time),
+      /** Date and time in one phrase, for templates that want the whole thing. */
+      due: formatDue(item.due_date, item.due_time),
       assigned_by: req.auth.name,
     },
     link: `/action-items?open=${item.id}`,
@@ -220,6 +300,11 @@ const withValidation = (req, row) => (row ? {
   ...row,
   can_validate: row.status === 'done' && row.validation_status === 'pending' && canValidate(req.auth, row),
   awaiting_validation: row.status === 'done' && row.validation_status === 'pending',
+  // Decided once, here, against the stored instant. Every screen that shades a
+  // row red reads this rather than re-deriving "late" from a date string and
+  // getting a 4pm task wrong for the rest of its own afternoon.
+  is_overdue: !!row.due_at && row.due_at < nowIso()
+    && !['done', 'cancelled'].includes(row.status),
 } : row);
 
 /**
@@ -267,12 +352,23 @@ function syncDeadline(tenantId, item) {
     sourceType: 'action_item',
     sourceId: item.id,
     title: item.title,
-    dueAt: item.due_date,
+    // The instant, not the day: a task due at 4pm has to reach the ladder as
+    // 4pm or the reminder before it and the breach after it both land wrong.
+    dueAt: item.due_at || item.due_date,
     ownerId: item.owner_id,
     escalateToId: owner?.manager_id,
     escalationDays: category?.escalation_days ?? 3,
     severity: item.priority === 'urgent' ? 'high' : 'normal',
-    meta: { priority: item.priority, client: client?.name },
+    meta: {
+      priority: item.priority,
+      client: client?.name,
+      // Tells the ladder whether this deadline names a time somebody chose or
+      // just the end of a day, which is what separates a 30-minute warning
+      // from a three-day one.
+      timed: !!item.due_time,
+      due_date: item.due_date,
+      due_time: item.due_time || null,
+    },
   });
 }
 
@@ -327,12 +423,12 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
   if (q.category_id) { filters.push('a.category_id = ?'); params.push(q.category_id); }
   if (q.due_before) { filters.push('a.due_date <= ?'); params.push(q.due_before); }
   if (q.due_after) { filters.push('a.due_date >= ?'); params.push(q.due_after); }
-  if (q.overdue === 'true') { filters.push("a.due_date < ? AND a.status NOT IN ('done','cancelled')"); params.push(todayIso()); }
+  if (q.overdue === 'true') { filters.push(OVERDUE_SQL); params.push(nowIso()); }
   if (q.escalated === 'true') filters.push('a.escalation_level > 0');
   if (q.search) { filters.push('(a.title LIKE ? OR a.description LIKE ?)'); params.push(`%${q.search}%`, `%${q.search}%`); }
 
   const where = filters.join(' AND ');
-  const order = sortClause(req, SORTS, "a.due_date IS NULL, a.due_date ASC, CASE a.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END");
+  const order = sortClause(req, SORTS, "a.due_at IS NULL, a.due_at ASC, CASE a.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END");
   const total = Number(get(`SELECT COUNT(*) AS n FROM action_items a WHERE ${where}`, params)?.n || 0);
   const rows = all(`${SELECT} WHERE ${where} ORDER BY ${order} LIMIT ? OFFSET ?`, [...params, limit, offset]);
 
@@ -347,9 +443,9 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
               COUNT(CASE WHEN a.status = 'done' AND a.validation_status = 'pending' THEN 1 END) AS awaiting_validation,
               COUNT(CASE WHEN a.validation_status = 'validated' THEN 1 END) AS validated,
               COUNT(CASE WHEN a.validation_status = 'changes_requested' THEN 1 END) AS changes_requested,
-              COUNT(CASE WHEN a.due_date < ? AND a.status NOT IN ('done','cancelled') THEN 1 END) AS overdue
+              COUNT(CASE WHEN ${OVERDUE_SQL} THEN 1 END) AS overdue
          FROM action_items a WHERE ${where}`,
-      [todayIso(), ...params],
+      [nowIso(), ...params],
     ),
     // Deliberately outside the filters: the sign-off badge has to read the same
     // on every tab, or it stops being something anyone trusts.
@@ -364,10 +460,11 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
 
 router.get('/export', requires('action_items', 'export'), (req, res) => {
   const rows = all(
-    `${SELECT} WHERE a.tenant_id = ? AND a.deleted_at IS NULL ORDER BY a.due_date`,
+    `${SELECT} WHERE a.tenant_id = ? AND a.deleted_at IS NULL ORDER BY a.due_at`,
     [req.auth.tenantId],
   ).map((r) => ({
     title: r.title, status: r.status, priority: r.priority, due_date: r.due_date,
+    due_time: r.due_time ? formatDueTime(r.due_time) : '',
     owner: r.owner_name, client: r.client_name, category: r.category_name,
     completed_at: r.completed_at, escalation_level: r.escalation_level,
   }));
@@ -389,7 +486,8 @@ router.get('/export', requires('action_items', 'export'), (req, res) => {
  */
 const UPDATE_SELECT = `
   SELECT au.*, u.name AS user_name, u.avatar_url, u.designation,
-         a.title AS task_title, a.status AS task_status, a.priority, a.due_date,
+         a.title AS task_title, a.status AS task_status, a.priority,
+         a.due_date, a.due_time, a.due_at,
          a.owner_id, c.name AS client_name
     FROM action_updates au
     JOIN users u ON u.id = au.user_id
@@ -556,7 +654,7 @@ router.get('/updates/mine', requires('action_items', 'view'), (req, res) => {
   const mine = all(
     `${SELECT} WHERE a.tenant_id = ? AND a.deleted_at IS NULL
        AND a.status NOT IN ('done','cancelled') AND ${IS_ASSIGNED}
-     ORDER BY a.due_date IS NULL, a.due_date,
+     ORDER BY a.due_at IS NULL, a.due_at,
        CASE a.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END`,
     [tenantId, userId, userId],
   );
@@ -567,7 +665,7 @@ router.get('/updates/mine', requires('action_items', 'view'), (req, res) => {
     [tenantId, userId, day],
   );
   const loggedFor = new Set(logged.map((u) => u.action_item_id));
-  const today = todayIso();
+  const today = todayInTz(tzOf(req));
 
   return ok(res, {
     date: day,
@@ -708,6 +806,7 @@ router.get('/updates/export', requires('action_items', 'export'), (req, res) => 
     client: u.client_name || '',
     task_status: u.task_status,
     due_date: u.due_date || '',
+    due_time: formatDueTime(u.due_time),
     completed_today: u.completed_today || '',
     in_progress: u.in_progress || '',
     pending: u.pending || '',
@@ -787,17 +886,19 @@ router.post('/', requires('action_items', 'create'), (req, res) => {
   }
   const ownerId = body.owner_id || fromTeam[0] || userId;
   const extras = [...(body.assignee_ids || []), ...fromTeam];
+  const due = resolveDue(req, body);
 
   const item = tx(() => {
     run(
       `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id,
-         project_id, category_id, priority, status, due_date, recurrence, recurrence_until,
+         project_id, category_id, priority, status, due_date, due_time, due_at, recurrence, recurrence_until,
          source_type, source_id, sop_id, estimate_minutes, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id, tenantId, body.title, body.description ?? null, ownerId, userId,
         body.client_id ?? null, body.project_id ?? body.assign_from_project_id ?? null,
         body.category_id ?? null,
-        body.priority || 'medium', body.status || 'open', body.due_date ?? null,
+        body.priority || 'medium', body.status || 'open',
+        due.due_date ?? null, due.due_time ?? null, due.due_at ?? null,
         body.recurrence ?? null, body.recurrence_until ?? null, body.source_type ?? 'manual',
         body.source_id ?? null, body.sop_id ?? null, body.estimate_minutes ?? null, ts, ts],
     );
@@ -828,6 +929,11 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
   delete patch.watchers;
   delete patch.assignee_ids;
   delete patch.assign_from_project_id;
+  // The three due columns are derived together or not at all - sending a bare
+  // time, or a date the caller has already missed, is settled here.
+  delete patch.due_date;
+  delete patch.due_time;
+  Object.assign(patch, resolveDue(req, body, before));
 
   if (body.status && body.status !== before.status) {
     const ts = nowIso();
@@ -1088,6 +1194,11 @@ router.post('/bulk', requires('action_items', 'edit'), (req, res) => {
       const ts = nowIso();
       const fields = { ...patch, updated_at: ts };
       delete fields.watchers;
+      // Each row is measured against its own current due date, so moving fifty
+      // tasks to Friday afternoon settles fifty instants rather than one.
+      delete fields.due_date;
+      delete fields.due_time;
+      Object.assign(fields, resolveDue(req, patch, before));
       if (patch.status && patch.status !== before.status) {
         // Signed-off work is not something a bulk action gets to reopen. One
         // item that cannot move must not fail the other ninety-nine, so it is
@@ -1122,16 +1233,19 @@ router.post('/bulk', requires('action_items', 'edit'), (req, res) => {
 // ------------------------------------------------------- my work (mobile)
 router.get('/me/today', requires('action_items', 'view'), (req, res) => {
   const { tenantId, userId } = req.auth;
-  const today = todayIso();
+  // The workspace calendar day, not UTC's - see resolveDue above.
+  const today = todayInTz(tzOf(req));
+  const now = nowIso();
+  const mine = `${SELECT} WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
+       AND a.status NOT IN ('done','cancelled')`;
   return ok(res, {
-    overdue: all(`${SELECT} WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
-       AND a.status NOT IN ('done','cancelled') AND a.due_date < ? ORDER BY a.due_date`,
-    [tenantId, userId, today]),
-    today: all(`${SELECT} WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
-       AND a.status NOT IN ('done','cancelled') AND a.due_date = ?`, [tenantId, userId, today]),
-    upcoming: all(`${SELECT} WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
-       AND a.status NOT IN ('done','cancelled') AND a.due_date > ? ORDER BY a.due_date LIMIT 10`,
-    [tenantId, userId, today]),
+    // A same-day task whose time has gone by is late, not still "today" - which
+    // is the whole point of having asked for a time.
+    overdue: all(`${mine} AND ${OVERDUE_SQL} ORDER BY a.due_at`, [tenantId, userId, now]),
+    today: all(`${mine} AND a.due_date = ? AND (a.due_at IS NULL OR a.due_at >= ?)
+       ORDER BY a.due_at`, [tenantId, userId, today, now]),
+    upcoming: all(`${mine} AND a.due_date > ? ORDER BY a.due_at LIMIT 10`,
+      [tenantId, userId, today]),
   });
 });
 

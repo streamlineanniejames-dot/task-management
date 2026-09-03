@@ -1,5 +1,8 @@
 import { get, all, run } from '../db/index.js';
-import { uuid, nowIso, daysBetween, parseJson, formatMoney } from '../lib/util.js';
+import { uuid, nowIso, parseJson, formatMoney } from '../lib/util.js';
+import {
+  DEFAULT_TZ, REMINDER_LEAD_MINUTES, dayDiffInTz, formatDueTime,
+} from '../lib/dueTime.js';
 import { notify, notifyMany } from './notifications.js';
 import { emitWebhook } from './webhooks.js';
 
@@ -17,6 +20,13 @@ export const LADDER = [
   { rung: 'due', offsetDays: 0, label: 'today' },
 ];
 
+/**
+ * The extra rung a deadline earns by naming a time of day. A task due "Tuesday"
+ * cannot usefully be warned about half an hour beforehand - a task due at 4pm
+ * can, and that nudge is most of what makes same-day scheduling work.
+ */
+export const TIMED_REMINDER = { rung: 't-30m', label: `in ${REMINDER_LEAD_MINUTES} minutes` };
+
 /** Register (or refresh) a deadline for any source record. Idempotent. */
 export function upsertDeadline({
   tenantId, sourceType, sourceId, title, dueAt, ownerId,
@@ -27,7 +37,7 @@ export function upsertDeadline({
     'SELECT * FROM deadlines WHERE tenant_id = ? AND source_type = ? AND source_id = ?',
     [tenantId, sourceType, sourceId],
   );
-  const due = dueAt.length === 10 ? `${dueAt}T18:00:00.000Z` : dueAt;
+  const due = String(dueAt).length === 10 ? `${dueAt}T18:00:00.000Z` : dueAt;
 
   if (existing) {
     // A moved due date resets the ladder so the new schedule is honoured.
@@ -75,6 +85,15 @@ const linkFor = (d) => ({
   leave: '/hr/leave',
 }[d.source_type] || '/');
 
+/** "45 minutes" / "2 hours" / "3 days" - whichever unit reads honestly. */
+function overdueLabel(minutesLate, daysLate) {
+  if (daysLate >= 1) return `${daysLate} day${daysLate > 1 ? 's' : ''}`;
+  const hours = Math.floor(minutesLate / 60);
+  if (hours >= 1) return `${hours} hour${hours > 1 ? 's' : ''}`;
+  const minutes = Math.max(1, Math.floor(minutesLate));
+  return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+}
+
 const eventKeyFor = (sourceType, phase) => {
   if (sourceType === 'invoice') return phase === 'overdue' ? 'invoice.overdue' : 'invoice.due_soon';
   if (sourceType === 'follow_up') return 'follow_up.due';
@@ -88,21 +107,33 @@ const eventKeyFor = (sourceType, phase) => {
  */
 export async function runDeadlineLadder({ now = new Date() } = {}) {
   const pending = all(
-    `SELECT d.*, t.currency, t.number_format FROM deadlines d
+    `SELECT d.*, t.currency, t.number_format, t.timezone FROM deadlines d
        JOIN tenants t ON t.id = d.tenant_id
       WHERE d.status = 'pending' AND t.status = 'active' AND t.deleted_at IS NULL`,
   );
   let sent = 0;
 
   for (const d of pending) {
-    const daysToDue = daysBetween(now, d.due_at);
+    const tz = d.timezone || DEFAULT_TZ;
+    const meta = parseJson(d.meta, {}) || {};
+    // Whether this deadline names a time somebody chose, or just the end of a
+    // day. The pre-due rungs are the same either way; what changes is the
+    // half-hour warning and, crucially, the minute a breach begins.
+    const timed = !!meta.timed;
+    // Counted in calendar days on the workspace clock, so "tomorrow" means the
+    // next day people will come to work and not a rounded 24-hour block.
+    const daysToDue = dayDiffInTz(now, d.due_at, tz);
+    const minutesToDue = (new Date(d.due_at).getTime() - now.getTime()) / 60_000;
     const ladderSent = parseJson(d.ladder_sent, []) || [];
     const owner = userById(d.owner_id);
-    const meta = parseJson(d.meta, {}) || {};
 
     const vars = {
       title: d.title,
-      due_date: d.due_at.slice(0, 10),
+      due_date: meta.due_date || d.due_at.slice(0, 10),
+      due_time: timed ? formatDueTime(meta.due_time) : '',
+      due: timed
+        ? `${meta.due_date || d.due_at.slice(0, 10)} · ${formatDueTime(meta.due_time)}`
+        : (meta.due_date || d.due_at.slice(0, 10)),
       client: meta.client || '-',
       number: meta.number || '',
       amount: meta.amount_minor != null ? formatMoney(meta.amount_minor, d.currency, d.number_format) : '',
@@ -111,10 +142,31 @@ export async function runDeadlineLadder({ now = new Date() } = {}) {
       next_action: meta.next_action || d.title,
     };
 
+    // --- the half-hour warning, for a deadline that named a time ---------
+    if (timed && !ladderSent.includes(TIMED_REMINDER.rung)
+        && minutesToDue > 0 && minutesToDue <= REMINDER_LEAD_MINUTES) {
+      if (owner) {
+        await notify({
+          tenantId: d.tenant_id,
+          user: owner,
+          eventKey: eventKeyFor(d.source_type, 'due'),
+          vars: { ...vars, when: TIMED_REMINDER.label },
+          link: linkFor(d),
+          dedupeKey: `deadline:${d.id}:${TIMED_REMINDER.rung}`,
+        });
+        sent++;
+      }
+      ladderSent.push(TIMED_REMINDER.rung);
+    }
+
     // --- pre-due rungs -------------------------------------------------
     for (const rung of LADDER) {
       if (ladderSent.includes(rung.rung)) continue;
       if (daysToDue !== -rung.offsetDays) continue;
+      // On the day itself, a timed deadline's "due today" nudge is only worth
+      // sending while the time is still ahead - after that it is overdue, and
+      // the overdue rung below is the one that should speak.
+      if (rung.rung === 'due' && timed && minutesToDue <= 0) continue;
       if (owner) {
         await notify({
           tenantId: d.tenant_id,
@@ -130,15 +182,27 @@ export async function runDeadlineLadder({ now = new Date() } = {}) {
     }
 
     // --- overdue -------------------------------------------------------
-    if (daysToDue < 0) {
-      const daysOverdue = -daysToDue;
+    // A deadline with a time on it breaches at that minute; one without breaches
+    // once its whole day is out. Both are the same comparison, because an
+    // untimed deadline is stored as the end of its own day.
+    const overdue = timed ? minutesToDue < 0 : daysToDue < 0;
+    if (overdue) {
+      // Whole days late, so an escalation window measured in days still means
+      // days. A task that went past its 4pm slot this afternoon is 0 days late,
+      // which is exactly what a category set to escalate immediately wants.
+      const daysOverdue = timed
+        ? Math.floor(-minutesToDue / 1440)
+        : -daysToDue;
+      // How late it is, said the way a person would. A task that missed its
+      // 4pm slot is "2 hours overdue", not "0 day(s) overdue".
+      const overdueFor = overdueLabel(-minutesToDue, daysOverdue);
       const rung = `overdue-${daysOverdue}`;
       if (!ladderSent.includes(rung) && owner) {
         await notify({
           tenantId: d.tenant_id,
           user: owner,
           eventKey: eventKeyFor(d.source_type, 'overdue'),
-          vars: { ...vars, days_overdue: daysOverdue },
+          vars: { ...vars, days_overdue: daysOverdue, overdue_for: overdueFor },
           link: linkFor(d),
           dedupeKey: `deadline:${d.id}:${rung}`,
         });
@@ -157,7 +221,7 @@ export async function runDeadlineLadder({ now = new Date() } = {}) {
           title: d.title,
           fromUserId: d.owner_id,
           toUserId: d.escalate_to_id || owner?.manager_id,
-          reason: `${daysOverdue} day(s) overdue`,
+          reason: `${overdueFor} overdue`,
           link: linkFor(d),
         });
       }

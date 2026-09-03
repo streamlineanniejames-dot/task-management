@@ -28,8 +28,30 @@ async function join(name, email, role = 'employee', extra = {}) {
   return { user: invite.body.data, token: accepted.body.data.access_token };
 }
 
+// Daily updates are filed against the UTC day, which is what the server writes.
 const today = new Date().toISOString().slice(0, 10);
 const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+
+// A due date, though, is a day on the workspace calendar - and a task due today
+// has to name a time that has not gone by yet.
+const WORKSPACE_TZ = 'Asia/Kolkata';
+const workspaceNow = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: WORKSPACE_TZ,
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hour12: false,
+}).formatToParts(new Date()).reduce((a, p) => ({ ...a, [p.type]: p.value }), {});
+
+const dueToday = () => {
+  const p = workspaceNow();
+  return `${p.year}-${p.month}-${p.day}`;
+};
+
+/** Half an hour from now on the workspace clock, without spilling into tomorrow. */
+const laterToday = () => {
+  const p = workspaceNow();
+  const mins = Math.min((Number(p.hour) % 24) * 60 + Number(p.minute) + 30, 23 * 60 + 59);
+  return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+};
 
 let divya; // manager
 let priya; // reports to Divya
@@ -149,7 +171,10 @@ describe('daily updates', () => {
   let task;
 
   before(async () => {
-    task = await newTask({ owner_id: priya.user.id, assignee_ids: [rahul.user.id], due_date: today });
+    task = await newTask({
+      owner_id: priya.user.id, assignee_ids: [rahul.user.id],
+      due_date: dueToday(), due_time: laterToday(),
+    });
   });
 
   const post = (body, token = priya.token, id = task.id) =>
@@ -373,7 +398,9 @@ describe('the manager view', () => {
 describe('My Day', () => {
   test('counts and lists assigned work, flagging what still owes an update', async () => {
     const solo = await join('Deepa', 'deepa@delivery.test', 'employee');
-    const t = await newTask({ title: 'Due right now', owner_id: solo.user.id, due_date: today });
+    const t = await newTask({
+      title: 'Due right now', owner_id: solo.user.id, due_date: dueToday(), due_time: laterToday(),
+    });
 
     let home = (await api.get('/dashboard/home', { token: solo.token })).body.data;
     assert.equal(home.counters.due_today, 1);
@@ -389,7 +416,10 @@ describe('My Day', () => {
 
   test('work assigned alongside somebody else still shows on My Day', async () => {
     const helper = await join('Eshan', 'eshan@delivery.test', 'employee');
-    await newTask({ title: 'Shared job', owner_id: priya.user.id, assignee_ids: [helper.user.id], due_date: today });
+    await newTask({
+      title: 'Shared job', owner_id: priya.user.id, assignee_ids: [helper.user.id],
+      due_date: dueToday(), due_time: laterToday(),
+    });
 
     const home = (await api.get('/dashboard/home', { token: helper.token })).body.data;
     assert.ok(home.today_items.some((x) => x.title === 'Shared job'),

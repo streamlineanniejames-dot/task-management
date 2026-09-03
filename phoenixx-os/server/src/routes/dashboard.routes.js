@@ -4,12 +4,32 @@ import { get, all, run } from '../db/index.js';
 import { nowIso, monthIso, monthsBack, todayIso, addMonths, startOfMonth, endOfMonth, pct } from '../lib/util.js';
 import { ok, validate, notFound, audit } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
+import { DEFAULT_TZ, todayInTz } from '../lib/dueTime.js';
 import { totalUnread } from '../services/chat.js';
 import {
   overviewDashboard, laggingIndicators, trendSeries, detectImprovementFlags, snapshotMetrics,
 } from '../services/analytics.js';
 
 const router = Router();
+
+/**
+ * Due and overdue are asked of the stored instant, never of the date string.
+ * A task due at 4pm today is still "due today" at 3pm and overdue at 4:01pm,
+ * and one carrying no time keeps its old meaning because it is stored as the
+ * end of its own day. `DUE_TODAY` takes (date, now); `IS_OVERDUE` takes (now).
+ */
+const DUE_TODAY = '(a.due_date = ? AND (a.due_at IS NULL OR a.due_at >= ?))';
+const IS_OVERDUE = '(a.due_at IS NOT NULL AND a.due_at < ?)';
+
+/**
+ * Which day "due today" means. A due date is a day on the workspace calendar,
+ * so the question has to be asked on the workspace clock - on UTC it would be
+ * the wrong day for the first five and a half hours of every Indian morning.
+ * Attendance and daily updates keep their own UTC day; those are stored that
+ * way and reading them differently from how they are written would be worse.
+ */
+const dueDayOf = (req) => todayInTz(req.tenant?.timezone || DEFAULT_TZ);
+
 
 /** H1 - the Overview Traction Dashboard: clients, revenue, HR, cost, profit. */
 router.get('/overview', requires('dashboard', 'view'), (req, res) => {
@@ -23,6 +43,8 @@ router.get('/mobile', requires('dashboard', 'view'), (req, res) => {
   const { tenantId, userId } = req.auth;
   const d = overviewDashboard(tenantId, { month: monthIso() });
   const today = todayIso();
+  const dueToday = dueDayOf(req);
+  const now = nowIso();
 
   return ok(res, {
     pillars: [
@@ -35,12 +57,12 @@ router.get('/mobile', requires('dashboard', 'view'), (req, res) => {
     lagging: d.lagging,
     my_work: {
       due_today: Number(get(
-        `SELECT COUNT(*) AS n FROM action_items WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
-           AND status NOT IN ('done','cancelled') AND due_date = ?`, [tenantId, userId, today],
+        `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
+           AND a.status NOT IN ('done','cancelled') AND ${DUE_TODAY}`, [tenantId, userId, dueToday, now],
       )?.n || 0),
       overdue: Number(get(
-        `SELECT COUNT(*) AS n FROM action_items WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
-           AND status NOT IN ('done','cancelled') AND due_date < ?`, [tenantId, userId, today],
+        `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND a.owner_id = ? AND a.deleted_at IS NULL
+           AND a.status NOT IN ('done','cancelled') AND ${IS_OVERDUE}`, [tenantId, userId, now],
       )?.n || 0),
       unread_notifications: Number(get(
         "SELECT COUNT(*) AS n FROM notifications WHERE tenant_id = ? AND user_id = ? AND channel = 'in_app' AND read_at IS NULL",
@@ -112,11 +134,12 @@ const DRILLDOWNS = {
     [t],
   ),
   overdue_items: (t) => all(
-    `SELECT a.id, a.title, a.due_date, a.priority, a.status, u.name AS owner_name, c.name AS client_name
+    `SELECT a.id, a.title, a.due_date, a.due_time, a.due_at, a.priority, a.status,
+            u.name AS owner_name, c.name AS client_name
        FROM action_items a LEFT JOIN users u ON u.id = a.owner_id LEFT JOIN clients c ON c.id = a.client_id
       WHERE a.tenant_id = ? AND a.deleted_at IS NULL AND a.status NOT IN ('done','cancelled')
-        AND a.due_date < ? ORDER BY a.due_date`,
-    [t, todayIso()],
+        AND ${IS_OVERDUE} ORDER BY a.due_at`,
+    [t, nowIso()],
   ),
   open_escalations: (t) => all(
     `SELECT e.*, uf.name AS from_name, ut.name AS to_name FROM escalations e
@@ -182,6 +205,8 @@ const ASSIGNED = `(a.owner_id = ? OR EXISTS (
 router.get('/home', (req, res) => {
   const { tenantId, userId } = req.auth;
   const today = todayIso();
+  const dueToday = dueDayOf(req);
+  const now = nowIso();
 
   return ok(res, {
     greeting_name: req.auth.name.split(' ')[0],
@@ -190,11 +215,11 @@ router.get('/home', (req, res) => {
     counters: {
       due_today: Number(get(
         `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
-           AND a.status NOT IN ('done','cancelled') AND a.due_date = ?`, [tenantId, userId, userId, today],
+           AND a.status NOT IN ('done','cancelled') AND ${DUE_TODAY}`, [tenantId, userId, userId, dueToday, now],
       )?.n || 0),
       overdue: Number(get(
         `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
-           AND a.status NOT IN ('done','cancelled') AND a.due_date < ?`, [tenantId, userId, userId, today],
+           AND a.status NOT IN ('done','cancelled') AND ${IS_OVERDUE}`, [tenantId, userId, userId, now],
       )?.n || 0),
       in_progress: Number(get(
         `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
@@ -244,8 +269,8 @@ router.get('/home', (req, res) => {
           AND (a.owner_id = ? OR EXISTS (SELECT 1 FROM action_assignees aa
                  WHERE aa.action_item_id = a.id AND aa.user_id = ?))
           AND a.status NOT IN ('done','cancelled') AND (a.due_date <= ? OR a.status = 'in_progress')
-        ORDER BY a.due_date LIMIT 12`,
-      [userId, userId, today, tenantId, userId, userId, today],
+        ORDER BY a.due_at IS NULL, a.due_at LIMIT 12`,
+      [userId, userId, today, tenantId, userId, userId, dueToday],
     // SQLite hands back 0/1 for a boolean expression; the rest of the API
     // speaks true/false, and a client should not have to know the difference.
     ).map((r) => ({ ...r, accountable: !!r.accountable, has_update_today: !!r.has_update_today })),

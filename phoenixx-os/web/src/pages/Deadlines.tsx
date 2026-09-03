@@ -166,7 +166,11 @@ export default function Deadlines() {
                               <span className={cx('text-[13px]', overdue ? 'text-[var(--negative)] font-medium' : 'text-muted')}>
                                 {overdue ? `${Math.abs(days!)}d overdue` : relative(d.due_at)}
                               </span>
-                              <span className="block text-[11.5px] text-subtle">{date(d.due_at)}</span>
+                              {/* A deadline that named an hour says the hour; one
+                                  that only named a day still only says the day. */}
+                              <span className="block text-[11.5px] text-subtle">
+                                {d.meta?.timed ? dateTime(d.due_at) : date(d.due_at)}
+                              </span>
                             </TD>
                             <TD>
                               {d.ladder_sent?.length ? (
