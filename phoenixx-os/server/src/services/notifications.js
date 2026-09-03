@@ -102,6 +102,18 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Daily update pending on {{count}} task(s)',
     body: 'Hi {{user.name}}, you have {{count}} open task(s) with no update logged for today: {{titles}}. Two minutes now saves the standup tomorrow.',
   },
+  'action_item.awaiting_validation': {
+    subject: 'Ready for your sign-off: {{title}}',
+    body: '{{person}} has marked "{{title}}" done. It is waiting on you to validate the work or send it back.',
+  },
+  'action_item.validated': {
+    subject: 'Validated: {{title}}',
+    body: '{{person}} has validated your work on "{{title}}". Nothing further is needed.',
+  },
+  'action_item.changes_requested': {
+    subject: 'Changes needed on {{title}}',
+    body: '{{person}} has sent "{{title}}" back for changes: {{note}}. It is on your list again.',
+  },
   'action_item.blocked_reported': {
     subject: 'Blocker raised on {{title}}',
     body: '{{person}} reported a blocker on "{{title}}": {{blockers}}',

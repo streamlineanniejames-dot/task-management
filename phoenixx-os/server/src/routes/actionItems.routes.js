@@ -5,7 +5,7 @@ import { uuid, nowIso, todayIso, parseJson, toCsv } from '../lib/util.js';
 import {
   ok, created, validate, notFound, badRequest, forbidden, audit, paginate, pageMeta, sortClause,
 } from '../lib/http.js';
-import { requires } from '../middleware/rbac.js';
+import { requires, can } from '../middleware/rbac.js';
 import { scopeFilter } from '../middleware/auth.js';
 import { upsertDeadline, resolveDeadline, resolveEscalations, raiseEscalation } from '../services/deadlines.js';
 import { notifyMany } from '../services/notifications.js';
@@ -56,6 +56,8 @@ const SORTS = {
 const SELECT = `
   SELECT a.*, u.name AS owner_name, u.avatar_url AS owner_avatar, u.designation AS owner_designation,
          cb.name AS created_by_name, cb.avatar_url AS created_by_avatar,
+         cpb.name AS completed_by_name, cpb.avatar_url AS completed_by_avatar,
+         vb.name AS validated_by_name,
          c.name AS client_name, ac.name AS category_name, ac.color AS category_color,
          p.name AS project_name,
          (SELECT COUNT(*) FROM action_assignees aa WHERE aa.action_item_id = a.id) AS extra_assignee_count,
@@ -64,6 +66,8 @@ const SELECT = `
     FROM action_items a
     LEFT JOIN users u ON u.id = a.owner_id
     LEFT JOIN users cb ON cb.id = a.created_by
+    LEFT JOIN users cpb ON cpb.id = a.completed_by
+    LEFT JOIN users vb ON vb.id = a.validated_by
     LEFT JOIN clients c ON c.id = a.client_id
     LEFT JOIN projects p ON p.id = a.project_id
     LEFT JOIN action_categories ac ON ac.id = a.category_id`;
@@ -161,6 +165,91 @@ function notifyAssigned(req, item, userIds) {
   }).catch(() => {});
 }
 
+// ==================================================== CREATOR VALIDATION
+/**
+ * Done is not the end of a task. When the assignee marks an item done it goes
+ * to whoever raised it for sign-off: approve and the task is finished, ask for
+ * changes and it goes back to the assignee as live work. The rules:
+ *
+ *  - `status` still says 'done' while sign-off is outstanding. Everything else
+ *    in the product - the deadline ladder, the daily-update chase, the overdue
+ *    counters - already keys off `status`, and a task whose work is finished
+ *    should not keep chasing the person who finished it. What is outstanding is
+ *    the creator's review, and that is `validation_status`, not the task.
+ *  - A task somebody raised for themselves needs no ceremony: it validates on
+ *    the spot, which is also what keeps every pre-existing task behaving as it
+ *    did before this workflow existed.
+ */
+const VALIDATION_STATES = ['pending', 'validated', 'changes_requested'];
+
+/** Appends to the item's sign-off ledger. Append-only - never updated. */
+function logValidation(tenantId, itemId, event, actorId, note, round) {
+  run(
+    `INSERT INTO action_validations (id, tenant_id, action_item_id, event, actor_id, note, round, created_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [uuid(), tenantId, itemId, event, actorId ?? null, note ?? null, round ?? 1, nowIso()],
+  );
+}
+
+const validationHistory = (tenantId, itemId) => all(
+  `SELECT v.*, u.name AS actor_name, u.avatar_url AS actor_avatar
+     FROM action_validations v
+     LEFT JOIN users u ON u.id = v.actor_id
+    WHERE v.tenant_id = ? AND v.action_item_id = ?
+    ORDER BY v.created_at, v.rowid`,
+  [tenantId, itemId],
+);
+
+/**
+ * Who may rule on a completed task: the person who raised it, full stop.
+ *
+ * The one exception is a creator who has since left the workspace - somebody
+ * with the approval right closes the loop instead, because the alternative is
+ * work that can never be signed off.
+ */
+function canValidate(auth, item) {
+  if (!item) return false;
+  if (item.created_by && item.created_by === auth.userId) return true;
+  const creatorPresent = item.created_by
+    && get('SELECT id FROM users WHERE id = ? AND deleted_at IS NULL', [item.created_by]);
+  return !creatorPresent && can(auth, 'action_items', 'approve');
+}
+
+/** Row decoration the UI needs but SQL should not be asked to compute. */
+const withValidation = (req, row) => (row ? {
+  ...row,
+  can_validate: row.status === 'done' && row.validation_status === 'pending' && canValidate(req.auth, row),
+  awaiting_validation: row.status === 'done' && row.validation_status === 'pending',
+} : row);
+
+/**
+ * The state changes that ride along with "the assignee marked this done".
+ * Returned as a patch rather than written here so the caller keeps it inside
+ * its own transaction, and so bulk and single updates cannot drift apart.
+ */
+function completionPatch(req, before, ts) {
+  const selfRaised = !before.created_by || before.created_by === req.auth.userId;
+  return {
+    completed_at: ts,
+    completed_by: req.auth.userId,
+    validation_status: selfRaised ? 'validated' : 'pending',
+    validated_by: selfRaised ? req.auth.userId : null,
+    validated_at: selfRaised ? ts : null,
+  };
+}
+
+/** Tells the creator their sign-off is wanted. */
+function notifySubmitted(req, item) {
+  if (!item.created_by || item.created_by === req.auth.userId) return;
+  notifyMany({
+    tenantId: req.auth.tenantId,
+    userIds: [item.created_by],
+    eventKey: 'action_item.awaiting_validation',
+    vars: { title: item.title, person: req.auth.name },
+    link: `/action-items?open=${item.id}`,
+  }).catch(() => {});
+}
+
 /** Registers the item's due date with the central deadline engine (B1). */
 function syncDeadline(tenantId, item) {
   if (['done', 'cancelled'].includes(item.status) || !item.due_date) {
@@ -207,6 +296,21 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
 
   const q = req.query;
   if (q.status) { const s = String(q.status).split(','); filters.push(`a.status IN (${s.map(() => '?').join(',')})`); params.push(...s); }
+  // The working list and the completed list are two different questions, and
+  // an item the assignee has marked done belongs to the second one from that
+  // moment - not once the creator gets round to signing it off.
+  if (q.bucket === 'active') filters.push("a.status != 'done'");
+  if (q.bucket === 'completed') filters.push("a.status = 'done'");
+  if (q.validation) {
+    const s = String(q.validation).split(',');
+    filters.push(`a.validation_status IN (${s.map(() => '?').join(',')})`);
+    params.push(...s);
+  }
+  // "Waiting on me to sign off" - the queue belonging to whoever raised them.
+  if (q.to_validate === 'true') {
+    filters.push("a.status = 'done' AND a.validation_status = 'pending' AND a.created_by = ?");
+    params.push(req.auth.userId);
+  }
   if (q.priority) { const s = String(q.priority).split(','); filters.push(`a.priority IN (${s.map(() => '?').join(',')})`); params.push(...s); }
   if (q.owner_id) { filters.push('a.owner_id = ?'); params.push(q.owner_id); }
   // "On my plate" - accountable for it, or working it with someone else.
@@ -232,7 +336,7 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
   const total = Number(get(`SELECT COUNT(*) AS n FROM action_items a WHERE ${where}`, params)?.n || 0);
   const rows = all(`${SELECT} WHERE ${where} ORDER BY ${order} LIMIT ? OFFSET ?`, [...params, limit, offset]);
 
-  return ok(res, rows, {
+  return ok(res, rows.map((r) => withValidation(req, r)), {
     ...pageMeta(page, limit, total),
     summary: get(
       `SELECT COUNT(*) AS total,
@@ -240,10 +344,21 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
               COUNT(CASE WHEN a.status = 'in_progress' THEN 1 END) AS in_progress,
               COUNT(CASE WHEN a.status = 'blocked' THEN 1 END) AS blocked,
               COUNT(CASE WHEN a.status = 'done' THEN 1 END) AS done,
+              COUNT(CASE WHEN a.status = 'done' AND a.validation_status = 'pending' THEN 1 END) AS awaiting_validation,
+              COUNT(CASE WHEN a.validation_status = 'validated' THEN 1 END) AS validated,
+              COUNT(CASE WHEN a.validation_status = 'changes_requested' THEN 1 END) AS changes_requested,
               COUNT(CASE WHEN a.due_date < ? AND a.status NOT IN ('done','cancelled') THEN 1 END) AS overdue
          FROM action_items a WHERE ${where}`,
       [todayIso(), ...params],
     ),
+    // Deliberately outside the filters: the sign-off badge has to read the same
+    // on every tab, or it stops being something anyone trusts.
+    my_validation_queue: Number(get(
+      `SELECT COUNT(*) AS n FROM action_items a
+        WHERE a.tenant_id = ? AND a.deleted_at IS NULL AND a.created_by = ?
+          AND a.status = 'done' AND a.validation_status = 'pending'`,
+      [tenantId, req.auth.userId],
+    )?.n || 0),
   });
 });
 
@@ -616,7 +731,9 @@ router.get('/:id', requires('action_items', 'view'), (req, res) => {
   if (!item) throw notFound('Action item');
 
   return ok(res, {
-    ...item,
+    ...withValidation(req, item),
+    /** Every submission, approval and rejection, oldest first. */
+    validations: validationHistory(req.auth.tenantId, item.id),
     assignees: assigneesOf(req.auth.tenantId, item),
     watchers: all(
       `SELECT w.user_id, u.name, u.avatar_url FROM action_watchers w
@@ -696,7 +813,7 @@ router.post('/', requires('action_items', 'create'), (req, res) => {
   audit(req, { entity: 'action_item', entityId: id, action: 'create', after: item });
   notifyAssigned(req, item, assigneeIds(tenantId, id, item.owner_id));
 
-  return created(res, get(`${SELECT} WHERE a.id = ?`, [id]));
+  return created(res, withValidation(req, get(`${SELECT} WHERE a.id = ?`, [id])));
 });
 
 // --------------------------------------------------------------- update
@@ -713,8 +830,20 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
   delete patch.assign_from_project_id;
 
   if (body.status && body.status !== before.status) {
-    if (body.status === 'done') patch.completed_at = nowIso();
-    if (body.status === 'in_progress' && !before.started_at) patch.started_at = nowIso();
+    const ts = nowIso();
+    // Signed-off work is closed. Reopening it is the creator's call to make -
+    // otherwise "validated" would mean nothing the moment someone disagreed.
+    if (before.validation_status === 'validated' && !canValidate(req.auth, before)) {
+      throw forbidden('This task has been validated by whoever raised it - only they can reopen it');
+    }
+    if (body.status === 'done') Object.assign(patch, completionPatch(req, before, ts));
+    if (body.status !== 'done' && before.status === 'done') {
+      // Pulled back out of done: the sign-off question goes away with it.
+      Object.assign(patch, {
+        completed_at: null, validation_status: null, validated_by: null, validated_at: null,
+      });
+    }
+    if (body.status === 'in_progress' && !before.started_at) patch.started_at = ts;
     if (body.status !== 'blocked') patch.blocked_reason = null;
     if (body.status === 'blocked' && !body.blocked_reason && !before.blocked_reason) {
       throw badRequest('A blocked item needs a reason so the manager knows what to unblock');
@@ -726,8 +855,17 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
   const fromTeam = body.assign_from_project_id
     ? projectTeamIds(tenantId, body.assign_from_project_id) : [];
 
+  const round = (before.rework_count || 0) + 1;
   const after = tx(() => {
     const updated = r.update(req.params.id, patch);
+    if (patch.validation_status === 'pending') {
+      logValidation(tenantId, before.id, 'submitted', userId, null, round);
+    } else if (patch.validation_status === 'validated') {
+      logValidation(tenantId, before.id, 'validated', userId,
+        'Raised and completed by the same person - signed off automatically', round);
+    } else if ('validation_status' in patch && patch.validation_status === null) {
+      logValidation(tenantId, before.id, 'reopened', userId, null, round);
+    }
     // Re-staffing is explicit: send `assignee_ids` (or a project to pull from)
     // and the list is replaced; omit both and the team is left alone.
     if (body.assignee_ids || body.assign_from_project_id) {
@@ -748,9 +886,13 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
   });
 
   syncDeadline(tenantId, after);
-  if (after.status === 'done') {
+  if (after.status === 'done' && before.status !== 'done') {
     resolveEscalations(tenantId, 'action_item', after.id, 'Item completed');
-    emitWebhook(tenantId, 'action_item.completed', { id: after.id, title: after.title, owner_id: after.owner_id });
+    emitWebhook(tenantId, 'action_item.completed', {
+      id: after.id, title: after.title, owner_id: after.owner_id,
+      completed_by: after.completed_by, validation_status: after.validation_status,
+    });
+    notifySubmitted(req, after);
   }
   audit(req, { entity: 'action_item', entityId: after.id, action: 'update', before, after });
 
@@ -760,7 +902,99 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
   const added = nowAssigned.filter((uid) => uid !== before.owner_id && !wasAssigned.includes(uid));
   notifyAssigned(req, after, added);
 
-  return ok(res, get(`${SELECT} WHERE a.id = ?`, [after.id]));
+  return ok(res, withValidation(req, get(`${SELECT} WHERE a.id = ?`, [after.id])));
+});
+
+// ----------------------------------------------------- creator sign-off
+/**
+ * The creator's ruling on completed work. Approve and the task is finished for
+ * good; ask for changes and it goes back to the assignee as live work, with the
+ * reason attached - a rejection with no reason is just a task bouncing.
+ *
+ * Guarded on three things, in this order: the item is actually waiting for a
+ * ruling, the caller is the person entitled to make it, and a rejection carries
+ * a reason. The middle guard is the one that matters - it is what stops an
+ * assignee signing off their own work.
+ */
+router.post('/:id/validate', requires('action_items', 'view'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const item = get('SELECT * FROM action_items WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL',
+    [req.params.id, tenantId]);
+  if (!item) throw notFound('Action item');
+
+  const { decision, note } = validate(z.object({
+    decision: z.enum(['approve', 'reject']),
+    note: z.string().max(2000).optional().nullable(),
+  }), req.body);
+
+  if (item.status !== 'done' || item.validation_status !== 'pending') {
+    throw badRequest(item.validation_status === 'validated'
+      ? 'This task has already been validated'
+      : 'Only a task the assignee has marked done can be validated');
+  }
+  if (!canValidate(req.auth, item)) {
+    throw forbidden('Only the person who raised this task can validate it');
+  }
+  const reason = (note || '').trim();
+  if (decision === 'reject' && reason.length < 3) {
+    throw badRequest('Say what needs changing - the task goes back to the assignee with this note');
+  }
+
+  const ts = nowIso();
+  const round = (item.rework_count || 0) + 1;
+  const r = repo('action_items', tenantId);
+
+  const after = tx(() => {
+    const patch = decision === 'approve'
+      ? {
+        validation_status: 'validated',
+        validated_by: userId,
+        validated_at: ts,
+        validation_note: reason || null,
+        updated_at: ts,
+      }
+      : {
+        // Back to live work. `completed_by` is left standing: it is who last
+        // said it was finished, and the ledger below carries the rest.
+        status: 'in_progress',
+        completed_at: null,
+        validation_status: 'changes_requested',
+        validated_by: userId,
+        validated_at: ts,
+        validation_note: reason,
+        rework_count: round,
+        started_at: item.started_at || ts,
+        updated_at: ts,
+      };
+    logValidation(tenantId, item.id, decision === 'approve' ? 'validated' : 'changes_requested',
+      userId, reason || null, round);
+    return r.update(item.id, patch);
+  });
+
+  // A rejected task is open work again, so it goes back on the deadline ladder.
+  syncDeadline(tenantId, after);
+  emitWebhook(tenantId, decision === 'approve' ? 'action_item.validated' : 'action_item.changes_requested',
+    { id: after.id, title: after.title, validated_by: userId, note: reason || null });
+  audit(req, {
+    entity: 'action_item',
+    entityId: after.id,
+    action: 'update',
+    before: item,
+    after,
+  });
+
+  notifyMany({
+    tenantId,
+    userIds: assigneeIds(tenantId, after.id, after.owner_id).filter((id) => id !== userId),
+    eventKey: decision === 'approve' ? 'action_item.validated' : 'action_item.changes_requested',
+    vars: { title: after.title, person: req.auth.name, note: reason || 'no note' },
+    link: `/action-items?open=${after.id}`,
+  }).catch(() => {});
+
+  return ok(res, {
+    ...withValidation(req, get(`${SELECT} WHERE a.id = ?`, [after.id])),
+    validations: validationHistory(tenantId, after.id),
+  });
 });
 
 router.delete('/:id', requires('action_items', 'delete'), (req, res) => {
@@ -841,23 +1075,48 @@ router.post('/bulk', requires('action_items', 'edit'), (req, res) => {
   const { ids, patch } = validate(
     z.object({ ids: z.array(z.string()).min(1).max(200), patch: itemSchema.partial() }), req.body,
   );
-  const r = repo('action_items', req.auth.tenantId);
+  const { tenantId } = req.auth;
+  const r = repo('action_items', tenantId);
   const updated = [];
+  const submitted = [];
+  let skipped = 0;
 
   tx(() => {
     for (const id of ids) {
       const before = r.findById(id);
       if (!before) continue;
-      const fields = { ...patch, updated_at: nowIso() };
+      const ts = nowIso();
+      const fields = { ...patch, updated_at: ts };
       delete fields.watchers;
-      if (patch.status === 'done') fields.completed_at = nowIso();
-      updated.push(r.update(id, fields));
+      if (patch.status && patch.status !== before.status) {
+        // Signed-off work is not something a bulk action gets to reopen. One
+        // item that cannot move must not fail the other ninety-nine, so it is
+        // counted out and reported rather than thrown.
+        if (before.validation_status === 'validated' && !canValidate(req.auth, before)) {
+          skipped += 1;
+          continue;
+        }
+        if (patch.status === 'done') {
+          Object.assign(fields, completionPatch(req, before, ts));
+          logValidation(tenantId, id, fields.validation_status === 'pending' ? 'submitted' : 'validated',
+            req.auth.userId, null, (before.rework_count || 0) + 1);
+        } else if (before.status === 'done') {
+          Object.assign(fields, {
+            completed_at: null, validation_status: null, validated_by: null, validated_at: null,
+          });
+          logValidation(tenantId, id, 'reopened', req.auth.userId, null, (before.rework_count || 0) + 1);
+        }
+      }
+      const row = r.update(id, fields);
+      updated.push(row);
+      if (fields.validation_status === 'pending') submitted.push(row);
     }
   });
-  for (const item of updated) syncDeadline(req.auth.tenantId, item);
-  audit(req, { entity: 'action_item', action: 'update', after: { bulk: ids.length, patch } });
+  for (const item of updated) syncDeadline(tenantId, item);
+  for (const item of submitted) notifySubmitted(req, item);
+  audit(req, { entity: 'action_item', action: 'update', after: { bulk: ids.length, patch, skipped } });
 
-  return ok(res, { updated: updated.length });
+  return ok(res, { updated: updated.length, skipped });
 });
 
 // ------------------------------------------------------- my work (mobile)

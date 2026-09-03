@@ -16,6 +16,8 @@ export const WEBHOOK_EVENTS = [
   'escalation.raised',
   'proposal.accepted',
   'action_item.completed',
+  'action_item.validated',
+  'action_item.changes_requested',
 ];
 
 const sign = (secret, payload) =>

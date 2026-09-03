@@ -39,8 +39,11 @@ export default function MobileHome() {
 
   const complete = useMutation({
     mutationFn: (id: string) => api.patch(`/action-items/${id}`, { status: 'done' }),
-    onSuccess: () => {
-      toast.success('Marked done.');
+    onSuccess: (res: any) => {
+      // Done is not the end of it when somebody else raised the task.
+      toast.success(res?.data?.validation_status === 'pending'
+        ? 'Marked done — sent to whoever raised it for validation.'
+        : 'Marked done.');
       qc.invalidateQueries({ queryKey: HOME_KEY });
     },
     onError: (e: any) => toast.error(e.message),

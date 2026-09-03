@@ -282,6 +282,14 @@ CREATE TABLE IF NOT EXISTS action_items (
   due_date TEXT,
   started_at TEXT,
   completed_at TEXT,
+  -- Done is the assignee's word; validated is the creator's. NULL until the
+  -- item is first marked done, then pending|validated|changes_requested.
+  validation_status TEXT,
+  completed_by TEXT REFERENCES users(id),
+  validated_by TEXT REFERENCES users(id),
+  validated_at TEXT,
+  validation_note TEXT,
+  rework_count INTEGER NOT NULL DEFAULT 0,
   blocked_reason TEXT,
   recurrence TEXT,                         -- none|daily|weekly|monthly (A3)
   recurrence_until TEXT,
@@ -1483,3 +1491,28 @@ CREATE TABLE IF NOT EXISTS action_updates (
 CREATE INDEX IF NOT EXISTS ix_aupdate_day ON action_updates(tenant_id, update_date);
 CREATE INDEX IF NOT EXISTS ix_aupdate_user ON action_updates(tenant_id, user_id, update_date);
 CREATE INDEX IF NOT EXISTS ix_aupdate_item ON action_updates(tenant_id, action_item_id, update_date);
+
+-- ------------------------------------------------- ACTION ITEMS: VALIDATION
+-- Done is what the assignee says; validated is what the person who raised the
+-- task says. This table is the ledger of that second conversation: every
+-- submission, approval, rejection and reopen, in order, with who and when.
+--
+-- Append-only on purpose - it is the answer to "why is this task still open in
+-- November when it was marked done in September", and an editable history
+-- cannot answer that. The current state lives in denormalised columns on
+-- action_items (validation_status and friends) so the list can filter on it
+-- without a correlated subquery per row.
+CREATE TABLE IF NOT EXISTS action_validations (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  action_item_id TEXT NOT NULL REFERENCES action_items(id),
+  -- submitted | validated | changes_requested | reopened | withdrawn
+  event TEXT NOT NULL,
+  actor_id TEXT REFERENCES users(id),
+  note TEXT,
+  -- Which round of work this event belongs to: 1 is the first submission, 2
+  -- the resubmission after the first rejection, and so on.
+  round INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_avalidation_item ON action_validations(tenant_id, action_item_id, created_at);

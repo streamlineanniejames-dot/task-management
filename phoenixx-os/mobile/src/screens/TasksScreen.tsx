@@ -166,7 +166,9 @@ function QuickAddModal({ visible, onClose, onSaved }: {
   useEffect(() => {
     if (!visible) return;
     setTitle(''); setPriority('medium'); setDueOffset(1); setClientId('');
-    api.get('/crm/clients', { limit: 100 }).then((r) => setClients(r.data)).catch(() => setClients([]));
+    // The register, not the pipeline list - that one is scoped to the clients
+    // you own, which leaves an employee with an empty picker.
+    api.get('/crm/clients/options').then((r) => setClients(r.data)).catch(() => setClients([]));
   }, [visible]);
 
   const save = async () => {

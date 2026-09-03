@@ -53,8 +53,11 @@ export default function Home() {
 
   const complete = useMutation({
     mutationFn: (id: string) => api.patch(`/action-items/${id}`, { status: 'done' }),
-    onSuccess: () => {
-      toast.success('Marked done.');
+    onSuccess: (res: any) => {
+      // Done is not the end of it when somebody else raised the task.
+      toast.success(res?.data?.validation_status === 'pending'
+        ? 'Marked done — sent to whoever raised it for validation.'
+        : 'Marked done.');
       qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
       qc.invalidateQueries({ queryKey: ['action-items'] });

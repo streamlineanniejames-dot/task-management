@@ -18,6 +18,25 @@ export function migrate() {
   const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(sql);
   addColumns();
+  backfill();
+}
+
+/**
+ * One-off data repairs, run after the columns they touch are guaranteed to
+ * exist. Every one of these has to be a no-op on the second boot.
+ */
+function backfill() {
+  // Creator validation arrived after these tasks were already closed. They
+  // were finished under the rules of the day, so they count as settled -
+  // leaving them unset would park years of historic work in a sign-off queue
+  // nobody asked for. `validated_by` stays empty on purpose: nobody actually
+  // signed these off, and inventing a name for the record would be a lie.
+  if (tableExists('action_items') && hasColumn('action_items', 'validation_status')) {
+    db.exec(`UPDATE action_items
+                SET validation_status = 'validated',
+                    validated_at = COALESCE(completed_at, updated_at)
+              WHERE status = 'done' AND validation_status IS NULL`);
+  }
 }
 
 /**
@@ -53,6 +72,19 @@ const ADDED_COLUMNS = [
   // Single-use, short-lived, stored as a SHA-256 digest like refresh tokens.
   ['users', 'recovery_token', 'TEXT'],
   ['users', 'recovery_token_expires_at', 'TEXT'],
+  // Creator sign-off on completed work. `validation_status` is NULL while the
+  // task is still being worked, 'pending' once the assignee marks it done,
+  // then 'validated' or 'changes_requested' once the creator has ruled. Left
+  // nullable rather than defaulted so existing rows read as "no validation
+  // ever asked for", which is exactly what they are.
+  ['action_items', 'validation_status', 'TEXT'],
+  ['action_items', 'completed_by', 'TEXT'],
+  ['action_items', 'validated_by', 'TEXT'],
+  ['action_items', 'validated_at', 'TEXT'],
+  ['action_items', 'validation_note', 'TEXT'],
+  // How many times the work has come back for changes. Drives the "2nd
+  // attempt" hint in the UI and is the number a manager actually wants.
+  ['action_items', 'rework_count', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 function addColumns() {

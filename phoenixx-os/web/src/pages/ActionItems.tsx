@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Filter, Download, ArrowUpRight, X, MessageSquare, Paperclip, Repeat,
   CheckCircle2, ListChecks, LayoutGrid, List, AlertTriangle, Trash2, Users2, User,
-  ClipboardList, CircleAlert, PencilLine, Clock,
+  ClipboardList, CircleAlert, PencilLine, Clock, ShieldCheck, Undo2, History,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -48,11 +48,11 @@ export default function ActionItems() {
   const toast = useToast();
   const [params, setParams] = useSearchParams();
 
-  // Three jobs on one screen: the register, my own daily updates, and - for a
-  // manager - the team's. The tab lives in the URL so the reminder can link
-  // straight at it.
-  const tab = params.get('tab') === 'updates' ? 'updates'
-    : params.get('tab') === 'team' ? 'team' : 'tasks';
+  // Four jobs on one screen: the register, work that is finished and waiting on
+  // sign-off, my own daily updates, and - for a manager - the team's. The tab
+  // lives in the URL so the reminder can link straight at it.
+  const TABS = ['tasks', 'completed', 'updates', 'team'];
+  const tab = TABS.includes(params.get('tab') || '') ? params.get('tab')! : 'tasks';
   const setTab = (id: string) => {
     const next = new URLSearchParams(params);
     if (id === 'tasks') next.delete('tab'); else next.set('tab', id);
@@ -90,10 +90,16 @@ export default function ActionItems() {
   const clearFilters = () => { setParams(new URLSearchParams(), { replace: true }); setSearch(''); };
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
+  // The working list holds work that is still being worked. The moment the
+  // assignee marks something done it belongs to the Completed tab, whether or
+  // not the creator has signed it off yet - asking for a status explicitly is
+  // still honoured, so the filter can pull done items back into view.
+  const bucket = filters.status ? '' : 'active';
+
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['action-items', filters, search, page, view],
+    queryKey: ['action-items', filters, search, page, view, bucket],
     queryFn: () => api.get('/action-items', {
-      ...filters, search, page, limit: view === 'board' ? 200 : 25,
+      ...filters, bucket, search, page, limit: view === 'board' ? 200 : 25,
     }),
   });
 
@@ -103,7 +109,9 @@ export default function ActionItems() {
       const [categories, directory, clients, projects] = await Promise.all([
         api.get('/settings/action-categories').then((r) => r.data),
         api.get('/users/directory').then((r) => r.data),
-        api.get('/crm/clients', { limit: 200 }).then((r) => r.data).catch(() => []),
+        // The whole client register, not the pipeline list: that one is filtered
+        // to the rows you own, so an employee's picker came back empty.
+        api.get('/crm/clients/options').then((r) => r.data).catch(() => []),
         // Teams come from the projects module - there is no second list of
         // teams to keep in step with it.
         api.get('/projects').then((r) => r.data).catch(() => []),
@@ -116,7 +124,9 @@ export default function ActionItems() {
   const bulk = useMutation({
     mutationFn: (patch: any) => api.post('/action-items/bulk', { ids: selected, patch }),
     onSuccess: (res: any) => {
-      toast.success(`${res.data.updated} item${res.data.updated === 1 ? '' : 's'} updated.`);
+      const { updated, skipped } = res.data;
+      toast.success(`${updated} item${updated === 1 ? '' : 's'} updated.`
+        + (skipped ? ` ${skipped} left alone — already validated.` : ''));
       setSelected([]);
       qc.invalidateQueries({ queryKey: ['action-items'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
@@ -137,6 +147,10 @@ export default function ActionItems() {
   const summary = data?.meta?.summary || {};
   const pageMeta = data?.meta || {};
   const owed = mineMeta?.needs_update?.length || 0;
+  // Tasks this person raised, that somebody has finished, that nobody has
+  // signed off yet. Counted server-side across every filter so the badge and
+  // the tab it points at can never disagree.
+  const toValidate = data?.meta?.my_validation_queue || 0;
 
   useEffect(() => {
     const open = params.get('open');
@@ -149,16 +163,19 @@ export default function ActionItems() {
         title="Action items"
         subtitle={
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>{summary.total ?? 0} total</span>
+            <span>{summary.total ?? 0} {bucket === 'active' ? 'in progress' : 'total'}</span>
             {summary.overdue > 0 && (
               <span className="text-[var(--negative)] font-medium">{summary.overdue} overdue</span>
             )}
-            <span className="text-subtle">{summary.done ?? 0} done</span>
+            {toValidate > 0
+              ? <span className="text-[var(--warning)] font-medium">{toValidate} awaiting your sign-off</span>
+              : <span className="text-subtle">{summary.done ?? 0} done</span>}
           </span>
         }
         tabs={
           <Tabs active={tab} onChange={setTab} tabs={[
             { id: 'tasks', label: 'All tasks' },
+            { id: 'completed', label: 'Completed', count: toValidate || undefined },
             { id: 'updates', label: 'My daily updates', count: owed || undefined },
             ...(canReviewTeam ? [{ id: 'team', label: 'Team updates' }] : []),
           ]} />
@@ -195,6 +212,7 @@ export default function ActionItems() {
         )}
       />
 
+      {tab === 'completed' && <CompletedView onOpen={setOpenId} />}
       {tab === 'updates' && <MyUpdatesView />}
       {tab === 'team' && canReviewTeam && <TeamUpdatesView />}
 
@@ -333,6 +351,12 @@ export default function ActionItems() {
                                   <ArrowUpRight size={11} />L{item.escalation_level}
                                 </span>
                               )}
+                              {item.validation_status === 'changes_requested' && (
+                                <span className="inline-flex items-center gap-1 text-[var(--warning)] font-medium">
+                                  <Undo2 size={11} />sent back
+                                  {item.rework_count > 1 && ` ·  ${item.rework_count}×`}
+                                </span>
+                              )}
                             </span>
                           </button>
                         </TD>
@@ -444,6 +468,261 @@ function BoardView({ items, onOpen }: { items: any[]; onOpen: (id: string) => vo
         );
       })}
     </div>
+  );
+}
+
+/* ====================================================== CREATOR SIGN-OFF */
+/**
+ * Done is the assignee's word for it; validated is the creator's. Everywhere a
+ * completed task is shown, this badge says which of the two has happened.
+ */
+export function ValidationBadge({ item, compact }: { item: any; compact?: boolean }) {
+  if (item.validation_status === 'validated') {
+    return (
+      <Badge tone="positive" dot>
+        validated{!compact && item.validated_by_name ? ` · ${item.validated_by_name}` : ''}
+      </Badge>
+    );
+  }
+  if (item.validation_status === 'changes_requested') {
+    return <Badge tone="warning" dot>needs changes</Badge>;
+  }
+  if (item.status === 'done') return <Badge tone="warning" dot>awaiting validation</Badge>;
+  return <span className="text-[13px] text-subtle">—</span>;
+}
+
+const COMPLETED_TABS = [
+  // Finished, and waiting on whoever raised it.
+  { id: 'pending', label: 'Awaiting validation', query: { bucket: 'completed', validation: 'pending' } },
+  // Signed off. This is the only state that means the task is actually over.
+  { id: 'validated', label: 'Validated', query: { validation: 'validated' } },
+  // Rejected and back with the assignee - listed here because this is where
+  // somebody comes looking for "what happened to the task I sent back".
+  { id: 'changes_requested', label: 'Needs changes', query: { validation: 'changes_requested' } },
+];
+
+/**
+ * Completed work, split by where it stands with the person who raised it. The
+ * Validate button is shown on the strength of `can_validate`, which the server
+ * computes - the browser is never the thing deciding who may sign off.
+ */
+function CompletedView({ onOpen }: { onOpen: (id: string) => void }) {
+  const [sub, setSub] = useState('pending');
+  const [mineOnly, setMineOnly] = useState(false);
+  const [validating, setValidating] = useState<any>(null);
+
+  const conf = COMPLETED_TABS.find((t) => t.id === sub) || COMPLETED_TABS[0];
+  const onlyMine = mineOnly && sub === 'pending';
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['action-items', 'completed', sub, onlyMine],
+    queryFn: () => api.get('/action-items', {
+      ...conf.query, ...(onlyMine ? { to_validate: 'true' } : {}), limit: 50,
+    }),
+  });
+
+  // One unfiltered read purely for the three tab counts, so each tab shows its
+  // own size rather than only the one you happen to be standing on.
+  const { data: counts } = useQuery({
+    queryKey: ['action-items', 'completed-counts'],
+    queryFn: () => api.get('/action-items', { limit: 1 }).then((r: any) => r.meta?.summary || {}),
+    staleTime: 15_000,
+  });
+
+  const rows = data?.data || [];
+
+  return (
+    <>
+      <Card className="mb-4">
+        <div className="flex flex-wrap items-center gap-2 p-3">
+          <Tabs active={sub} onChange={setSub} className="border-0" tabs={COMPLETED_TABS.map((t) => ({
+            id: t.id,
+            label: t.label,
+            count: (t.id === 'pending' ? counts?.awaiting_validation
+              : t.id === 'validated' ? counts?.validated
+                : counts?.changes_requested) || undefined,
+          }))} />
+          {sub === 'pending' && (
+            <Button size="sm" className="ml-auto" variant={mineOnly ? 'primary' : 'secondary'}
+              icon={<ShieldCheck size={14} />} onClick={() => setMineOnly((m) => !m)}>
+              Only mine to sign off
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {error ? <ErrorState error={error} retry={refetch} />
+        : isLoading ? <Card><TableSkeleton cols={6} /></Card>
+          : !rows.length ? (
+            <Card>
+              <EmptyState icon={<CheckCircle2 size={20} />}
+                title={sub === 'pending' ? 'Nothing waiting on a sign-off'
+                  : sub === 'validated' ? 'Nothing validated yet' : 'Nothing has been sent back'}
+                message={sub === 'pending'
+                  ? 'When somebody marks their task done it lands here for whoever raised it.'
+                  : sub === 'validated'
+                    ? 'Work appears here once the person who raised it has accepted it.'
+                    : 'Tasks a creator sends back for changes show up here until they are done again.'} />
+            </Card>
+          ) : (
+            <Card>
+              <Table>
+                <THead>
+                  <tr>
+                    <TH>Task</TH>
+                    <TH width="150px">Assigned to</TH>
+                    <TH width="150px">Completed by</TH>
+                    <TH width="140px">Completed</TH>
+                    <TH width="170px">Validation</TH>
+                    <TH width="130px">Action</TH>
+                  </tr>
+                </THead>
+                <tbody>
+                  {rows.map((item: any) => (
+                    <TR key={item.id}>
+                      <TD>
+                        <button onClick={() => onOpen(item.id)} className="text-left group cursor-pointer w-full">
+                          <span className="block font-medium text-ink group-hover:text-[var(--brand)] transition-colors leading-snug">
+                            {item.title}
+                          </span>
+                          <span className="mt-0.5 flex items-center gap-2.5 text-[12px] text-subtle">
+                            <span>Raised by {item.created_by_name || 'someone'}</span>
+                            {item.client_name && <span className="truncate">{item.client_name}</span>}
+                            {item.rework_count > 0 && (
+                              <span className="text-[var(--warning)]">
+                                sent back {item.rework_count}×
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      </TD>
+                      <TD>
+                        {item.owner_name
+                          ? <AvatarWithName name={item.owner_name} url={item.owner_avatar} size={24}
+                            sub={item.owner_designation} />
+                          : <span className="text-subtle">Unassigned</span>}
+                      </TD>
+                      <TD><span className="text-muted">{item.completed_by_name || '—'}</span></TD>
+                      <TD>
+                        <span className="text-[13px] text-muted">
+                          {item.completed_at ? date(item.completed_at) : '—'}
+                        </span>
+                      </TD>
+                      <TD>
+                        <span className="flex flex-col items-start gap-1">
+                          <ValidationBadge item={item} compact />
+                          {item.validated_at && item.validation_status !== 'pending' && (
+                            <span className="text-[11.5px] text-subtle">
+                              {[item.validated_by_name, date(item.validated_at)].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
+                        </span>
+                      </TD>
+                      <TD>
+                        {item.can_validate ? (
+                          <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />}
+                            onClick={() => setValidating(item)}>Validate</Button>
+                        ) : item.validation_status === 'pending' ? (
+                          <span className="text-[12.5px] text-subtle">
+                            with {item.created_by_name || 'the creator'}
+                          </span>
+                        ) : <span className="text-subtle">—</span>}
+                      </TD>
+                    </TR>
+                  ))}
+                </tbody>
+              </Table>
+            </Card>
+          )}
+
+      {validating && <ValidateModal item={validating} onClose={() => setValidating(null)} />}
+    </>
+  );
+}
+
+/**
+ * The creator's ruling. Two outcomes, and the one that sends work back insists
+ * on a reason - "rejected" with no note is how a task ends up bouncing between
+ * two people who each think the other is being unreasonable.
+ */
+function ValidateModal({ item, onClose, onDone }: { item: any; onClose: () => void; onDone?: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [decision, setDecision] = useState<'approve' | 'reject'>('approve');
+  const [note, setNote] = useState('');
+
+  const submit = useMutation({
+    mutationFn: () => api.post(`/action-items/${item.id}/validate`, { decision, note: note.trim() || null }),
+    onSuccess: () => {
+      toast.success(decision === 'approve'
+        ? 'Validated — the task is complete.'
+        : 'Sent back to the assignee with your note.');
+      qc.invalidateQueries({ queryKey: ['action-items'] });
+      qc.invalidateQueries({ queryKey: ['action-item', item.id] });
+      qc.invalidateQueries({ queryKey: ['home-counters'] });
+      onDone?.();
+      onClose();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const blocked = decision === 'reject' && note.trim().length < 3;
+
+  return (
+    <Modal open onClose={onClose} title="Validate completed work"
+      subtitle="You raised this task, so the call on whether it is finished is yours"
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant={decision === 'approve' ? 'primary' : 'danger'} loading={submit.isPending}
+            disabled={blocked} onClick={() => submit.mutate()}>
+            {decision === 'approve' ? 'Approve & complete' : 'Send back for changes'}
+          </Button>
+        </>
+      }>
+      <div className="space-y-4">
+        <div className="rounded-lg bg-sunken p-3.5">
+          <p className="text-[14px] font-medium text-ink leading-snug">{item.title}</p>
+          <p className="mt-1 text-[12.5px] text-subtle">
+            Completed by {item.completed_by_name || item.owner_name || 'the assignee'}
+            {item.completed_at ? ` on ${date(item.completed_at)}` : ''}
+          </p>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          {([
+            { id: 'approve', title: 'Approve', line: 'The work is accepted and the task is closed.', icon: <CheckCircle2 size={16} /> },
+            { id: 'reject', title: 'Needs changes', line: 'Goes back to the assignee as live work.', icon: <Undo2 size={16} /> },
+          ] as const).map((o) => (
+            <button key={o.id} type="button" onClick={() => setDecision(o.id)}
+              aria-pressed={decision === o.id}
+              className={cx('rounded-lg border p-3 text-left cursor-pointer transition-colors duration-150',
+                decision === o.id
+                  ? o.id === 'approve'
+                    ? 'border-[var(--positive)] bg-positive-soft'
+                    : 'border-[var(--warning)] bg-warning-soft'
+                  : 'border-line hover:border-line-strong')}>
+              <span className="flex items-center gap-2 text-[13.5px] font-medium text-ink">
+                {o.icon}{o.title}
+              </span>
+              <span className="mt-1 block text-[12.5px] text-subtle">{o.line}</span>
+            </button>
+          ))}
+        </div>
+
+        <Field
+          label={decision === 'approve' ? 'Note (optional)' : 'What needs changing'}
+          required={decision === 'reject'}
+          hint={decision === 'approve'
+            ? 'Kept on the task record with your sign-off'
+            : 'The assignee sees this, so be specific about what is missing'}>
+          <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3}
+            placeholder={decision === 'approve'
+              ? 'Anything worth recording alongside the sign-off…'
+              : 'The August figures are missing from section 3 — please add them and resubmit.'} />
+        </Field>
+      </div>
+    </Modal>
   );
 }
 
@@ -918,6 +1197,7 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
   const [escalateOpen, setEscalateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [validateOpen, setValidateOpen] = useState(false);
 
   const { data: item, isLoading } = useQuery({
     queryKey: ['action-item', id],
@@ -932,7 +1212,12 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
 
   const update = useMutation({
     mutationFn: (patch: any) => api.patch(`/action-items/${id}`, patch),
-    onSuccess: () => { invalidate(); toast.success('Updated.'); },
+    onSuccess: (res: any) => {
+      invalidate();
+      toast.success(res?.data?.validation_status === 'pending'
+        ? 'Marked done — sent to whoever raised it for validation.'
+        : 'Updated.');
+    },
     onError: (e: any) => toast.error(e.message),
   });
 
@@ -956,6 +1241,9 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
   const overdue = days != null && days < 0 && !['done', 'cancelled'].includes(item.status);
   // Only people on the task write updates against it.
   const onTask = (item.assignees || []).some((a: any) => a.user_id === user?.id);
+  // A task somebody raised for themselves signs itself off; one raised for
+  // someone else goes back to the creator when the assignee marks it done.
+  const selfRaised = !item.created_by || item.created_by === user?.id;
 
   return (
     <>
@@ -963,6 +1251,7 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
         subtitle={
           <span className="flex flex-wrap items-center gap-2">
             <StatusBadge status={item.status} />
+            {item.validation_status && <ValidationBadge item={item} compact />}
             <Badge tone={item.priority === 'urgent' ? 'negative' : item.priority === 'high' ? 'warning' : 'neutral'}>
               {item.priority}
             </Badge>
@@ -979,12 +1268,17 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
                 {item.my_update_today ? "Edit today's update" : 'Log daily update'}
               </Button>
             )}
+            {item.can_validate && (
+              <Button variant="primary" icon={<ShieldCheck size={15} />} onClick={() => setValidateOpen(true)}>
+                Validate
+              </Button>
+            )}
             {can('action_items', 'edit') && item.status !== 'done' && (
               <>
                 <Button icon={<ArrowUpRight size={15} />} onClick={() => setEscalateOpen(true)}>Escalate</Button>
                 <Button variant="primary" icon={<CheckCircle2 size={15} />}
                   loading={update.isPending} onClick={() => update.mutate({ status: 'done' })}>
-                  Mark done
+                  {selfRaised ? 'Mark done' : 'Mark done for validation'}
                 </Button>
               </>
             )}
@@ -1048,6 +1342,50 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
             )}
           </div>
 
+          {/* -------------------------------------------- creator sign-off */}
+          {(item.validation_status || item.status === 'done') && (
+            <div className={cx('rounded-lg border p-3.5',
+              item.validation_status === 'validated'
+                ? 'border-[color-mix(in_srgb,var(--positive)_30%,transparent)] bg-positive-soft'
+                : 'border-[color-mix(in_srgb,var(--warning)_30%,transparent)] bg-warning-soft')}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-[13px] font-medium text-ink">
+                  <ShieldCheck size={15} />
+                  {item.validation_status === 'validated' ? 'Validated'
+                    : item.validation_status === 'changes_requested' ? 'Sent back for changes'
+                      : 'Awaiting the creator’s validation'}
+                </span>
+                {item.can_validate && (
+                  <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />}
+                    onClick={() => setValidateOpen(true)}>Validate</Button>
+                )}
+              </div>
+              <p className="mt-1.5 text-[12.5px] text-muted">
+                {item.validation_status === 'validated' ? (
+                  // No name means it closed before sign-off existed and was
+                  // settled by the migration, not by a person.
+                  item.validated_by_name
+                    ? <>Accepted by {item.validated_by_name}
+                      {item.validated_at ? ` on ${dateTime(item.validated_at)}` : ''}.</>
+                    : <>Closed{item.validated_at ? ` on ${dateTime(item.validated_at)}` : ''}, before
+                      sign-off was part of the workflow.</>
+                ) : item.validation_status === 'changes_requested' ? (
+                  <>{item.validated_by_name || 'The creator'} sent this back
+                    {item.validated_at ? ` on ${dateTime(item.validated_at)}` : ''} — it is live work again.</>
+                ) : (
+                  <>Completed by {item.completed_by_name || item.owner_name || 'the assignee'}
+                    {item.completed_at ? ` on ${dateTime(item.completed_at)}` : ''}.
+                    {' '}Waiting on {item.created_by_name || 'whoever raised it'} to accept it.</>
+                )}
+              </p>
+              {item.validation_note && (
+                <p className="mt-2 rounded-md bg-raised px-2.5 py-2 text-[13px] text-muted whitespace-pre-wrap">
+                  “{item.validation_note}”
+                </p>
+              )}
+            </div>
+          )}
+
           {can('action_items', 'edit') && (
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Status">
@@ -1079,6 +1417,13 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
             <Detail label="Category" value={item.category_name} />
             <Detail label="Created" value={date(item.created_at)} />
             {item.completed_at && <Detail label="Completed" value={dateTime(item.completed_at)} />}
+            {item.completed_by_name && <Detail label="Completed by" value={item.completed_by_name} />}
+            {item.validated_at && item.validation_status === 'validated' && (
+              <Detail label="Validated" value={`${item.validated_by_name || '—'} · ${date(item.validated_at)}`} />
+            )}
+            {item.rework_count > 0 && (
+              <Detail label="Sent back" value={`${item.rework_count} time${item.rework_count > 1 ? 's' : ''}`} />
+            )}
             {item.recurrence && item.recurrence !== 'none' && <Detail label="Repeats" value={item.recurrence} />}
             {item.estimate_minutes && <Detail label="Estimate" value={`${Math.round(item.estimate_minutes / 60)}h`} />}
             {item.source_type && item.source_type !== 'manual' && (
@@ -1099,6 +1444,33 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
                       </Badge>
                     </div>
                     <p className="text-subtle mt-0.5">{e.reason} · {relative(e.created_at)}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ------------------------------------------ sign-off history */}
+          {item.validations?.length > 0 && (
+            <div>
+              <p className="label-cap mb-2 flex items-center gap-1.5">
+                <History size={13} /> Completion & validation history
+              </p>
+              <ul className="space-y-2">
+                {item.validations.map((v: any) => (
+                  <li key={v.id} className="rounded-md border border-line p-2.5 text-[13px]">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-ink">
+                        {v.event === 'submitted' ? `Marked done by ${v.actor_name || 'someone'}`
+                          : v.event === 'validated' ? `Validated by ${v.actor_name || 'someone'}`
+                            : v.event === 'changes_requested' ? `Sent back by ${v.actor_name || 'someone'}`
+                              : `Reopened by ${v.actor_name || 'someone'}`}
+                      </span>
+                      <span className="text-subtle text-[12px]">
+                        attempt {v.round} · {dateTime(v.created_at)}
+                      </span>
+                    </div>
+                    {v.note && <p className="mt-1 text-muted whitespace-pre-wrap">{v.note}</p>}
                   </li>
                 ))}
               </ul>
@@ -1167,6 +1539,10 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
       </Drawer>
 
       {escalateOpen && <EscalateModal id={id} item={item} meta={meta} onClose={() => setEscalateOpen(false)} />}
+
+      {validateOpen && (
+        <ValidateModal item={item} onClose={() => setValidateOpen(false)} onDone={invalidate} />
+      )}
 
       {logOpen && (
         <DailyUpdateModal task={item} existing={item.my_update_today}

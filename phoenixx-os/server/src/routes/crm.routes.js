@@ -233,6 +233,21 @@ router.get('/pipeline', requires('crm', 'view'), (req, res) => {
   }));
 });
 
+/**
+ * Every client on file in the tenant, id and name only - the list the pickers
+ * need when another module links a record to a client (action items, meetings,
+ * projects, proposals). Deliberately outside `scopeFilter`: an employee sees
+ * only the clients they own on the pipeline, but they still have to be able to
+ * raise a task against any client the firm works with. Nothing commercial is
+ * exposed here, so the wider read costs nothing.
+ */
+router.get('/clients/options', requires('crm', 'view'), (req, res) => ok(res, all(
+  `SELECT id, name, status, client_account_id FROM clients
+     WHERE tenant_id = ? AND deleted_at IS NULL
+     ORDER BY name COLLATE NOCASE`,
+  [req.auth.tenantId],
+)));
+
 router.get('/clients/export', requires('crm', 'export'), (req, res) => {
   const rows = all(
     `${SELECT} WHERE c.tenant_id = ? AND c.deleted_at IS NULL ORDER BY c.name`,
