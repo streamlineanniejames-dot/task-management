@@ -59,6 +59,15 @@ const clockOffset = (minutes) => {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 };
 
+/** The next Sunday on or after today, on the workspace calendar. */
+const sundayOn = () => {
+  let d = today();
+  while (attendance.weekdayOf(d) !== 0) {
+    d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  }
+  return d;
+};
+
 /** The next Saturday on or after today, on the workspace calendar. */
 const saturdayOn = () => {
   let d = today();
@@ -509,6 +518,43 @@ describe('the working week', () => {
     db.migrate();
     assert.deepEqual(attendance.weekOffDays(chosen), [0, 6],
       'the correction runs once, not on every boot');
+  });
+
+  test('the last weekly off cannot be unticked', async () => {
+    const res = await api.patch('/hr/work-schedules', { week_off_days: [] }, { token: hr.token });
+    assert.equal(res.status, 422, JSON.stringify(res.body));
+    assert.match(JSON.stringify(res.body), /at least one weekly off/i);
+    assert.deepEqual(attendance.weekOffDays(tenantId), [0], 'and Sunday is still off');
+  });
+
+  test('a workspace already left with no weekly off reads as Sunday, and is repaired', () => {
+    const stranded = 'tenant-no-week-off';
+    db.run('INSERT INTO tenants (id,name,slug,status,created_at,updated_at) VALUES (?,?,?,?,?,?)',
+      [stranded, 'Stranded Co', `stranded-${Date.now()}`, 'active',
+        new Date().toISOString(), new Date().toISOString()]);
+    db.run("UPDATE tenants SET week_off_days = '[]' WHERE id = ?", [stranded]);
+
+    // Read back as Sunday before anything has repaired the stored value.
+    assert.deepEqual(attendance.weekOffDays(stranded), [0]);
+    assert.equal(attendance.dayKind(stranded, sundayOn()).kind, 'weekoff');
+
+    db.migrate();
+    assert.equal(
+      db.get('SELECT week_off_days FROM tenants WHERE id = ?', [stranded]).week_off_days,
+      '[0]',
+      'and the stored value is put right too',
+    );
+  });
+
+  test('a deliberate weekly off on another day is left alone', () => {
+    const friday = 'tenant-friday-off';
+    db.run('INSERT INTO tenants (id,name,slug,status,created_at,updated_at) VALUES (?,?,?,?,?,?)',
+      [friday, 'Friday Co', `friday-${Date.now()}`, 'active',
+        new Date().toISOString(), new Date().toISOString()]);
+    db.run("UPDATE tenants SET week_off_days = '[5]' WHERE id = ?", [friday]);
+
+    db.migrate();
+    assert.deepEqual(attendance.weekOffDays(friday), [5], 'not forced back to Sunday');
   });
 
   test('a Saturday off is a holiday somebody adds, not a standing rule', async () => {

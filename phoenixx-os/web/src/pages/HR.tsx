@@ -762,8 +762,13 @@ function WorkTimingsModal({ onClose }: { onClose: () => void }) {
               <div className="flex flex-wrap gap-1.5">
                 {WEEKDAYS.map((d, i) => {
                   const on = workspace.week_off_days.includes(i);
+                  // The last remaining day cannot be turned off. A week with no
+                  // day off would mark everybody absent every Sunday, and the
+                  // API refuses it - so the button says no before it is pressed.
+                  const last = on && workspace.week_off_days.length === 1;
                   return (
-                    <button key={d} type="button" aria-pressed={on}
+                    <button key={d} type="button" aria-pressed={on} disabled={last}
+                      title={last ? 'Keep at least one weekly off' : undefined}
                       onClick={() => {
                         const next = on
                           ? workspace.week_off_days.filter((x: number) => x !== i)
@@ -771,8 +776,9 @@ function WorkTimingsModal({ onClose }: { onClose: () => void }) {
                         setWs({ ...workspace, week_off_days: next });
                         saveWorkspace.mutate({ week_off_days: next });
                       }}
-                      className={cx('h-8 min-w-[46px] rounded-md border text-[12.5px] font-medium cursor-pointer',
+                      className={cx('h-8 min-w-[46px] rounded-md border text-[12.5px] font-medium',
                         'transition-colors duration-150',
+                        last ? 'cursor-not-allowed opacity-70' : 'cursor-pointer',
                         on ? 'border-[var(--brand)] bg-brand-soft text-[var(--brand)]'
                           : 'border-line-strong bg-raised text-subtle hover:bg-sunken')}>
                       {d}
@@ -782,6 +788,7 @@ function WorkTimingsModal({ onClose }: { onClose: () => void }) {
               </div>
               <p className="mt-1.5 text-[12.5px] text-subtle">
                 Marked days need no check-in and show as a weekly off on the register.
+                Sunday is the default; at least one day has to stay marked.
               </p>
             </div>
           </div>

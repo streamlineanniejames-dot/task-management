@@ -469,7 +469,10 @@ router.patch('/work-schedules', requires('hr_attendance', 'approve'), (req, res)
     work_start: z.string().regex(DUE_TIME_RE).optional(),
     work_end: z.string().regex(DUE_TIME_RE).optional(),
     late_grace_minutes: z.number().int().min(0).max(240).optional(),
-    week_off_days: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+    // At least one. A week with no day off marks everybody absent every Sunday
+    // for ever, and nothing about unticking the last box says that was meant.
+    week_off_days: z.array(z.number().int().min(0).max(6)).min(1, 'Keep at least one weekly off')
+      .max(6).optional(),
   }), req.body);
 
   const before = workspaceSchedule(tenantId);

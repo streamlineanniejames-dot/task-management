@@ -86,11 +86,22 @@ export function workspaceSchedule(tenantId) {
   };
 }
 
-/** Weekday numbers that are a weekly off, 0 = Sunday. */
+/** The weekly off a workspace falls back to: Sunday, and nobody has to say so. */
+export const DEFAULT_WEEK_OFF = [0];
+
+/**
+ * Weekday numbers that are a weekly off, 0 = Sunday.
+ *
+ * An empty list reads as Sunday rather than as "no weekly off at all". A
+ * workspace with none would mark every employee absent every Sunday for ever,
+ * which is never what somebody meant by unticking the last day - and the API
+ * refuses to store an empty list precisely so this fallback stays theory.
+ */
 export function weekOffDays(tenantId) {
   const raw = parseJson(tenantRow(tenantId).week_off_days, null);
-  const days = Array.isArray(raw) ? raw.map(Number).filter((n) => n >= 0 && n <= 6) : [0];
-  return [...new Set(days)].sort();
+  const days = Array.isArray(raw) ? raw.map(Number).filter((n) => n >= 0 && n <= 6) : [];
+  const unique = [...new Set(days)].sort();
+  return unique.length ? unique : [...DEFAULT_WEEK_OFF];
 }
 
 /** The weekday of a workspace-local date, read without timezone drift. */

@@ -81,6 +81,14 @@ function backfill() {
   once('week_off_saturday_is_working', () => {
     db.exec(`UPDATE tenants SET week_off_days = '[0]' WHERE week_off_days = '[0,6]'`);
   });
+
+  // A workspace left with no weekly off at all - the toggle used to allow it -
+  // goes back to Sunday. Self-limiting: it only ever matches an empty list, and
+  // the API no longer accepts one, so this cannot fight a deliberate choice.
+  if (tableExists('tenants') && hasColumn('tenants', 'week_off_days')) {
+    db.exec(`UPDATE tenants SET week_off_days = '[0]'
+              WHERE week_off_days IS NULL OR TRIM(week_off_days) IN ('', '[]')`);
+  }
 }
 
 /** Runs `fn` the first time this database sees `key`, and never again. */
