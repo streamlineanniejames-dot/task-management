@@ -3,11 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Clock, AlertTriangle, PhoneCall, CalendarDays, CheckCircle2, LogIn, LogOut,
-  ListChecks, ArrowUpRight, Bell, Stamp, Plus, PencilLine, Users2,
+  ListChecks, ArrowUpRight, Bell, Stamp, Plus, PencilLine, Users2, CalendarOff,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { date, dateTime, relative, time, daysUntil, dueLabel, dueFull, isOverdue } from '../lib/format';
+import {
+  date, dateTime, relative, time, daysUntil, dueLabel, dueFull, isOverdue, clockTime,
+} from '../lib/format';
 import {
   Badge, Button, Card, CardHeader, EmptyState, PageHeader, Skeleton, StatusBadge,
   useToast, cx, Stat,
@@ -32,21 +34,28 @@ export default function Home() {
     queryFn: () => api.get('/dashboard/home').then((r) => r.data),
   });
 
+  // The server stamps the time; the button only says that it happened. Nothing
+  // here sends a clock reading, and the API would ignore one if it did.
   const checkIn = useMutation({
     mutationFn: () => api.post('/hr/attendance/check-in', { source: 'web' }),
-    onSuccess: () => {
-      toast.success('Checked in. Have a good one.');
+    onSuccess: (res: any) => {
+      const row = res?.data;
+      toast.success(row?.status === 'pending_approval'
+        ? `Checked in at ${row.check_in_label}. HR has been asked to approve it.`
+        : `Checked in at ${row?.check_in_label}. Have a good one.`);
       qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
+      qc.invalidateQueries({ queryKey: ['attendance'] });
     },
     onError: (e: any) => toast.error(e.message),
   });
 
   const checkOut = useMutation({
     mutationFn: () => api.post('/hr/attendance/check-out', {}),
-    onSuccess: () => {
-      toast.success('Checked out.');
+    onSuccess: (res: any) => {
+      toast.success(`Checked out at ${res?.data?.check_out_label}.`);
       qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
+      qc.invalidateQueries({ queryKey: ['attendance'] });
     },
     onError: (e: any) => toast.error(e.message),
   });
@@ -68,8 +77,13 @@ export default function Home() {
 
   const c = data?.counters || {};
   const attendance = data?.attendance;
+  const attendanceDay = data?.attendance_day;
+  // Nobody is expected in on a holiday or a weekly off, so the button that
+  // would mark them late is not offered on one.
+  const offToday = attendanceDay?.kind && attendanceDay.kind !== 'working';
   const approvals = data?.pending_approvals || {};
   const approvalTotal = (approvals.leave || 0) + (approvals.regularizations || 0)
+    + (approvals.late_check_ins || 0)
     + (can('invoices', 'approve') ? approvals.invoices || 0 : 0);
 
   const hour = new Date().getHours();
@@ -87,18 +101,24 @@ export default function Home() {
                 Quick add
               </Button>
             )}
-            {!attendance?.check_in_at ? (
+            {offToday ? (
+              <Badge tone="info" dot>
+                {attendanceDay.kind === 'holiday'
+                  ? attendanceDay.holiday?.name || 'Company holiday'
+                  : 'Weekly off'}
+              </Badge>
+            ) : !attendance?.check_in_at ? (
               <Button variant="accent" icon={<LogIn size={15} />} loading={checkIn.isPending}
                 onClick={() => checkIn.mutate()}>
                 Check in
               </Button>
             ) : !attendance?.check_out_at ? (
               <Button icon={<LogOut size={15} />} loading={checkOut.isPending} onClick={() => checkOut.mutate()}>
-                Check out · in since {time(attendance.check_in_at)}
+                Check out · in since {attendance.check_in_label || time(attendance.check_in_at)}
               </Button>
             ) : (
               <Badge tone="positive" dot>
-                {Math.floor((attendance.work_minutes || 0) / 60)}h {(attendance.work_minutes || 0) % 60}m logged
+                {attendance.work_hours_label || '0h 00m'} logged
               </Badge>
             )}
           </>
@@ -132,6 +152,15 @@ export default function Home() {
           {/* The personal list sits above the assigned work on purpose: the
               first thing someone does with this page is add what they already
               know they have to do today. */}
+          <AttendanceCard
+            attendance={attendance}
+            day={attendanceDay}
+            onCheckIn={() => checkIn.mutate()}
+            onCheckOut={() => checkOut.mutate()}
+            checkingIn={checkIn.isPending}
+            checkingOut={checkOut.isPending}
+          />
+
           <PersonalTodos />
 
           <Card>
@@ -269,6 +298,9 @@ export default function Home() {
                 {approvals.regularizations > 0 && (
                   <ApprovalRow label="Attendance regularizations" count={approvals.regularizations} to="/hr?tab=attendance" />
                 )}
+                {approvals.late_check_ins > 0 && (
+                  <ApprovalRow label="Late check-ins" count={approvals.late_check_ins} to="/hr?tab=attendance" />
+                )}
                 {can('invoices', 'approve') && approvals.invoices > 0 && (
                   <ApprovalRow label="Draft invoices" count={approvals.invoices} to="/invoices?status=draft" />
                 )}
@@ -308,6 +340,115 @@ export default function Home() {
     </>
   );
 }
+
+/* ==================================================== TODAY'S ATTENDANCE */
+/**
+ * The employee's own view of their working day, and the only place they can
+ * act on it: two buttons that say *that* something happened and never *when*.
+ * The times on this card are the server's record read back, not anything the
+ * browser measured - which is what makes them worth anything.
+ *
+ * Five states, and the card is only ever in one of them: the day is off, not
+ * started, in progress, waiting on HR, or finished.
+ */
+function AttendanceCard({ attendance: a, day, onCheckIn, onCheckOut, checkingIn, checkingOut }: {
+  attendance: any;
+  day: any;
+  onCheckIn: () => void;
+  onCheckOut: () => void;
+  checkingIn: boolean;
+  checkingOut: boolean;
+}) {
+  const schedule = day?.schedule;
+  const kind = day?.kind || 'working';
+  const pending = a?.status === 'pending_approval';
+  const rejected = a?.status === 'not_approved';
+
+  const statusTone = pending ? 'warning' : rejected ? 'negative'
+    : a?.check_in_at ? 'positive' : 'neutral';
+  const statusLabel = !a?.check_in_at ? 'Not checked in'
+    : pending ? 'Pending HR approval'
+      : rejected ? 'Not approved'
+        : a.status === 'half_day' ? 'Half day'
+          : a.status === 'wfh' ? 'Working from home'
+            : 'Present';
+
+  return (
+    <Card>
+      <CardHeader
+        title="Today's attendance"
+        subtitle={date(new Date().toISOString(), 'long')}
+        icon={<Clock size={16} />}
+      />
+      <div className="p-4">
+        {/* A holiday or a weekly off is answered before anything else: there is
+            nothing to check in to, so the card says why rather than offering a
+            button that would file somebody as late. */}
+        {kind !== 'working' ? (
+          <div className="flex items-start gap-2.5 rounded-lg bg-info-soft p-3">
+            <CalendarOff size={16} className="mt-0.5 text-[var(--info)] shrink-0" />
+            <div>
+              <p className="text-[13.5px] font-medium text-ink">
+                {kind === 'holiday' ? day?.holiday?.name || 'Company holiday' : 'Weekly off'}
+              </p>
+              <p className="text-[12.5px] text-muted mt-0.5">
+                No check-in needed today. Enjoy it.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <dl className="space-y-2 text-[13px]">
+              <AttendanceLine label="Scheduled"
+                value={schedule ? `${clockTime(schedule.start)} – ${clockTime(schedule.end)}` : '—'} />
+              {a?.check_in_at && <AttendanceLine label="Check-in" value={a.check_in_label} strong />}
+              {a?.check_out_at && <AttendanceLine label="Check-out" value={a.check_out_label} strong />}
+              {a?.check_out_at && a?.work_hours_label && (
+                <AttendanceLine label="Working hours" value={a.work_hours_label} strong />
+              )}
+              <div className="flex items-baseline justify-between gap-3 pt-1">
+                <dt className="text-subtle">Status</dt>
+                <dd><Badge tone={statusTone} dot>{statusLabel}</Badge></dd>
+              </div>
+            </dl>
+
+            {pending && (
+              <p className="mt-3 rounded-md bg-warning-soft px-2.5 py-2 text-[12.5px] text-muted">
+                {a.late_minutes} min after your {clockTime(a.scheduled_start)} start — awaiting HR approval.
+              </p>
+            )}
+            {rejected && a.approval_note && (
+              <p className="mt-3 rounded-md bg-negative-soft px-2.5 py-2 text-[12.5px] text-muted">
+                “{a.approval_note}”
+              </p>
+            )}
+
+            {!a?.check_in_at ? (
+              <Button variant="accent" className="w-full justify-center mt-3" icon={<LogIn size={15} />}
+                loading={checkingIn} onClick={onCheckIn}>Check in</Button>
+            ) : !a?.check_out_at ? (
+              <Button className="w-full justify-center mt-3" icon={<LogOut size={15} />}
+                loading={checkingOut} onClick={onCheckOut}>Check out</Button>
+            ) : (
+              <p className="mt-3 text-center text-[12.5px] text-subtle">
+                Day complete. The times above are the record.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+const AttendanceLine = ({ label, value, strong }: {
+  label: string; value?: string | null; strong?: boolean;
+}) => (
+  <div className="flex items-baseline justify-between gap-3">
+    <dt className="text-subtle">{label}</dt>
+    <dd className={strong ? 'font-medium text-ink tabular' : 'text-muted tabular'}>{value || '—'}</dd>
+  </div>
+);
 
 const ApprovalRow = ({ label, count, to }: { label: string; count: number; to: string }) => (
   <li>

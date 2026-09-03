@@ -32,6 +32,8 @@ export function migrate() {
 const ADDED_INDEXES = [
   // Overdue is asked of the instant now, on every list, counter and My Day.
   ['action_items', 'due_at', 'CREATE INDEX IF NOT EXISTS ix_ai_due_at ON action_items(tenant_id, status, due_at)'],
+  // HR's queue of late arrivals waiting on a ruling.
+  ['attendance', 'scheduled_start', 'CREATE INDEX IF NOT EXISTS ix_att_status ON attendance(tenant_id, status, work_date)'],
 ];
 
 function addIndexes() {
@@ -131,6 +133,24 @@ const ADDED_COLUMNS = [
   // Both nullable: a task with no due date has neither.
   ['action_items', 'due_time', 'TEXT'],
   ['action_items', 'due_at', 'TEXT'],
+  // The working day, as HR defines it. Workspace defaults first, then the
+  // per-employee overrides that fall back to them when NULL.
+  ['tenants', 'work_start', "TEXT NOT NULL DEFAULT '09:30'"],
+  ['tenants', 'work_end', "TEXT NOT NULL DEFAULT '18:30'"],
+  ['tenants', 'late_grace_minutes', 'INTEGER NOT NULL DEFAULT 10'],
+  // JSON weekday numbers, 0 = Sunday. A workspace upgrading into this keeps
+  // Saturday off, because that is what its register has always shown; a new
+  // one starts on Sunday-only, which is what the product now specifies.
+  ['tenants', 'week_off_days', "TEXT NOT NULL DEFAULT '[0,6]'"],
+  ['users', 'work_start', 'TEXT'],
+  ['users', 'work_end', 'TEXT'],
+  ['users', 'grace_minutes', 'INTEGER'],
+  // The schedule a day was actually judged against, and HR's ruling on it.
+  ['attendance', 'scheduled_start', 'TEXT'],
+  ['attendance', 'scheduled_end', 'TEXT'],
+  ['attendance', 'approved_by', 'TEXT'],
+  ['attendance', 'approved_at', 'TEXT'],
+  ['attendance', 'approval_note', 'TEXT'],
 ];
 
 function addColumns() {

@@ -26,7 +26,7 @@ if (reset) {
 
 const { db, get, all, run, migrate, tx } = await import('./db/index.js');
 const { uuid, nowIso, todayIso, addDays, addMonths, monthIso, startOfMonth } = await import('./lib/util.js');
-const { DEFAULT_TZ, dueAtIso } = await import('./lib/dueTime.js');
+const { DEFAULT_TZ, dueAtIso, localToUtc } = await import('./lib/dueTime.js');
 const { provisionTenant } = await import('./services/provisioning.js');
 const { createInvoice, syncHrCosts } = await import('./services/invoicing.js');
 const { scoreAllClients } = await import('./services/scoring.js');
@@ -867,27 +867,98 @@ function seedPhoenixx() {
   console.log(`✓ costs for ${months.length} months (overheads + HR from salary bands)`);
 
   // ------------------------------------------------------------ attendance
+  // The workspace working day, and Sunday as the only weekly off - Phoenixx
+  // works a six-day week, which is what makes the register worth looking at.
+  const SHIFT_START = '09:30';
+  const SHIFT_END = '18:30';
+  const GRACE = 10;
+  run(
+    `UPDATE tenants SET work_start = ?, work_end = ?, late_grace_minutes = ?, week_off_days = '[0]',
+       updated_at = ? WHERE id = ?`,
+    [SHIFT_START, SHIFT_END, GRACE, ts, tenantId],
+  );
+  // Two people keep their own hours, so the HR timings screen has something
+  // other than the default to show.
+  run("UPDATE users SET work_start = '10:00', work_end = '19:00' WHERE id = ?", [users['meera@phoenixxit.com']]);
+  run("UPDATE users SET work_start = '08:30', work_end = '17:30' WHERE id = ?", [users['karthik@phoenixxit.com']]);
+
+  // Company holidays everybody gets.
+  for (const [offset, name] of [[12, 'Onam'], [29, 'Gandhi Jayanti'], [-15, 'Independence Day']]) {
+    run(
+      `INSERT INTO holidays (id, tenant_id, holiday_date, name, kind, created_by, created_at, updated_at)
+       VALUES (?,?,?,?, 'company_holiday', ?,?,?)
+       ON CONFLICT (tenant_id, holiday_date) DO NOTHING`,
+      [uuid(), tenantId, addDays(new Date(), offset).toISOString().slice(0, 10), name, ownerId, ts, ts],
+    );
+  }
+  const holidayDates = new Set(
+    all('SELECT holiday_date FROM holidays WHERE tenant_id = ?', [tenantId]).map((h) => h.holiday_date),
+  );
+
   const staffIds = all("SELECT id FROM users WHERE tenant_id = ? AND role != 'client' AND deleted_at IS NULL", [tenantId]);
+  const shiftAt = (iso, hhmm) => localToUtc(iso, hhmm, DEFAULT_TZ);
+  const hrId = users['sanjay@phoenixxit.com'];
+
+  /** One attendance row plus the history that explains how it got that way. */
+  const logDay = (attendanceId, userId, workDate, event, actorId, toStatus, at, note) => run(
+    `INSERT INTO attendance_events (id, tenant_id, attendance_id, user_id, work_date, event,
+       actor_id, to_status, note, at, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [uuid(), tenantId, attendanceId, userId, workDate, event, actorId, toStatus, note ?? null, at, ts],
+  );
+
+  // Today's late arrival is not left to chance: HR should open a fresh install
+  // and find one real decision waiting for them.
+  const lateToday = users['priya@phoenixxit.com'];
+
   for (let d = 45; d >= 0; d--) {
     const date = addDays(new Date(), -d);
-    if ([0, 6].includes(date.getUTCDay())) continue;
     const iso = date.toISOString().slice(0, 10);
+    if (date.getUTCDay() === 0 || holidayDates.has(iso)) continue;   // weekly off / holiday
     for (const u of staffIds) {
       const roll = Math.random();
-      if (roll < 0.05) continue;                       // absent
-      const status = roll < 0.10 ? 'wfh' : roll < 0.13 ? 'half_day' : 'present';
-      const inAt = new Date(`${iso}T0${3 + Math.floor(Math.random() * 2)}:${String(Math.floor(Math.random() * 59)).padStart(2, '0')}:00Z`);
-      const minutes = status === 'half_day' ? 210 : 460 + Math.floor(Math.random() * 90);
+      const forcedLate = d === 0 && u.id === lateToday;
+      if (roll < 0.05 && !forcedLate) continue;        // absent
+
+      // Most people arrive within a few minutes of their start; a handful drift
+      // past the grace window, which is what puts a day in front of HR.
+      const drift = forcedLate ? 17
+        : roll < 0.12 ? 15 + Math.floor(Math.random() * 30)
+          : Math.floor(Math.random() * 12) - 6;
+      const inAt = new Date(shiftAt(iso, SHIFT_START).getTime() + drift * 60_000);
+      const lateMinutes = Math.max(0, drift);
+      const late = lateMinutes > GRACE;
+      const minutes = roll < 0.13 && !forcedLate ? 210 : 460 + Math.floor(Math.random() * 90);
+      // A late day from the past has long since been ruled on; only today's
+      // stragglers are still waiting, so HR opens the app to a real queue.
+      const settled = d > 0;
+      const status = late && !settled ? 'pending_approval'
+        : roll < 0.10 && !forcedLate ? 'wfh' : minutes < 240 ? 'half_day' : 'present';
+      // Today, most people are still at their desks and have not checked out.
+      const outAt = d === 0 && (forcedLate || Math.random() < 0.7)
+        ? null : new Date(inAt.getTime() + minutes * 60_000).toISOString();
+
+      const id = uuid();
       run(
         `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, check_out_at, source,
-           status, work_minutes, late_minutes, created_at, updated_at)
-         VALUES (?,?,?,?,?,?, ?, ?, ?, ?, ?, ?)
+           status, work_minutes, late_minutes, scheduled_start, scheduled_end,
+           approved_by, approved_at, created_at, updated_at)
+         VALUES (?,?,?,?,?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, user_id, work_date) DO NOTHING`,
-        [uuid(), tenantId, u.id, iso, inAt.toISOString(),
-          new Date(inAt.getTime() + minutes * 60_000).toISOString(),
-          Math.random() > 0.7 ? 'mobile' : 'web', status, minutes,
-          Math.max(0, Math.round((inAt - new Date(`${iso}T04:00:00Z`)) / 60_000)), ts, ts],
+        [id, tenantId, u.id, iso, inAt.toISOString(), outAt,
+          Math.random() > 0.7 ? 'mobile' : 'web', status, outAt ? minutes : 0, lateMinutes,
+          SHIFT_START, SHIFT_END,
+          late && settled ? hrId : null,
+          late && settled ? ts : null,
+          ts, ts],
       );
+
+      logDay(id, u.id, iso, 'checked_in', u.id, late ? 'pending_approval' : status,
+        inAt.toISOString(), late ? `${lateMinutes} min after a 9:30 AM start` : null);
+      if (late && settled) {
+        logDay(id, u.id, iso, 'approved', hrId, status, ts, 'Informed the reporting manager ahead of time');
+      }
+      if (outAt) logDay(id, u.id, iso, 'checked_out', u.id, status, outAt, null);
     }
   }
 
@@ -913,7 +984,7 @@ function seedPhoenixx() {
         addDays(new Date(), l.from - 3).toISOString(), ts],
     );
   }
-  console.log('✓ 45 days of attendance + 4 leave requests');
+  console.log('✓ 45 days of attendance + 3 holidays + 4 leave requests');
 
   // -------------------------------------------------------------- SOP runs
   const sops = all("SELECT * FROM sops WHERE tenant_id = ? AND status = 'published'", [tenantId]);

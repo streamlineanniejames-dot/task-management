@@ -6,8 +6,14 @@ import {
 } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, forbidden, audit, paginate, pageMeta } from '../lib/http.js';
 import { requires, can } from '../middleware/rbac.js';
-import { notifyMany } from '../services/notifications.js';
+import { notifyMany, notifyRole } from '../services/notifications.js';
 import { upsertDeadline, resolveDeadline } from '../services/deadlines.js';
+import { DUE_DATE_RE, DUE_TIME_RE, formatDueTime, localToUtc, timeInTz } from '../lib/dueTime.js';
+import {
+  PENDING, decorate, dayKind, historyFor, holidaysBetween, hoursLabel, logAttendance,
+  scheduleFor, tzFor, workDayFor, workspaceSchedule, workMinutes, assessCheckIn,
+  weekOffDays, weekdayOf,
+} from '../services/attendance.js';
 
 const router = Router();
 
@@ -18,85 +24,190 @@ const geoSchema = z.object({
   accuracy: z.number().optional(),
 });
 
+/**
+ * Stamping in.
+ *
+ * The body carries no time and no date on purpose. An employee may say *that*
+ * they arrived, never *when* - the server reads its own clock, resolves the day
+ * on the workspace calendar, and that is the record. (The offline queue in
+ * sync.routes.js is the one path that supplies its own stamp, because the phone
+ * genuinely held the button press while it had no signal.)
+ */
 router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, res) => {
   const { tenantId, userId } = req.auth;
   const body = validate(z.object({
     geo: geoSchema.optional(),
     source: z.enum(['web', 'mobile']).optional(),
-    work_date: z.string().optional(),      // AR5: offline queue replays with its own date
-    at: z.string().optional(),
-    notes: z.string().optional().nullable(),
+    notes: z.string().max(500).optional().nullable(),
   }), req.body || {});
 
-  const workDate = body.work_date || todayIso();
-  const at = body.at || nowIso();
+  const at = nowIso();
+  const tz = tzFor(tenantId);
+  const workDate = workDayFor(tenantId, new Date(at));
   const existing = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
     [tenantId, userId, workDate]);
+  // One check-in per person per day. A second press is not an error - it is
+  // somebody making sure it took - so it answers with the record they already
+  // have rather than a message that reads like something went wrong.
   if (existing?.check_in_at) {
-    return ok(res, { ...existing, already_checked_in: true });
+    return ok(res, { ...decorate(tenantId, existing), already_checked_in: true });
   }
 
-  // Standard day starts 09:30 IST (04:00 UTC); anything later is logged as late.
-  const shiftStart = new Date(`${workDate}T04:00:00.000Z`);
-  const lateMinutes = Math.max(0, Math.round((new Date(at) - shiftStart) / 60_000));
+  const schedule = scheduleFor(tenantId, userId);
+  const assessed = assessCheckIn({ tenantId, workDate, at, schedule });
 
   const id = existing?.id || uuid();
-  if (existing) {
-    run(
-      `UPDATE attendance SET check_in_at = ?, in_lat = ?, in_lng = ?, in_accuracy = ?, source = ?,
-         status = 'present', late_minutes = ?, notes = COALESCE(?, notes), updated_at = ? WHERE id = ?`,
-      [at, body.geo?.lat ?? null, body.geo?.lng ?? null, body.geo?.accuracy ?? null,
-        body.source || 'web', lateMinutes, body.notes ?? null, nowIso(), id],
-    );
-  } else {
-    run(
-      `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, in_lat, in_lng,
-         in_accuracy, source, status, late_minutes, notes, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?, 'present', ?,?,?,?)`,
-      [id, tenantId, userId, workDate, at, body.geo?.lat ?? null, body.geo?.lng ?? null,
-        body.geo?.accuracy ?? null, body.source || 'web', lateMinutes, body.notes ?? null,
-        nowIso(), nowIso()],
-    );
+  const fields = [at, body.geo?.lat ?? null, body.geo?.lng ?? null, body.geo?.accuracy ?? null,
+    body.source || 'web', assessed.status, assessed.late_minutes,
+    assessed.scheduled_start, assessed.scheduled_end, body.notes ?? null];
+
+  tx(() => {
+    if (existing) {
+      run(
+        `UPDATE attendance SET check_in_at = ?, in_lat = ?, in_lng = ?, in_accuracy = ?, source = ?,
+           status = ?, late_minutes = ?, scheduled_start = ?, scheduled_end = ?,
+           notes = COALESCE(?, notes), updated_at = ? WHERE id = ?`,
+        [...fields, nowIso(), id],
+      );
+    } else {
+      run(
+        `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, in_lat, in_lng,
+           in_accuracy, source, status, late_minutes, scheduled_start, scheduled_end, notes,
+           created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [id, tenantId, userId, workDate, ...fields, nowIso(), nowIso()],
+      );
+    }
+    logAttendance({
+      tenantId,
+      attendanceId: id,
+      userId,
+      workDate,
+      event: 'checked_in',
+      actorId: userId,
+      toStatus: assessed.status,
+      at,
+      note: assessed.late
+        ? `${assessed.late_minutes} min after a ${formatDueTime(schedule.start)} start`
+        : null,
+    });
+  });
+
+  // A late arrival is not marked present by the system. It goes to HR with the
+  // two numbers they need in order to rule on it, and waits there.
+  if (assessed.late) {
+    notifyRole({
+      tenantId,
+      roles: ['hr', 'owner'],
+      eventKey: 'attendance.late_check_in',
+      vars: {
+        person: req.auth.name,
+        actual: formatDueTime(timeInTz(tz, new Date(at))),
+        scheduled: formatDueTime(schedule.start),
+        late_minutes: assessed.late_minutes,
+        work_date: workDate,
+      },
+      link: '/hr?tab=attendance',
+      dedupeKey: `attendance:${id}:late`,
+    }).catch(() => {});
   }
-  return created(res, get('SELECT * FROM attendance WHERE id = ?', [id]));
+
+  audit(req, {
+    entity: 'attendance',
+    entityId: id,
+    action: 'create',
+    after: { work_date: workDate, status: assessed.status, late_minutes: assessed.late_minutes },
+  });
+
+  return created(res, {
+    ...decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [id])),
+    schedule,
+    day_kind: dayKind(tenantId, workDate).kind,
+  });
 });
 
+/** Stamping out. Server clock again, and once per day. */
 router.post('/attendance/check-out', requires('hr_attendance', 'create'), (req, res) => {
   const { tenantId, userId } = req.auth;
-  const body = validate(z.object({
-    geo: geoSchema.optional(), work_date: z.string().optional(), at: z.string().optional(),
-  }), req.body || {});
+  const body = validate(z.object({ geo: geoSchema.optional() }), req.body || {});
 
-  const workDate = body.work_date || todayIso();
-  const at = body.at || nowIso();
+  const at = nowIso();
+  const workDate = workDayFor(tenantId, new Date(at));
   const row = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
     [tenantId, userId, workDate]);
   if (!row?.check_in_at) throw badRequest('You have not checked in for this day yet');
+  if (row.check_out_at) {
+    return ok(res, { ...decorate(tenantId, row), already_checked_out: true });
+  }
 
-  const minutes = Math.max(0, Math.round((new Date(at) - new Date(row.check_in_at)) / 60_000));
-  run(
-    `UPDATE attendance SET check_out_at = ?, out_lat = ?, out_lng = ?, work_minutes = ?,
-       status = CASE WHEN ? < 240 THEN 'half_day' ELSE 'present' END, updated_at = ? WHERE id = ?`,
-    [at, body.geo?.lat ?? null, body.geo?.lng ?? null, minutes, minutes, nowIso(), row.id],
-  );
-  return ok(res, get('SELECT * FROM attendance WHERE id = ?', [row.id]));
+  const minutes = workMinutes(row.check_in_at, at);
+  // Checking out does not overrule HR. A day still waiting on a ruling stays
+  // waiting; only a day that was already present can fall back to half a day.
+  const nextStatus = [PENDING, 'not_approved'].includes(row.status)
+    ? row.status
+    : (minutes < 240 ? 'half_day' : 'present');
+
+  tx(() => {
+    run(
+      `UPDATE attendance SET check_out_at = ?, out_lat = ?, out_lng = ?, work_minutes = ?,
+         status = ?, updated_at = ? WHERE id = ?`,
+      [at, body.geo?.lat ?? null, body.geo?.lng ?? null, minutes, nextStatus, nowIso(), row.id],
+    );
+    logAttendance({
+      tenantId,
+      attendanceId: row.id,
+      userId,
+      workDate,
+      event: 'checked_out',
+      actorId: userId,
+      fromStatus: row.status,
+      toStatus: nextStatus,
+      at,
+      note: hoursLabel(minutes),
+    });
+  });
+
+  audit(req, {
+    entity: 'attendance',
+    entityId: row.id,
+    action: 'update',
+    before: row,
+    after: { check_out_at: at, work_minutes: minutes, status: nextStatus },
+  });
+  return ok(res, decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [row.id])));
 });
 
+/**
+ * My Day's attendance panel, and HR's "who is in" board on the same payload.
+ *
+ * `day` answers the question that comes before all the others: is anybody
+ * expected in at all today? On a holiday or a weekly off, nobody is, and the
+ * screen says so instead of offering a button that would mark them late.
+ */
 router.get('/attendance/today', requires('hr_attendance', 'view'), (req, res) => {
   const { tenantId, userId } = req.auth;
-  const today = todayIso();
+  const today = workDayFor(tenantId);
+  const day = dayKind(tenantId, today);
+  const approver = can(req.auth, 'hr_attendance', 'approve');
+
   return ok(res, {
-    me: get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
-      [tenantId, userId, today]) || null,
-    team: can(req.auth, 'hr_attendance', 'approve')
+    work_date: today,
+    day_kind: day.kind,
+    holiday: day.holiday,
+    schedule: scheduleFor(tenantId, userId),
+    me: decorate(tenantId, get(
+      'SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
+      [tenantId, userId, today],
+    )) || null,
+    team: approver
       ? all(
         `SELECT a.*, u.name, u.avatar_url, u.designation FROM attendance a
            JOIN users u ON u.id = a.user_id
           WHERE a.tenant_id = ? AND a.work_date = ? ORDER BY a.check_in_at`,
         [tenantId, today],
-      )
+      ).map((r) => decorate(tenantId, r))
       : [],
-    absent: can(req.auth, 'hr_attendance', 'approve')
+    absent: approver
       ? all(
         `SELECT u.id, u.name, u.avatar_url, u.designation FROM users u
           WHERE u.tenant_id = ? AND u.deleted_at IS NULL AND u.status = 'active' AND u.role != 'client'
@@ -107,19 +218,398 @@ router.get('/attendance/today', requires('hr_attendance', 'view'), (req, res) =>
   });
 });
 
-/** C1 - the monthly attendance register. */
+// =================================================== LATE ARRIVAL APPROVAL
+/**
+ * Everything sitting between "they turned up late" and "that counts as a day
+ * worked". Nothing leaves this queue on its own: a late arrival stays pending
+ * until a person with the attendance-approval right rules on it, which is the
+ * point of not marking it present automatically in the first place.
+ */
+router.get('/attendance/pending', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  return ok(res, all(
+    `SELECT a.*, u.name AS user_name, u.avatar_url, u.designation
+       FROM attendance a JOIN users u ON u.id = a.user_id
+      WHERE a.tenant_id = ? AND a.status = ?
+      ORDER BY a.work_date DESC, a.check_in_at DESC LIMIT 200`,
+    [tenantId, PENDING],
+  ).map((r) => decorate(tenantId, r)));
+});
+
+/**
+ * HR's ruling. Approve and the day counts as present, with who said so and how
+ * late they were kept on the row; reject and it counts as not approved, with
+ * the reason - a rejection with no reason is just a day disappearing.
+ */
+router.post('/attendance/:id/decide', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const { decision, note } = validate(z.object({
+    decision: z.enum(['approve', 'reject']),
+    note: z.string().max(1000).optional().nullable(),
+  }), req.body);
+
+  const row = get('SELECT * FROM attendance WHERE id = ? AND tenant_id = ?', [req.params.id, tenantId]);
+  if (!row) throw notFound('Attendance record');
+  if (row.status !== PENDING) {
+    throw badRequest(row.approved_by
+      ? 'This day has already been decided'
+      : 'Only a late check-in waiting on approval can be decided');
+  }
+  const reason = (note || '').trim();
+  if (decision === 'reject' && reason.length < 3) {
+    throw badRequest('Say why it is not approved - the employee sees this note');
+  }
+
+  const ts = nowIso();
+  const toStatus = decision === 'approve' ? 'present' : 'not_approved';
+
+  tx(() => {
+    run(
+      `UPDATE attendance SET status = ?, approved_by = ?, approved_at = ?, approval_note = ?,
+         updated_at = ? WHERE id = ?`,
+      [toStatus, userId, ts, reason || null, ts, row.id],
+    );
+    logAttendance({
+      tenantId,
+      attendanceId: row.id,
+      userId: row.user_id,
+      workDate: row.work_date,
+      event: decision === 'approve' ? 'approved' : 'rejected',
+      actorId: userId,
+      fromStatus: row.status,
+      toStatus,
+      note: reason || null,
+      at: ts,
+    });
+  });
+
+  notifyMany({
+    tenantId,
+    userIds: [row.user_id],
+    eventKey: decision === 'approve' ? 'attendance.approved' : 'attendance.rejected',
+    vars: {
+      work_date: row.work_date,
+      person: req.auth.name,
+      late_minutes: row.late_minutes,
+      note: reason || 'no note',
+    },
+    link: '/',
+  }).catch(() => {});
+
+  audit(req, { entity: 'attendance', entityId: row.id, action: 'update', before: row, after: { status: toStatus, approved_by: userId, approval_note: reason || null } });
+  return ok(res, decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [row.id])));
+});
+
+/**
+ * The forgotten checkout, and any other day HR has to put right by hand.
+ *
+ * Deliberately not something the employee can reach: the whole guarantee of the
+ * stamps is that the person they are about cannot move them. When HR does, the
+ * old and new values both go into the day's history with their name on it.
+ */
+router.post('/attendance/:id/correct', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const body = validate(z.object({
+    check_in_time: z.string().regex(DUE_TIME_RE).optional().nullable(),
+    check_out_time: z.string().regex(DUE_TIME_RE).optional().nullable(),
+    status: z.enum(['present', 'absent', 'half_day', 'wfh', 'leave']).optional(),
+    note: z.string().min(3).max(1000),
+  }), req.body);
+
+  const row = get('SELECT * FROM attendance WHERE id = ? AND tenant_id = ?', [req.params.id, tenantId]);
+  if (!row) throw notFound('Attendance record');
+
+  const tz = tzFor(tenantId);
+  const toInstant = (hhmm) => (hhmm ? localToUtc(row.work_date, hhmm, tz).toISOString() : null);
+  const checkIn = body.check_in_time !== undefined
+    ? toInstant(body.check_in_time) : row.check_in_at;
+  const checkOut = body.check_out_time !== undefined
+    ? toInstant(body.check_out_time) : row.check_out_at;
+  if (checkIn && checkOut && new Date(checkOut) < new Date(checkIn)) {
+    throw badRequest('Check-out cannot be before check-in');
+  }
+
+  const minutes = workMinutes(checkIn, checkOut);
+  const toStatus = body.status || (row.status === PENDING ? 'present' : row.status);
+  const ts = nowIso();
+
+  tx(() => {
+    run(
+      `UPDATE attendance SET check_in_at = ?, check_out_at = ?, work_minutes = ?, status = ?,
+         source = 'regularized', approved_by = ?, approved_at = ?, approval_note = ?,
+         updated_at = ? WHERE id = ?`,
+      [checkIn, checkOut, minutes, toStatus, userId, ts, body.note, ts, row.id],
+    );
+    logAttendance({
+      tenantId,
+      attendanceId: row.id,
+      userId: row.user_id,
+      workDate: row.work_date,
+      event: 'corrected',
+      actorId: userId,
+      fromStatus: row.status,
+      toStatus,
+      note: body.note,
+      at: ts,
+    });
+  });
+
+  audit(req, { entity: 'attendance', entityId: row.id, action: 'update', before: row, after: { check_in_at: checkIn, check_out_at: checkOut, status: toStatus, corrected_by: userId } });
+  return ok(res, decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [row.id])));
+});
+
+/** One employee, one day, with everything that ever happened to it. */
+router.get('/attendance/day', requires('hr_attendance', 'view'), (req, res) => {
+  const { tenantId } = req.auth;
+  const workDate = String(req.query.date || '');
+  if (!DUE_DATE_RE.test(workDate)) throw badRequest('Give a date like 2026-09-03');
+
+  const targetId = String(req.query.user_id || req.auth.userId);
+  if (targetId !== req.auth.userId && !can(req.auth, 'hr_attendance', 'approve')) {
+    throw forbidden('You can only open your own attendance');
+  }
+
+  const user = get('SELECT id, name, avatar_url, designation FROM users WHERE id = ? AND tenant_id = ?',
+    [targetId, tenantId]);
+  if (!user) throw notFound('Employee');
+
+  const row = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
+    [tenantId, targetId, workDate]);
+  const day = dayKind(tenantId, workDate);
+  const leave = get(
+    `SELECT l.*, lt.name AS leave_type_name FROM leave_requests l
+       LEFT JOIN leave_types lt ON lt.id = l.leave_type_id
+      WHERE l.tenant_id = ? AND l.user_id = ? AND l.status = 'approved'
+        AND l.from_date <= ? AND l.to_date >= ?`,
+    [tenantId, targetId, workDate, workDate],
+  );
+
+  return ok(res, {
+    user,
+    work_date: workDate,
+    day_kind: day.kind,
+    holiday: day.holiday,
+    leave: leave || null,
+    schedule: scheduleFor(tenantId, targetId),
+    attendance: decorate(tenantId, row) || null,
+    history: row ? historyFor(tenantId, row.id) : [],
+  });
+});
+
+// ======================================================== WORK SCHEDULES
+/** HR's roster of who is expected when. */
+router.get('/work-schedules', requires('hr_attendance', 'view'), (req, res) => {
+  const { tenantId } = req.auth;
+  const scoped = !can(req.auth, 'hr_attendance', 'approve');
+  const users = all(
+    `SELECT id, name, avatar_url, designation, role, work_start, work_end, grace_minutes
+       FROM users
+      WHERE tenant_id = ? AND deleted_at IS NULL AND role != 'client' AND status != 'disabled'
+        ${scoped ? 'AND id = ?' : ''}
+      ORDER BY name`,
+    scoped ? [tenantId, req.auth.userId] : [tenantId],
+  );
+  const workspace = workspaceSchedule(tenantId);
+
+  return ok(res, {
+    workspace,
+    employees: users.map((u) => {
+      const s = scheduleFor(tenantId, u.id);
+      return {
+        ...u,
+        effective_start: s.start,
+        effective_end: s.end,
+        effective_grace: s.grace_minutes,
+        start_label: formatDueTime(s.start),
+        end_label: formatDueTime(s.end),
+        custom: s.custom,
+      };
+    }),
+  });
+});
+
+/**
+ * Sets one person's hours. Sending null puts them back on the workspace
+ * default rather than freezing today's default onto their row, so a later
+ * change to the workspace day still reaches them.
+ */
+router.patch('/work-schedules/:userId', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  const body = validate(z.object({
+    work_start: z.string().regex(DUE_TIME_RE).optional().nullable(),
+    work_end: z.string().regex(DUE_TIME_RE).optional().nullable(),
+    grace_minutes: z.number().int().min(0).max(240).optional().nullable(),
+  }), req.body);
+
+  const user = get("SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role != 'client'",
+    [req.params.userId, tenantId]);
+  if (!user) throw notFound('Employee');
+  if (body.work_start && body.work_end && body.work_end <= body.work_start) {
+    throw badRequest('The working day has to end after it starts');
+  }
+
+  const patch = {};
+  for (const k of ['work_start', 'work_end', 'grace_minutes']) {
+    if (body[k] !== undefined) patch[k] = body[k] === '' ? null : body[k];
+  }
+  if (Object.keys(patch).length) {
+    const cols = Object.keys(patch);
+    run(`UPDATE users SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
+      [...cols.map((c) => patch[c]), nowIso(), user.id]);
+  }
+
+  audit(req, { entity: 'user', entityId: user.id, action: 'update', before: { work_start: user.work_start, work_end: user.work_end, grace_minutes: user.grace_minutes }, after: patch });
+  return ok(res, { ...scheduleFor(tenantId, user.id), user_id: user.id });
+});
+
+/** The workspace default day, and which weekdays are a weekly off. */
+router.patch('/work-schedules', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  const body = validate(z.object({
+    work_start: z.string().regex(DUE_TIME_RE).optional(),
+    work_end: z.string().regex(DUE_TIME_RE).optional(),
+    late_grace_minutes: z.number().int().min(0).max(240).optional(),
+    week_off_days: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  }), req.body);
+
+  const before = workspaceSchedule(tenantId);
+  const start = body.work_start ?? before.work_start;
+  const end = body.work_end ?? before.work_end;
+  if (end <= start) throw badRequest('The working day has to end after it starts');
+
+  run(
+    `UPDATE tenants SET work_start = ?, work_end = ?, late_grace_minutes = ?, week_off_days = ?,
+       updated_at = ? WHERE id = ?`,
+    [start, end, body.late_grace_minutes ?? before.late_grace_minutes,
+      JSON.stringify(body.week_off_days ?? before.week_off_days), nowIso(), tenantId],
+  );
+  audit(req, { entity: 'tenant', entityId: tenantId, action: 'update', before, after: workspaceSchedule(tenantId) });
+  return ok(res, workspaceSchedule(tenantId));
+});
+
+// ============================================================== HOLIDAYS
+/**
+ * Company-wide non-working days. One row marks the date for everybody at once:
+ * it lands on every employee's calendar, and nobody is expected to check in.
+ */
+router.get('/holidays', requires('hr_attendance', 'view'), (req, res) => {
+  const { tenantId } = req.auth;
+  const year = /^\d{4}$/.test(String(req.query.year || ''))
+    ? String(req.query.year)
+    : workDayFor(tenantId).slice(0, 4);
+  return ok(res, holidaysBetween(tenantId, `${year}-01-01`, `${year}-12-31`), { year });
+});
+
+router.post('/holidays', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const body = validate(z.object({
+    holiday_date: z.string().regex(DUE_DATE_RE, 'Use a date like 2026-09-15'),
+    name: z.string().min(2).max(120),
+    kind: z.enum(['company_holiday', 'restricted']).optional(),
+    notes: z.string().max(500).optional().nullable(),
+  }), req.body);
+
+  const clash = get('SELECT * FROM holidays WHERE tenant_id = ? AND holiday_date = ?',
+    [tenantId, body.holiday_date]);
+  const ts = nowIso();
+
+  if (clash && !clash.deleted_at) throw badRequest(`${clash.name} is already on that date`);
+  if (clash) {
+    // Re-adding a date somebody deleted revives the same row, so the calendar
+    // keeps one holiday per date rather than collecting tombstones.
+    run(
+      `UPDATE holidays SET name = ?, kind = ?, notes = ?, deleted_at = NULL, created_by = ?,
+         updated_at = ? WHERE id = ?`,
+      [body.name, body.kind || 'company_holiday', body.notes ?? null, userId, ts, clash.id],
+    );
+    audit(req, { entity: 'holiday', entityId: clash.id, action: 'create', after: body });
+    return created(res, get('SELECT * FROM holidays WHERE id = ?', [clash.id]));
+  }
+
+  const id = uuid();
+  run(
+    `INSERT INTO holidays (id, tenant_id, holiday_date, name, kind, notes, created_by, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [id, tenantId, body.holiday_date, body.name, body.kind || 'company_holiday',
+      body.notes ?? null, userId, ts, ts],
+  );
+  audit(req, { entity: 'holiday', entityId: id, action: 'create', after: body });
+  return created(res, get('SELECT * FROM holidays WHERE id = ?', [id]));
+});
+
+router.patch('/holidays/:id', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  const body = validate(z.object({
+    holiday_date: z.string().regex(DUE_DATE_RE).optional(),
+    name: z.string().min(2).max(120).optional(),
+    kind: z.enum(['company_holiday', 'restricted']).optional(),
+    notes: z.string().max(500).optional().nullable(),
+  }), req.body);
+
+  const before = get('SELECT * FROM holidays WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL',
+    [req.params.id, tenantId]);
+  if (!before) throw notFound('Holiday');
+  if (body.holiday_date && body.holiday_date !== before.holiday_date) {
+    const clash = get('SELECT id FROM holidays WHERE tenant_id = ? AND holiday_date = ? AND deleted_at IS NULL',
+      [tenantId, body.holiday_date]);
+    if (clash) throw badRequest('There is already a holiday on that date');
+  }
+
+  const patch = { ...body, updated_at: nowIso() };
+  const cols = Object.keys(patch).filter((c) => patch[c] !== undefined);
+  run(`UPDATE holidays SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+    [...cols.map((c) => patch[c]), before.id]);
+
+  audit(req, { entity: 'holiday', entityId: before.id, action: 'update', before, after: patch });
+  return ok(res, get('SELECT * FROM holidays WHERE id = ?', [before.id]));
+});
+
+router.delete('/holidays/:id', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  const before = get('SELECT * FROM holidays WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL',
+    [req.params.id, tenantId]);
+  if (!before) throw notFound('Holiday');
+  run('UPDATE holidays SET deleted_at = ?, updated_at = ? WHERE id = ?', [nowIso(), nowIso(), before.id]);
+  audit(req, { entity: 'holiday', entityId: before.id, action: 'delete', before });
+  return ok(res, { ok: true });
+});
+
+/**
+ * C1 - the monthly attendance register.
+ *
+ * Every cell is decided in the same order, and the order is the whole design:
+ *
+ *   holiday -> weekly off -> what was actually recorded -> approved leave ->
+ *   absent (only for a day that has already been)
+ *
+ * A holiday outranks a record because a company holiday is a fact about the
+ * day, not about the person; a recorded check-in outranks leave because
+ * somebody who came in and worked was, whatever the leave register says, at
+ * work. And a future working day with nothing on it is left blank rather than
+ * called absent - nobody is absent from a day that has not happened.
+ */
 router.get('/attendance/register', requires('hr_attendance', 'view'), (req, res) => {
   const { tenantId } = req.auth;
-  const month = req.query.month || monthIso();
+  const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : monthIso();
   const from = startOfMonth(month).slice(0, 10);
   const to = endOfMonth(month).slice(0, 10);
+  const today = workDayFor(tenantId);
 
   const scopeToSelf = !can(req.auth, 'hr_attendance', 'approve');
+  const filters = ["tenant_id = ?", 'deleted_at IS NULL', "role != 'client'"];
+  const params = [tenantId];
+  if (scopeToSelf) { filters.push('id = ?'); params.push(req.auth.userId); }
+  // HR filters the register the way they think about it: one person, or one
+  // team, or one service line.
+  if (req.query.user_id) { filters.push('id = ?'); params.push(String(req.query.user_id)); }
+  if (req.query.service_line_id) { filters.push('service_line_id = ?'); params.push(String(req.query.service_line_id)); }
+  if (req.query.manager_id) { filters.push('(manager_id = ? OR id = ?)'); params.push(String(req.query.manager_id), String(req.query.manager_id)); }
+
   const users = all(
-    `SELECT id, name, avatar_url, designation, role FROM users
-      WHERE tenant_id = ? AND deleted_at IS NULL AND role != 'client'
-        ${scopeToSelf ? 'AND id = ?' : ''} ORDER BY name`,
-    scopeToSelf ? [tenantId, req.auth.userId] : [tenantId],
+    `SELECT id, name, avatar_url, designation, role, service_line_id, manager_id,
+            work_start, work_end
+       FROM users WHERE ${filters.join(' AND ')} ORDER BY name`,
+    params,
   );
 
   const records = all(
@@ -127,65 +617,144 @@ router.get('/attendance/register', requires('hr_attendance', 'view'), (req, res)
     [tenantId, from, to],
   );
   const leaves = all(
-    `SELECT * FROM leave_requests WHERE tenant_id = ? AND status = 'approved'
-       AND from_date <= ? AND to_date >= ?`,
+    `SELECT l.*, lt.name AS leave_type_name FROM leave_requests l
+       LEFT JOIN leave_types lt ON lt.id = l.leave_type_id
+      WHERE l.tenant_id = ? AND l.status = 'approved' AND l.from_date <= ? AND l.to_date >= ?`,
     [tenantId, to, from],
   );
+  const holidays = holidaysBetween(tenantId, from, to);
+  const offDays = weekOffDays(tenantId);
 
   const days = [];
-  for (let d = new Date(`${from}T00:00:00Z`); d.toISOString().slice(0, 10) <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+  for (let d = new Date(`${from}T12:00:00Z`); d.toISOString().slice(0, 10) <= to; d.setUTCDate(d.getUTCDate() + 1)) {
     const iso = d.toISOString().slice(0, 10);
-    days.push({ date: iso, weekend: [0, 6].includes(d.getUTCDay()) });
+    const holiday = holidays.find((h) => h.holiday_date === iso) || null;
+    days.push({
+      date: iso,
+      weekday: d.getUTCDay(),
+      week_off: offDays.includes(d.getUTCDay()),
+      holiday: holiday ? { id: holiday.id, name: holiday.name } : null,
+      future: iso > today,
+    });
   }
+
+  // A day only counts as one somebody was meant to work.
+  const workingDayCount = days.filter((d) => !d.week_off && !d.holiday).length;
+  const statusFilter = req.query.status ? String(req.query.status).split(',') : null;
+
+  const rows = users.map((u) => {
+    const mine = records.filter((r) => r.user_id === u.id);
+    const myLeaves = leaves.filter((l) => l.user_id === u.id);
+
+    const cells = days.map((day) => {
+      const base = { date: day.date, week_off: day.week_off, future: day.future };
+      if (day.holiday) return { ...base, status: 'holiday', holiday: day.holiday.name };
+      if (day.week_off) return { ...base, status: 'weekoff' };
+
+      const rec = mine.find((r) => r.work_date === day.date);
+      if (rec) {
+        return {
+          ...base,
+          status: rec.status,
+          attendance_id: rec.id,
+          work_minutes: rec.work_minutes,
+          late_minutes: rec.late_minutes,
+          check_in_at: rec.check_in_at,
+          check_out_at: rec.check_out_at,
+          scheduled_start: rec.scheduled_start,
+          checkout_missing: !rec.check_out_at && day.date < today,
+        };
+      }
+      const leave = myLeaves.find((l) => l.from_date <= day.date && l.to_date >= day.date);
+      if (leave) return { ...base, status: 'leave', leave_type: leave.leave_type_name };
+      return { ...base, status: day.future ? null : 'absent' };
+    });
+
+    const count = (...statuses) => cells.filter((c) => statuses.includes(c.status)).length;
+    const present = count('present', 'wfh');
+    const halfDay = count('half_day');
+    const leave = count('leave');
+
+    return {
+      user: u,
+      cells,
+      summary: {
+        present,
+        half_day: halfDay,
+        leave,
+        absent: count('absent', 'not_approved'),
+        pending: count(PENDING),
+        week_off: count('weekoff'),
+        holiday: count('holiday'),
+        not_marked: cells.filter((c) => c.status === null).length,
+        working_days: workingDayCount,
+        // Half a day counts as half. Anything still waiting on HR counts as
+        // nothing yet, which is the honest answer until somebody rules on it.
+        present_days: round1(present + halfDay * 0.5),
+        leave_days: leave,
+        attendance_pct: pct(present + halfDay * 0.5, workingDayCount),
+        avg_hours: round1(
+          mine.filter((r) => r.work_minutes).reduce((a, r) => a + r.work_minutes, 0)
+          / (mine.filter((r) => r.work_minutes).length || 1) / 60,
+        ),
+      },
+    };
+  }).filter((row) => !statusFilter || row.cells.some((c) => statusFilter.includes(c.status || 'not_marked')));
+
+  // The month at a glance, across whoever survived the filters.
+  const totals = rows.reduce((a, r) => {
+    for (const k of ['present', 'half_day', 'leave', 'absent', 'pending', 'week_off', 'holiday', 'not_marked']) {
+      a[k] = (a[k] || 0) + r.summary[k];
+    }
+    return a;
+  }, {});
 
   return ok(res, {
     month,
     days,
-    rows: users.map((u) => {
-      const mine = records.filter((r) => r.user_id === u.id);
-      const myLeaves = leaves.filter((l) => l.user_id === u.id);
-      const cells = days.map((day) => {
-        const rec = mine.find((r) => r.work_date === day.date);
-        if (rec) return { date: day.date, status: rec.status, work_minutes: rec.work_minutes, late_minutes: rec.late_minutes, check_in_at: rec.check_in_at, check_out_at: rec.check_out_at };
-        if (myLeaves.some((l) => l.from_date <= day.date && l.to_date >= day.date)) {
-          return { date: day.date, status: 'leave' };
-        }
-        if (day.weekend) return { date: day.date, status: 'weekoff' };
-        return { date: day.date, status: day.date <= todayIso() ? 'absent' : null };
-      });
-      const workingDays = cells.filter((c) => !['weekoff', null].includes(c.status)).length;
-      const present = cells.filter((c) => ['present', 'wfh'].includes(c.status)).length;
-      return {
-        user: u,
-        cells,
-        summary: {
-          present,
-          half_day: cells.filter((c) => c.status === 'half_day').length,
-          leave: cells.filter((c) => c.status === 'leave').length,
-          absent: cells.filter((c) => c.status === 'absent').length,
-          working_days: workingDays,
-          attendance_pct: pct(present, workingDays),
-          avg_hours: round1(
-            mine.filter((r) => r.work_minutes).reduce((a, r) => a + r.work_minutes, 0)
-            / (mine.filter((r) => r.work_minutes).length || 1) / 60,
-          ),
-        },
-      };
-    }),
+    working_days: workingDayCount,
+    week_off_days: offDays,
+    holidays,
+    rows,
+    totals: { ...totals, employees: rows.length, working_days: workingDayCount },
   });
 });
 
 router.get('/attendance/export', requires('hr_attendance', 'export'), (req, res) => {
+  const { tenantId } = req.auth;
   const month = req.query.month || monthIso();
+  const tz = tzFor(tenantId);
+  const clock = (iso) => (iso ? formatDueTime(timeInTz(tz, new Date(iso))) : '');
+  const today = workDayFor(tenantId);
+
   const rows = all(
-    `SELECT u.name AS employee, a.work_date, a.status, a.check_in_at, a.check_out_at,
-            a.work_minutes, a.late_minutes, a.source
+    `SELECT u.name AS employee, u.designation, a.work_date, a.status, a.check_in_at, a.check_out_at,
+            a.work_minutes, a.late_minutes, a.scheduled_start, a.source,
+            ap.name AS approved_by_name, a.approved_at, a.approval_note
        FROM attendance a JOIN users u ON u.id = a.user_id
+       LEFT JOIN users ap ON ap.id = a.approved_by
       WHERE a.tenant_id = ? AND a.work_date >= ? AND a.work_date <= ?
       ORDER BY u.name, a.work_date`,
-    [req.auth.tenantId, startOfMonth(month).slice(0, 10), endOfMonth(month).slice(0, 10)],
-  );
-  res.setHeader('Content-Type', 'text/csv');
+    [tenantId, startOfMonth(month).slice(0, 10), endOfMonth(month).slice(0, 10)],
+  ).map((r) => ({
+    employee: r.employee,
+    designation: r.designation || '',
+    date: r.work_date,
+    status: r.status,
+    scheduled_start: formatDueTime(r.scheduled_start),
+    check_in: clock(r.check_in_at),
+    check_out: r.check_out_at ? clock(r.check_out_at)
+      : (r.check_in_at && r.work_date < today ? 'Missing' : ''),
+    working_hours: r.work_minutes ? hoursLabel(r.work_minutes) : '',
+    late_minutes: r.late_minutes || 0,
+    approved_by: r.approved_by_name || '',
+    approved_at: r.approved_at || '',
+    approval_note: r.approval_note || '',
+    source: r.source,
+  }));
+
+  audit(req, { entity: 'attendance', action: 'export', after: { month, rows: rows.length } });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="attendance-${month}.csv"`);
   return res.send(toCsv(rows));
 });

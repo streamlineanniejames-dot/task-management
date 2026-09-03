@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { get, all, run } from '../db/index.js';
 import { nowIso, monthIso, monthsBack, todayIso, addMonths, startOfMonth, endOfMonth, pct } from '../lib/util.js';
 import { ok, validate, notFound, audit } from '../lib/http.js';
-import { requires } from '../middleware/rbac.js';
+import { requires, can } from '../middleware/rbac.js';
 import { DEFAULT_TZ, todayInTz } from '../lib/dueTime.js';
+import { PENDING, dayKind, decorate, scheduleFor, workDayFor } from '../services/attendance.js';
 import { totalUnread } from '../services/chat.js';
 import {
   overviewDashboard, laggingIndicators, trendSeries, detectImprovementFlags, snapshotMetrics,
@@ -207,11 +208,24 @@ router.get('/home', (req, res) => {
   const today = todayIso();
   const dueToday = dueDayOf(req);
   const now = nowIso();
+  const attendanceDay = workDayFor(tenantId);
+  const attendanceKind = dayKind(tenantId, attendanceDay);
 
   return ok(res, {
     greeting_name: req.auth.name.split(' ')[0],
-    attendance: get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
-      [tenantId, userId, today]) || null,
+    // Today's attendance, and everything My Day needs to talk about it: the
+    // hours this person is expected to work, and whether today is a day
+    // anybody is expected at all.
+    attendance: decorate(tenantId, get(
+      'SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
+      [tenantId, userId, attendanceDay],
+    )) || null,
+    attendance_day: {
+      work_date: attendanceDay,
+      kind: attendanceKind.kind,
+      holiday: attendanceKind.holiday,
+      schedule: scheduleFor(tenantId, userId),
+    },
     counters: {
       due_today: Number(get(
         `SELECT COUNT(*) AS n FROM action_items a WHERE a.tenant_id = ? AND ${ASSIGNED} AND a.deleted_at IS NULL
@@ -299,6 +313,15 @@ router.get('/home', (req, res) => {
         `SELECT COUNT(*) AS n FROM attendance_regularizations WHERE tenant_id = ? AND status = 'pending' AND approver_id = ?`,
         [tenantId, userId],
       )?.n || 0),
+      // Late arrivals waiting on a ruling. Workspace-wide rather than assigned
+      // to one approver: the queue belongs to whoever holds the right, and a
+      // day sitting in it unanswered is the thing that must not go unnoticed.
+      late_check_ins: can(req.auth, 'hr_attendance', 'approve')
+        ? Number(get(
+          'SELECT COUNT(*) AS n FROM attendance WHERE tenant_id = ? AND status = ?',
+          [tenantId, PENDING],
+        )?.n || 0)
+        : 0,
       invoices: Number(get(
         "SELECT COUNT(*) AS n FROM invoices WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'draft' AND approved_at IS NULL",
         [tenantId],

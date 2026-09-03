@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS tenants (
   invoice_scheme TEXT NOT NULL DEFAULT '{prefix}/{fy}/{seq:4}',
   proposal_prefix TEXT NOT NULL DEFAULT 'PRO',
   fy_start_month INTEGER NOT NULL DEFAULT 4,      -- April (India)
+  -- The workspace working day. Every employee inherits these unless HR has
+  -- given them their own; all three are workspace-local wall clock, never UTC.
+  work_start TEXT NOT NULL DEFAULT '09:30',       -- HH:MM
+  work_end TEXT NOT NULL DEFAULT '18:30',         -- HH:MM
+  late_grace_minutes INTEGER NOT NULL DEFAULT 10, -- checked in within this is still on time
+  week_off_days TEXT NOT NULL DEFAULT '[0]',      -- JSON weekday numbers, 0 = Sunday
   settings TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'active',   -- active | suspended | cancelled
   created_at TEXT NOT NULL,
@@ -144,6 +150,12 @@ CREATE TABLE IF NOT EXISTS users (
   manager_id TEXT REFERENCES users(id),
   client_id TEXT,                          -- for portal users (role=client)
   employment_type TEXT DEFAULT 'full_time',
+  -- HR's pre-noted working time for this person. NULL means "whatever the
+  -- workspace says", so a tenant-wide change still reaches everyone who has
+  -- never been given a schedule of their own.
+  work_start TEXT,                         -- HH:MM, workspace-local
+  work_end TEXT,                           -- HH:MM, workspace-local
+  grace_minutes INTEGER,                   -- overrides the workspace grace
   date_of_joining TEXT,
   monthly_cost_minor INTEGER NOT NULL DEFAULT 0,   -- C5 -> feeds cost module
   avatar_url TEXT,
@@ -574,15 +586,71 @@ CREATE TABLE IF NOT EXISTS attendance (
   in_lat REAL, in_lng REAL, in_accuracy REAL,
   out_lat REAL, out_lng REAL,
   source TEXT NOT NULL DEFAULT 'web',      -- web|mobile|auto|regularized
-  status TEXT NOT NULL DEFAULT 'present',  -- present|absent|half_day|wfh|leave|holiday|weekoff
+  -- present|pending_approval|not_approved|absent|half_day|wfh|leave|holiday|weekoff
+  status TEXT NOT NULL DEFAULT 'present',
   work_minutes INTEGER NOT NULL DEFAULT 0,
   late_minutes INTEGER NOT NULL DEFAULT 0,
+  -- The schedule as it stood the moment this person checked in. Snapshotted
+  -- rather than joined: HR editing someone's hours in October must not rewrite
+  -- whether they were late in September.
+  scheduled_start TEXT,                    -- HH:MM, workspace-local
+  scheduled_end TEXT,                      -- HH:MM, workspace-local
+  -- HR's ruling on a late arrival. Untouched for anyone who arrived on time.
+  approved_by TEXT REFERENCES users(id),
+  approved_at TEXT,
+  approval_note TEXT,
   notes TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (tenant_id, user_id, work_date)
 );
 CREATE INDEX IF NOT EXISTS ix_att_date ON attendance(tenant_id, work_date);
+CREATE INDEX IF NOT EXISTS ix_att_status ON attendance(tenant_id, status, work_date);
+
+/**
+ * Every change an attendance row has ever seen, append-only.
+ *
+ * The row itself only knows where it ended up; this says how it got there -
+ * who checked in, when HR ruled and why, which missing checkout was corrected
+ * by hand. Attendance decides pay and performance scores, so "who changed this
+ * and when" cannot be a thing the system forgets.
+ */
+CREATE TABLE IF NOT EXISTS attendance_events (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  attendance_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  work_date TEXT NOT NULL,
+  event TEXT NOT NULL,                     -- checked_in|checked_out|approved|rejected|corrected
+  actor_id TEXT REFERENCES users(id),
+  from_status TEXT,
+  to_status TEXT,
+  note TEXT,
+  at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_att_ev ON attendance_events(tenant_id, attendance_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_att_ev_day ON attendance_events(tenant_id, user_id, work_date);
+
+/**
+ * Company-wide non-working days. One row per date per tenant; adding one marks
+ * that day a holiday for every employee at once, which is the whole point -
+ * nobody should have to mark Onam absent for forty people.
+ */
+CREATE TABLE IF NOT EXISTS holidays (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  holiday_date TEXT NOT NULL,              -- YYYY-MM-DD, workspace-local
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'company_holiday',  -- company_holiday|restricted
+  notes TEXT,
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  UNIQUE (tenant_id, holiday_date)
+);
+CREATE INDEX IF NOT EXISTS ix_holiday_date ON holidays(tenant_id, holiday_date);
 
 CREATE TABLE IF NOT EXISTS attendance_regularizations (
   id TEXT PRIMARY KEY,

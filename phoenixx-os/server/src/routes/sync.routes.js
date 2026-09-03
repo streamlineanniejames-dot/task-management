@@ -4,7 +4,11 @@ import path from 'node:path';
 import { z } from 'zod';
 import { get, all, run, tx, hasColumn } from '../db/index.js';
 import { uuid, nowIso, todayIso } from '../lib/util.js';
-import { DEFAULT_TZ, DUE_TIME_RE, dueAtIso } from '../lib/dueTime.js';
+import { DEFAULT_TZ, DUE_TIME_RE, dueAtIso, formatDueTime, timeInTz } from '../lib/dueTime.js';
+import {
+  PENDING, assessCheckIn, logAttendance, scheduleFor, tzFor, workDayFor, workMinutes,
+} from '../services/attendance.js';
+import { notifyRole } from '../services/notifications.js';
 import { ok, created, validate, notFound, badRequest, ApiError } from '../lib/http.js';
 import { config } from '../config.js';
 import { syncDeadline } from './actionItems.routes.js';
@@ -203,37 +207,93 @@ function applyOperation({ tenantId, userId, op, auth }) {
       };
     }
 
+    // The one path allowed to supply its own stamp: the phone genuinely held
+    // the button press while it had no signal, and `op.created_at` is when.
+    // It is still judged by the same rules - a queued late arrival reaches HR
+    // pending, exactly as it would have done online.
     case 'attendance.check_in': {
-      const workDate = op.payload.work_date || (op.created_at || ts).slice(0, 10);
+      const at = op.created_at || ts;
+      const workDate = op.payload.work_date || workDayFor(tenantId, new Date(at));
       const existing = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
         [tenantId, userId, workDate]);
       if (existing?.check_in_at) return { entity: 'attendance', id: existing.id, skipped: 'already checked in' };
 
+      const schedule = scheduleFor(tenantId, userId);
+      const assessed = assessCheckIn({ tenantId, workDate, at, schedule });
       const id = existing?.id || uuid();
       run(
         `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, in_lat, in_lng,
-           source, status, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?, 'mobile', 'present', ?, ?)
+           source, status, late_minutes, scheduled_start, scheduled_end, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?, 'mobile', ?,?,?,?,?,?)
          ON CONFLICT (tenant_id, user_id, work_date) DO UPDATE SET
            check_in_at = excluded.check_in_at, in_lat = excluded.in_lat, in_lng = excluded.in_lng,
-           source = 'mobile', updated_at = excluded.updated_at`,
-        [id, tenantId, userId, workDate, op.created_at || ts,
-          op.payload.lat ?? null, op.payload.lng ?? null, ts, ts],
+           source = 'mobile', status = excluded.status, late_minutes = excluded.late_minutes,
+           scheduled_start = excluded.scheduled_start, scheduled_end = excluded.scheduled_end,
+           updated_at = excluded.updated_at`,
+        [id, tenantId, userId, workDate, at, op.payload.lat ?? null, op.payload.lng ?? null,
+          assessed.status, assessed.late_minutes, assessed.scheduled_start, assessed.scheduled_end,
+          ts, ts],
       );
-      return { entity: 'attendance', id, server_updated_at: ts };
+      logAttendance({
+        tenantId,
+        attendanceId: id,
+        userId,
+        workDate,
+        event: 'checked_in',
+        actorId: userId,
+        toStatus: assessed.status,
+        at,
+        note: 'queued offline on mobile',
+      });
+      if (assessed.late) {
+        notifyRole({
+          tenantId,
+          roles: ['hr', 'owner'],
+          eventKey: 'attendance.late_check_in',
+          vars: {
+            person: auth?.name || 'An employee',
+            actual: formatDueTime(timeInTz(tzFor(tenantId), new Date(at))),
+            scheduled: formatDueTime(schedule.start),
+            late_minutes: assessed.late_minutes,
+            work_date: workDate,
+          },
+          link: '/hr?tab=attendance',
+          dedupeKey: `attendance:${id}:late`,
+        }).catch(() => {});
+      }
+      return { entity: 'attendance', id, status: assessed.status, server_updated_at: ts };
     }
 
     case 'attendance.check_out': {
-      const workDate = op.payload.work_date || (op.created_at || ts).slice(0, 10);
+      const at = op.created_at || ts;
+      const workDate = op.payload.work_date || workDayFor(tenantId, new Date(at));
       const row = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
         [tenantId, userId, workDate]);
       if (!row?.check_in_at) throw new Error('No check-in recorded for that day');
+      if (row.check_out_at) return { entity: 'attendance', id: row.id, skipped: 'already checked out' };
 
-      const minutes = Math.max(0, Math.round((new Date(op.created_at || ts) - new Date(row.check_in_at)) / 60_000));
+      const minutes = workMinutes(row.check_in_at, at);
+      // A day HR has yet to rule on keeps waiting; checking out is not a verdict.
+      const nextStatus = [PENDING, 'not_approved'].includes(row.status)
+        ? row.status
+        : (minutes < 240 ? 'half_day' : 'present');
       run(
-        `UPDATE attendance SET check_out_at = ?, out_lat = ?, out_lng = ?, work_minutes = ?, updated_at = ? WHERE id = ?`,
-        [op.created_at || ts, op.payload.lat ?? null, op.payload.lng ?? null, minutes, ts, row.id],
+        `UPDATE attendance SET check_out_at = ?, out_lat = ?, out_lng = ?, work_minutes = ?,
+           status = ?, updated_at = ? WHERE id = ?`,
+        [at, op.payload.lat ?? null, op.payload.lng ?? null, minutes, nextStatus, ts, row.id],
       );
+      logAttendance({
+        tenantId,
+        attendanceId: row.id,
+        userId,
+        workDate,
+        event: 'checked_out',
+        actorId: userId,
+        fromStatus: row.status,
+        toStatus: nextStatus,
+        at,
+        note: 'queued offline on mobile',
+      });
       return { entity: 'attendance', id: row.id, work_minutes: minutes, server_updated_at: ts };
     }
 

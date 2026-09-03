@@ -126,6 +126,19 @@ export const DEFAULT_TEMPLATES = {
     subject: 'OVERDUE: {{title}}',
     body: '"{{title}}" was due {{due}} and is now {{overdue_for}} overdue.',
   },
+  'attendance.late_check_in': {
+    subject: 'Late check-in approval required: {{person}}',
+    body: '{{person}} checked in at {{actual}} on {{work_date}}. Scheduled start {{scheduled}} '
+      + '({{late_minutes}} min late). It stays pending until you approve or reject it.',
+  },
+  'attendance.approved': {
+    subject: 'Attendance approved for {{work_date}}',
+    body: '{{person}} approved your late check-in on {{work_date}}. The day counts as present.',
+  },
+  'attendance.rejected': {
+    subject: 'Attendance not approved for {{work_date}}',
+    body: '{{person}} did not approve your check-in on {{work_date}}: {{note}}',
+  },
   'chat.broadcast': {
     subject: 'Announcement from {{author}}',
     body: '{{author}} posted to {{channel}}: {{preview}}',
