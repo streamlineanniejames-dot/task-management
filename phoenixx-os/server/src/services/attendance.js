@@ -145,18 +145,52 @@ export const isWorkingDay = (tenantId, dateStr) => dayKind(tenantId, dateStr).ki
  * state: a workspace that allows ten minutes has decided 09:39 is on time, and
  * saying so plainly beats filing a rubber-stamp approval every morning.
  */
-export function assessCheckIn({ tenantId, workDate, at, schedule }) {
+export function assessCheckIn({ tenantId, workDate, at, schedule, userId = null }) {
   const tz = schedule.timezone || tzFor(tenantId);
   const shiftStart = localToUtc(workDate, schedule.start, tz);
   const lateMinutes = Math.max(0, Math.round((new Date(at) - shiftStart) / 60_000));
-  const late = lateMinutes > schedule.grace_minutes;
+  // An approved hourly permission that covers the start of the day turns a
+  // late arrival into an agreed one - HR already said yes, in advance.
+  const permission = lateMinutes > schedule.grace_minutes && userId
+    ? permissionCovering({ tenantId, userId, workDate, at, schedule })
+    : null;
+  const late = lateMinutes > schedule.grace_minutes && !permission;
   return {
     late,
     late_minutes: lateMinutes,
+    permission,
     status: late ? PENDING : 'present',
     scheduled_start: schedule.start,
     scheduled_end: schedule.end,
   };
+}
+
+/**
+ * The approved hourly permission that explains a late arrival, if any.
+ *
+ * It has to be for that day, approved (a pending request is a question, not
+ * an answer), start no later than the shift does - a 2 pm permission says
+ * nothing about turning up at noon - and the person has to arrive before it
+ * ends, with the usual grace. Arriving after it ends is late again, and goes
+ * to HR like any other late arrival.
+ */
+export function permissionCovering({ tenantId, userId, workDate, at, schedule }) {
+  const tz = schedule.timezone || tzFor(tenantId);
+  const arrived = timeInTz(tz, new Date(at));
+  const graceEnd = (hhmm) => {
+    const [h, m] = hhmm.split(':').map(Number);
+    const total = Math.min(h * 60 + m + Number(schedule.grace_minutes || 0), 23 * 60 + 59);
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  };
+  const rows = all(
+    `SELECT * FROM leave_requests
+      WHERE tenant_id = ? AND user_id = ? AND kind = 'permission' AND status = 'approved'
+        AND from_date <= ? AND to_date >= ? AND from_time IS NOT NULL AND to_time IS NOT NULL`,
+    [tenantId, userId, workDate, workDate],
+  );
+  return rows.find((p) => validTime(p.from_time) && validTime(p.to_time)
+    && p.from_time <= graceEnd(schedule.start)
+    && arrived <= graceEnd(p.to_time)) || null;
 }
 
 /** Minutes between the two stamps, floored at zero. */

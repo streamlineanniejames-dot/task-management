@@ -221,7 +221,7 @@ function applyOperation({ tenantId, userId, op, auth }) {
       if (existing?.check_in_at) return { entity: 'attendance', id: existing.id, skipped: 'already checked in' };
 
       const schedule = scheduleFor(tenantId, userId);
-      const assessed = assessCheckIn({ tenantId, workDate, at, schedule });
+      const assessed = assessCheckIn({ tenantId, workDate, at, schedule, userId });
       // A queued check-in reaches the server later, from wherever the phone is
       // by then - its address says nothing about where the button was pressed.
       // With the office-network check on, it cannot be verified, so HR decides.

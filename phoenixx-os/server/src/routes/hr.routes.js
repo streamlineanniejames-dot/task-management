@@ -12,7 +12,7 @@ import { DUE_DATE_RE, DUE_TIME_RE, formatDueTime, localToUtc, timeInTz } from '.
 import {
   PENDING, decorate, dayKind, historyFor, holidaysBetween, hoursLabel, logAttendance,
   scheduleFor, tzFor, workDayFor, workspaceSchedule, workMinutes, assessCheckIn,
-  weekOffDays, weekdayOf,
+  weekOffDays, weekdayOf, permissionCovering,
 } from '../services/attendance.js';
 import {
   METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork,
@@ -60,7 +60,7 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
   }
 
   const schedule = scheduleFor(tenantId, userId);
-  const assessed = assessCheckIn({ tenantId, workDate, at, schedule });
+  const assessed = assessCheckIn({ tenantId, workDate, at, schedule, userId });
   // The network is judged from the address the request arrived from - never
   // from anything in the body, which zod has already stripped down to geo,
   // source and notes. A `wifi` field sent by a tampered client is dropped.
@@ -75,7 +75,8 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
     assessed.scheduled_start, assessed.scheduled_end, body.notes ?? null,
     network.verified === null ? null : Number(network.verified), network.method,
     network.network?.id ?? null, network.network ? (network.network.ssid || network.network.network_name) : null,
-    network.verified === null ? null : network.ip, reasons.join(',') || null];
+    network.verified === null ? null : network.ip, reasons.join(',') || null,
+    assessed.permission?.id ?? null];
 
   tx(() => {
     if (existing) {
@@ -84,7 +85,7 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
            status = ?, late_minutes = ?, scheduled_start = ?, scheduled_end = ?,
            notes = COALESCE(?, notes), network_verified = ?, verification_method = ?,
            network_id = ?, network_label = ?, client_ip = ?, review_reason = ?,
-           updated_at = ? WHERE id = ?`,
+           permission_id = ?, updated_at = ? WHERE id = ?`,
         [...fields, nowIso(), id],
       );
     } else {
@@ -92,8 +93,8 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
         `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, in_lat, in_lng,
            in_accuracy, source, status, late_minutes, scheduled_start, scheduled_end, notes,
            network_verified, verification_method, network_id, network_label, client_ip,
-           review_reason, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           review_reason, permission_id, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, tenantId, userId, workDate, ...fields, nowIso(), nowIso()],
       );
     }
@@ -108,6 +109,7 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
       at,
       note: [
         assessed.late && `${assessed.late_minutes} min after a ${formatDueTime(schedule.start)} start`,
+        assessed.permission && `within approved permission ${formatDueTime(assessed.permission.from_time)}–${formatDueTime(assessed.permission.to_time)}`,
         network.verified !== null && `${network.verified
           ? `office network: ${network.network.network_name}`
           : 'not on an approved office network'}${network.enabled ? '' : ' (trial - check switched off)'}`,
@@ -177,9 +179,12 @@ function checkInMessage(network, assessed, status) {
       + 'Your check-in has been sent to HR for review.';
   }
   if (status === PENDING) return 'You checked in after your start time, so HR has been asked to approve it.';
+  const within = assessed.permission
+    ? ` Your approved permission (${formatDueTime(assessed.permission.from_time)}–${formatDueTime(assessed.permission.to_time)}) covers the late start.`
+    : '';
   return network.enabled
-    ? 'Check-in successful. You are connected to an approved company network.'
-    : 'Check-in successful.';
+    ? `Check-in successful. You are connected to an approved company network.${within}`
+    : `Check-in successful.${within}`;
 }
 
 /** Stamping out. Server clock again, and once per day. */
@@ -1199,6 +1204,15 @@ router.post('/leave/requests', requires('hr_leave', 'create'), (req, res) => {
   const { tenantId, userId } = req.auth;
 
   if (body.to_date < body.from_date) throw badRequest('The end date cannot be before the start date');
+  // An hourly permission is one day, and the hours are the whole point: they
+  // are what a late check-in is matched against.
+  if (body.kind === 'permission') {
+    if (body.to_date !== body.from_date) throw badRequest('An hourly permission is for a single day');
+    if (!DUE_TIME_RE.test(String(body.from_time || '')) || !DUE_TIME_RE.test(String(body.to_time || ''))) {
+      throw badRequest('Give the permission start and end times');
+    }
+    if (body.to_time <= body.from_time) throw badRequest('The permission has to end after it starts');
+  }
   const type = get('SELECT * FROM leave_types WHERE id = ? AND tenant_id = ? AND active = 1',
     [body.leave_type_id, tenantId]);
   if (!type) throw notFound('Leave type');
@@ -1252,6 +1266,45 @@ router.post('/leave/requests/:id/decide', requires('hr_leave', 'approve'), (req,
   run('UPDATE leave_requests SET status = ?, approver_id = ?, decided_at = ?, decision_note = ?, updated_at = ? WHERE id = ?',
     [decision, userId, nowIso(), note ?? null, nowIso(), lr.id]);
   resolveDeadline(tenantId, 'leave', lr.id, decision === 'approved' ? 'met' : 'cancelled');
+
+  // A permission approved after the person already turned up late: the late
+  // check-in waiting on HR is now explained, so it settles here rather than
+  // asking HR the same question twice. Only a day waiting purely on lateness -
+  // an off-network check-in still needs a person to look at it.
+  if (decision === 'approved' && lr.kind === 'permission') {
+    const pending = all(
+      `SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND status = ?
+         AND work_date >= ? AND work_date <= ? AND check_in_at IS NOT NULL
+         AND (review_reason IS NULL OR review_reason = 'late')`,
+      [tenantId, lr.user_id, PENDING, lr.from_date, lr.to_date],
+    );
+    for (const row of pending) {
+      const schedule = { ...scheduleFor(tenantId, lr.user_id), start: row.scheduled_start || scheduleFor(tenantId, lr.user_id).start };
+      const covering = permissionCovering({ tenantId, userId: lr.user_id, workDate: row.work_date, at: row.check_in_at, schedule });
+      if (covering?.id !== lr.id) continue;
+      const ts = nowIso();
+      const note = `Covered by approved hourly permission ${formatDueTime(lr.from_time)}–${formatDueTime(lr.to_time)}`;
+      tx(() => {
+        run(
+          `UPDATE attendance SET status = 'present', approved_by = ?, approved_at = ?, approval_note = ?,
+             permission_id = ?, review_reason = NULL, updated_at = ? WHERE id = ? AND status = ?`,
+          [userId, ts, note, lr.id, ts, row.id, PENDING],
+        );
+        logAttendance({
+          tenantId,
+          attendanceId: row.id,
+          userId: row.user_id,
+          workDate: row.work_date,
+          event: 'approved',
+          actorId: userId,
+          fromStatus: row.status,
+          toStatus: 'present',
+          note,
+          at: ts,
+        });
+      });
+    }
+  }
 
   notifyMany({
     tenantId, userIds: [lr.user_id], eventKey: 'leave.decided',

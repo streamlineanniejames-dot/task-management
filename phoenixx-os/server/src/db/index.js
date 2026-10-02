@@ -229,6 +229,8 @@ const ADDED_COLUMNS = [
   ['attendance', 'client_ip', 'TEXT'],
   // Why the day is waiting on HR: comma-separated late|off_network|offline.
   ['attendance', 'review_reason', 'TEXT'],
+  // The approved hourly permission that made a late arrival an agreed one.
+  ['attendance', 'permission_id', 'TEXT'],
 ];
 
 function addColumns() {

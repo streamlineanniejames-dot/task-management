@@ -1403,6 +1403,11 @@ function LeaveTab() {
                       <span className="text-[13px] text-ink">
                         {r.from_date === r.to_date ? date(r.from_date) : `${date(r.from_date, 'day')} – ${date(r.to_date)}`}
                       </span>
+                      {r.kind === 'permission' && r.from_time && r.to_time && (
+                        <span className="block text-[12px] text-muted tabular">
+                          {clockTime(r.from_time)} – {clockTime(r.to_time)}
+                        </span>
+                      )}
                       <span className="block text-[11.5px] text-subtle">{relative(r.from_date)}</span>
                     </TD>
                     <TD><span className="tabular text-muted">{r.days}</span></TD>
@@ -1440,8 +1445,9 @@ function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [form, setForm] = useState({
-    leave_type_id: '', kind: 'leave', from_date: '', to_date: '', reason: '',
+    leave_type_id: '', kind: 'leave', from_date: '', to_date: '', from_time: '', to_time: '', reason: '',
   });
+  const permission = form.kind === 'permission';
 
   const { data: types } = useQuery({
     queryKey: ['leave-types'],
@@ -1453,7 +1459,9 @@ function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
       leave_type_id: form.leave_type_id,
       kind: form.kind,
       from_date: form.from_date,
-      to_date: form.to_date || form.from_date,
+      // A permission is one day; the hours are what a late check-in is matched against.
+      to_date: permission ? form.from_date : form.to_date || form.from_date,
+      ...(permission ? { from_time: form.from_time, to_time: form.to_time } : {}),
       reason: form.reason.trim(),
     }),
     onSuccess: () => {
@@ -1465,6 +1473,9 @@ function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const permMinutes = permission && form.from_time && form.to_time
+    ? (Number(form.to_time.slice(0, 2)) * 60 + Number(form.to_time.slice(3))) - (Number(form.from_time.slice(0, 2)) * 60 + Number(form.from_time.slice(3)))
+    : 0;
   const days = form.from_date && form.to_date
     ? Math.max(1, Math.round((new Date(form.to_date).getTime() - new Date(form.from_date).getTime()) / 86_400_000) + 1)
     : form.from_date ? 1 : 0;
@@ -1475,16 +1486,25 @@ function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={apply.isPending}
-            disabled={!form.leave_type_id || !form.from_date || form.reason.trim().length < 3}
+            disabled={!form.leave_type_id || !form.from_date || form.reason.trim().length < 3
+              || (permission && permMinutes <= 0)}
             onClick={() => apply.mutate()}>
-            Submit{days > 0 && ` · ${days} day${days === 1 ? '' : 's'}`}
+            Submit{permission
+              ? permMinutes > 0 && ` · ${Math.floor(permMinutes / 60)}h ${String(permMinutes % 60).padStart(2, '0')}m`
+              : days > 0 && ` · ${days} day${days === 1 ? '' : 's'}`}
           </Button>
         </>
       }>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Leave type" required>
-            <Select value={form.leave_type_id} onChange={(e) => setForm((f) => ({ ...f, leave_type_id: e.target.value }))} autoFocus>
+            <Select value={form.leave_type_id} autoFocus
+              onChange={(e) => {
+                const t = types?.find((x: any) => x.id === e.target.value);
+                // A type named as a permission is one; save picking it twice.
+                const isPermission = /permission/i.test(`${t?.name || ''} ${t?.code || ''}`);
+                setForm((f) => ({ ...f, leave_type_id: e.target.value, kind: isPermission ? 'permission' : f.kind }));
+              }}>
               <option value="">Select…</option>
               {types?.map((t: any) => (
                 <option key={t.id} value={t.id}>{t.name}{t.paid ? '' : ' (unpaid)'}</option>
@@ -1497,14 +1517,33 @@ function ApplyLeaveModal({ onClose }: { onClose: () => void }) {
               <option value="permission">Hourly permission</option>
             </Select>
           </Field>
-          <Field label="From" required>
-            <Input type="date" value={form.from_date}
-              onChange={(e) => setForm((f) => ({ ...f, from_date: e.target.value, to_date: f.to_date || e.target.value }))} />
-          </Field>
-          <Field label="To" required>
-            <Input type="date" value={form.to_date} min={form.from_date}
-              onChange={(e) => setForm((f) => ({ ...f, to_date: e.target.value }))} />
-          </Field>
+          {permission ? (
+            <>
+              <Field label="Date" required className="sm:col-span-2">
+                <Input type="date" value={form.from_date}
+                  onChange={(e) => setForm((f) => ({ ...f, from_date: e.target.value, to_date: e.target.value }))} />
+              </Field>
+              <Field label="From time" required hint="Starting at or before your shift start covers a late check-in.">
+                <Input type="time" value={form.from_time}
+                  onChange={(e) => setForm((f) => ({ ...f, from_time: e.target.value }))} />
+              </Field>
+              <Field label="To time" required hint="Check in by this time and it counts as present.">
+                <Input type="time" value={form.to_time}
+                  onChange={(e) => setForm((f) => ({ ...f, to_time: e.target.value }))} />
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="From" required>
+                <Input type="date" value={form.from_date}
+                  onChange={(e) => setForm((f) => ({ ...f, from_date: e.target.value, to_date: f.to_date || e.target.value }))} />
+              </Field>
+              <Field label="To" required>
+                <Input type="date" value={form.to_date} min={form.from_date}
+                  onChange={(e) => setForm((f) => ({ ...f, to_date: e.target.value }))} />
+              </Field>
+            </>
+          )}
         </div>
         <Field label="Reason" required>
           <Textarea value={form.reason} onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} rows={3}
