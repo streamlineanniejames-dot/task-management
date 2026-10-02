@@ -839,7 +839,8 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
   const { user } = useAuth();
 
   const [form, setForm] = useState({
-    title: '', description: '', owner_id: user?.id || '', client_id: '', category_id: '',
+    // Action items are handed to somebody else; your own to-dos go on My Day.
+    title: '', description: '', owner_id: '', client_id: '', category_id: '',
     priority: 'medium', due_date: '', due_time: '', recurrence: 'none', estimate_minutes: '',
   });
   // Assigning to a team means a project team: everyone seated on it, with one
@@ -894,8 +895,8 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={create.isPending}
-            disabled={form.title.trim().length < 2 || !!dueProblem
-              || (mode === 'team' && (!projectId || !form.owner_id))}
+            disabled={form.title.trim().length < 2 || !!dueProblem || !form.owner_id
+              || (mode === 'team' && !projectId)}
             onClick={() => create.mutate()}>Create item</Button>
         </>
       }>
@@ -959,16 +960,17 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
 
           <Field
             label={mode === 'team' ? 'Accountable for it' : 'Assigned to'}
-            required={mode === 'team'}
+            required
             hint={mode === 'team'
               ? 'One name answers for the due date, even when several people work it'
-              : 'Who is responsible for getting this done'}
+              : 'Someone other than you. Your own to-dos go on the personal list on My Day.'}
           >
             <Select value={form.owner_id} onChange={(e) => set('owner_id', e.target.value)}>
-              <option value="">{mode === 'team' ? 'Pick from the team…' : 'Unassigned'}</option>
+              <option value="">{mode === 'team' ? 'Pick from the team…' : 'Choose a person…'}</option>
               {(mode === 'team' ? (team || []).map((m: any) => ({ id: m.user_id, name: m.name }))
                 : meta?.directory || []
-              ).map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              ).filter((u: any) => u.id !== user?.id)
+                .map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </Select>
           </Field>
         </div>
@@ -1523,7 +1525,10 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
               <Field label="Accountable" hint="One name answers for the due date">
                 <Select value={item.owner_id || ''} onChange={(e) => update.mutate({ owner_id: e.target.value || null })}>
                   <option value="">Unassigned</option>
-                  {meta?.directory?.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  {meta?.directory
+                    // Whoever raised it cannot hand it to themselves.
+                    ?.filter((u: any) => !(item.created_by === user?.id && u.id === user?.id && item.owner_id !== u.id))
+                    .map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </Select>
               </Field>
             </div>

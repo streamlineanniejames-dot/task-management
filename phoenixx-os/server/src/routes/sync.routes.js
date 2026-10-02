@@ -145,6 +145,10 @@ function applyOperation({ tenantId, userId, op, auth }) {
 
   switch (op.type) {
     case 'action_item.create': {
+      // Same rule as the API: an action item is for somebody else.
+      if (!op.payload.owner_id || op.payload.owner_id === userId) {
+        throw new Error('An action item has to be assigned to somebody other than yourself');
+      }
       const id = op.payload.id || uuid();
       // An offline task keeps whatever hour it was written down for; the
       // instant is worked out here, against the workspace clock, because the

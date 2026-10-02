@@ -876,16 +876,20 @@ router.post('/', requires('action_items', 'create'), (req, res) => {
   const ts = nowIso();
   const id = uuid();
 
-  // Staffing from a project team means "everyone seated on it", with whoever
-  // was named owner answering for the due date. Falling back to the creator
-  // keeps the old behaviour for a task raised with nobody named.
+  // An action item is work handed to somebody else. Nobody assigns one to
+  // themselves - their own to-dos live on the personal list on My Day - so
+  // the creator is never the owner, and is left out when a team is pulled in.
   const fromTeam = body.assign_from_project_id
-    ? projectTeamIds(tenantId, body.assign_from_project_id) : [];
+    ? projectTeamIds(tenantId, body.assign_from_project_id).filter((id) => id !== userId) : [];
   if (body.assign_from_project_id && !fromTeam.length) {
-    throw badRequest('That project has nobody on its team yet - staff the project first');
+    throw badRequest('That project has nobody else on its team yet - staff the project first');
   }
-  const ownerId = body.owner_id || fromTeam[0] || userId;
-  const extras = [...(body.assignee_ids || []), ...fromTeam];
+  const ownerId = body.owner_id || fromTeam[0];
+  if (!ownerId) throw badRequest('Choose who this is assigned to');
+  if (ownerId === userId) {
+    throw badRequest('You cannot assign an action item to yourself - add it to your personal to-dos on My Day instead');
+  }
+  const extras = [...(body.assignee_ids || []), ...fromTeam].filter((id) => id !== userId);
   const due = resolveDue(req, body);
 
   const item = tx(() => {
@@ -956,6 +960,15 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
     }
   }
 
+  // The same rule as creating it: whoever raised the item cannot hand it to
+  // themselves afterwards either.
+  if (body.owner_id && body.owner_id !== before.owner_id && body.owner_id === userId
+    && before.created_by === userId) {
+    throw badRequest('You cannot assign an action item you raised to yourself');
+  }
+  if (body.assignee_ids?.includes(userId) && before.created_by === userId) {
+    body.assignee_ids = body.assignee_ids.filter((id) => id !== userId);
+  }
   const wasAssigned = assigneeIds(tenantId, before.id, before.owner_id);
   const nextOwner = body.owner_id !== undefined ? body.owner_id : before.owner_id;
   const fromTeam = body.assign_from_project_id

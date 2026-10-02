@@ -424,7 +424,8 @@ describe('supporting documents', () => {
   });
 
   test('other kinds of attachment are unaffected by the receipt rule', async () => {
-    const item = (await api.post('/action-items', { title: 'Shared brief' }, { token: priya.token })).body.data;
+    const item = (await api.post('/action-items', { title: 'Shared brief', owner_id: rahul.user.id },
+      { token: priya.token })).body.data;
     assert.equal((await api.post('/files', {
       entity: 'action_item', entity_id: item.id, filename: 'brief.txt',
       content_base64: Buffer.from('brief').toString('base64'),

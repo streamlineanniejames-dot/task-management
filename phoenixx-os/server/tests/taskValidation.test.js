@@ -210,15 +210,11 @@ describe('completion and creator validation', () => {
     assert.ok(d.validations.some((v) => v.event === 'reopened'));
   });
 
-  test('a task somebody raised for themselves needs no ceremony', async () => {
+  test('nobody can raise a task for themselves', async () => {
     const own = await api.post('/action-items',
       { title: 'My own errand', owner_id: chandru.user.id }, { token: chandru.token });
-    assert.equal(own.status, 201);
-
-    const done = await markDone(own.body.data.id, chandru.token);
-    assert.equal(done.body.data.validation_status, 'validated',
-      'self-raised work signs itself off rather than waiting on nobody');
-    assert.equal(done.body.data.validated_by, chandru.user.id);
+    assert.equal(own.status, 400);
+    assert.match(own.body.error.message, /yourself/);
   });
 
   test('the creator queue counts only what is waiting on that person', async () => {

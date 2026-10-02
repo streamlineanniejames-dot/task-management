@@ -16,6 +16,10 @@ const alpha = await signUpTenant(api, { agency_name: 'Alpha Agency', email: 'own
 const beta = await signUpTenant(api, { agency_name: 'Beta Agency', email: 'owner@beta.test' });
 
 const alphaToken = (await api.post('/auth/login', { email: 'owner@alpha.test', password: 'Password@123' })).body.data.access_token;
+
+/** Any active workspace member other than the owner - action items are for somebody else. */
+const someoneElse = async () => (await api.get('/users', { token: alphaToken })).body.data
+  .find((u) => u.email !== 'owner@alpha.test' && u.role !== 'client').id;
 const betaToken = (await api.post('/auth/login', { email: 'owner@beta.test', password: 'Password@123' })).body.data.access_token;
 
 describe('signup and session', () => {
@@ -246,11 +250,13 @@ describe('role-based access control', () => {
     assert.equal(res.status, 403);
   });
 
-  test('an employee can still do their own work', async () => {
+  test('an employee cannot raise an action item for themselves', async () => {
     const res = await api.post('/action-items', {
-      title: 'My own task', priority: 'medium',
+      title: 'My own task', priority: 'medium', owner_id: employeeId,
     }, { token: employeeToken });
-    assert.equal(res.status, 201);
+    assert.equal(res.status, 400);
+    const unnamed = await api.post('/action-items', { title: 'Nobody named' }, { token: employeeToken });
+    assert.equal(unnamed.status, 400, 'with nobody named it no longer falls back to the creator');
 
     const list = await api.get('/action-items', { token: employeeToken });
     assert.equal(list.status, 200);
@@ -499,11 +505,18 @@ describe('mobile sync', () => {
     assert.ok(Object.values(all.body.data).flat().length > 0);
   });
 
+  test('an offline action item for yourself is refused', async () => {
+    const res = await api.post('/sync/queue', {
+      operations: [{ client_id: 'device-op-self', type: 'action_item.create', payload: { title: 'Mine' }, created_at: new Date().toISOString() }],
+    }, { token: alphaToken });
+    assert.equal(res.body.data[0].status, 'failed');
+  });
+
   test('an offline queue applies once and ignores a replay', async () => {
     const op = {
       client_id: 'device-op-1',
       type: 'action_item.create',
-      payload: { title: 'Created while offline', priority: 'high' },
+      payload: { title: 'Created while offline', priority: 'high', owner_id: await someoneElse() },
       created_at: new Date().toISOString(),
     };
 
@@ -520,7 +533,8 @@ describe('mobile sync', () => {
   });
 
   test('a conflicting offline edit wins but reports the conflict', async () => {
-    const item = (await api.post('/action-items', { title: 'Conflict test' }, { token: alphaToken })).body.data;
+    const item = (await api.post('/action-items', { title: 'Conflict test', owner_id: await someoneElse() },
+      { token: alphaToken })).body.data;
 
     // Someone edits on the server after the offline change was made.
     await api.patch(`/action-items/${item.id}`, { title: 'Changed on server' }, { token: alphaToken });

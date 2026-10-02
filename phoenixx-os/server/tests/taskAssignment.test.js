@@ -125,7 +125,7 @@ describe('task assignment', () => {
     const res = await api.post('/action-items',
       { title: 'Goes nowhere', assign_from_project_id: empty.id }, { token: ownerToken });
     assert.equal(res.status, 400);
-    assert.match(res.body.error.message, /nobody on its team/i);
+    assert.match(res.body.error.message, /nobody( else)? on its team/i);
   });
 
   test('the accountable person is never duplicated in the extras', async () => {
