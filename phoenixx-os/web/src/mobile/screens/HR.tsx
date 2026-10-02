@@ -30,6 +30,13 @@ function workedHours(checkIn?: string | null, checkOut?: string | null): string 
   return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
 }
 
+/** '3h 05m' of earlier sessions plus the running one. */
+function addMinutes(prior: number | null | undefined, running: string): string {
+  const [h, m] = running.match(/\d+/g)?.map(Number) || [0, 0];
+  const mins = Number(prior || 0) + h * 60 + m;
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+}
+
 export default function MobileHR() {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -54,7 +61,7 @@ export default function MobileHR() {
       api.post(`/hr/attendance/check-${dir}`, { source: 'mobile' }),
     onSuccess: (res: any, dir) => {
       if (dir === 'out') toast.success('Checked out.');
-      else if (res?.data?.status === 'pending_approval') toast.info(res.data.message || 'Sent to HR for review.');
+      else if (res?.data?.status === 'pending_approval' || res?.data?.checked_in_again) toast.info(res.data.message || 'Sent to HR for review.');
       else toast.success(res?.data?.message || 'Checked in.');
       qc.invalidateQueries({ queryKey: HOME_KEY });
     },
@@ -89,7 +96,10 @@ export default function MobileHR() {
             <div className="text-right">
               <p className="label-cap">Hours</p>
               <p className="mt-0.5 text-[17px] font-semibold tabular-nums text-ink">
-                {workedHours(att?.check_in_at, att?.check_out_at)}
+                {att?.session_started_at
+                  // A later session: the earlier ones are already in work_minutes.
+                  ? (checkedOut ? att.work_hours_label : addMinutes(att.work_minutes, workedHours(att.session_started_at, null)))
+                  : workedHours(att?.check_in_at, att?.check_out_at)}
               </p>
             </div>
           </div>
@@ -123,8 +133,14 @@ export default function MobileHR() {
               </MButton>
             )}
             {checkedOut && (
-              <p className="text-center text-[13px] text-subtle">
-                Day recorded. Corrections go through a regularisation request on the web app.
+              <MButton full icon={<LogIn size={18} />}
+                loading={punch.isPending} onClick={() => punch.mutate('in')}>
+                Check in again
+              </MButton>
+            )}
+            {checkedOut && (
+              <p className="mt-2 text-center text-[13px] text-subtle">
+                Back from a permission? Your hours carry on. Corrections go through a regularisation request.
               </p>
             )}
           </div>

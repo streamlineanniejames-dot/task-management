@@ -43,6 +43,7 @@ export default function Home() {
       // The server says what happened; the screen only repeats it.
       const msg = row?.message || 'Checked in.';
       if (row?.status === 'pending_approval') toast.info(msg);
+      else if (row?.checked_in_again) toast.success(msg);
       else toast.success(`${msg} (${row?.check_in_label})`);
       qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
@@ -117,12 +118,17 @@ export default function Home() {
               </Button>
             ) : !attendance?.check_out_at ? (
               <Button icon={<LogOut size={15} />} loading={checkOut.isPending} onClick={() => checkOut.mutate()}>
-                Check out · in since {attendance.check_in_label || time(attendance.check_in_at)}
+                Check out · in since {attendance.session_started_label || attendance.check_in_label || time(attendance.check_in_at)}
               </Button>
             ) : (
-              <Badge tone="positive" dot>
-                {attendance.work_hours_label || '0h 00m'} logged
-              </Badge>
+              <>
+                <Badge tone="positive" dot>
+                  {attendance.work_hours_label || '0h 00m'} logged
+                </Badge>
+                <Button icon={<LogIn size={15} />} loading={checkIn.isPending} onClick={() => checkIn.mutate()}>
+                  Check in again
+                </Button>
+              </>
             )}
           </>
         }
@@ -407,8 +413,9 @@ function AttendanceCard({ attendance: a, day, onCheckIn, onCheckOut, checkingIn,
               <AttendanceLine label="Scheduled"
                 value={schedule ? `${clockTime(schedule.start)} – ${clockTime(schedule.end)}` : '—'} />
               {a?.check_in_at && <AttendanceLine label="Check-in" value={a.check_in_label} strong />}
+              {a?.session_started_label && <AttendanceLine label="Back in" value={a.session_started_label} strong />}
               {a?.check_out_at && <AttendanceLine label="Check-out" value={a.check_out_label} strong />}
-              {a?.check_out_at && a?.work_hours_label && (
+              {a?.work_hours_label && (a?.check_out_at || a?.session_started_label) && (
                 <AttendanceLine label="Working hours" value={a.work_hours_label} strong />
               )}
               <div className="flex items-baseline justify-between gap-3 pt-1">
@@ -437,9 +444,13 @@ function AttendanceCard({ attendance: a, day, onCheckIn, onCheckOut, checkingIn,
               <Button className="w-full justify-center mt-3" icon={<LogOut size={15} />}
                 loading={checkingOut} onClick={onCheckOut}>Check out</Button>
             ) : (
-              <p className="mt-3 text-center text-[12.5px] text-subtle">
-                Day complete. The times above are the record.
-              </p>
+              <>
+                <Button className="w-full justify-center mt-3" icon={<LogIn size={15} />}
+                  loading={checkingIn} onClick={onCheckIn}>Check in again</Button>
+                <p className="mt-2 text-center text-[12px] text-subtle">
+                  Back from a permission or errand? Your hours carry on from {a.work_hours_label || '0h 00m'}.
+                </p>
+              </>
             )}
           </>
         )}

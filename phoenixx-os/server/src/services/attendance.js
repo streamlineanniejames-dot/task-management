@@ -199,6 +199,22 @@ export const workMinutes = (inAt, outAt) => (inAt && outAt
   : 0);
 
 /**
+ * Hours worked by the time of this check-out, across every session of the
+ * day. Somebody who steps out on a permission and comes back checks in again;
+ * `session_started_at` marks that return, and `work_minutes` already holds
+ * what the earlier sessions added up to. The break in between is not counted.
+ */
+export function minutesAtCheckout(row, at) {
+  const prior = row.session_started_at ? Number(row.work_minutes || 0) : 0;
+  return prior + workMinutes(row.session_started_at || row.check_in_at, at);
+}
+
+/** Half a day under four hours, unless HR still has to rule on it. */
+export const statusAtCheckout = (row, minutes) => ([PENDING, 'not_approved'].includes(row.status)
+  ? row.status
+  : (minutes < 240 ? 'half_day' : 'present'));
+
+/**
  * A checkout that never came. Only ever true for a day that is already over -
  * somebody still at their desk at four in the afternoon has not forgotten
  * anything, and telling HR they have would make the flag worthless.
@@ -254,6 +270,9 @@ export function decorate(tenantId, row, { now = new Date(), withNetwork = false 
     work_hours_label: row.work_minutes ? hoursLabel(row.work_minutes) : null,
     check_in_label: row.check_in_at ? formatDueTime(timeInTz(tz, new Date(row.check_in_at))) : null,
     check_out_label: row.check_out_at ? formatDueTime(timeInTz(tz, new Date(row.check_out_at))) : null,
+    // The latest return, on a day with more than one session.
+    session_started_label: row.session_started_at
+      ? formatDueTime(timeInTz(tz, new Date(row.session_started_at))) : null,
     scheduled_start_label: formatDueTime(row.scheduled_start),
     scheduled_end_label: formatDueTime(row.scheduled_end),
   };

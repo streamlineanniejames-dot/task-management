@@ -231,6 +231,9 @@ const ADDED_COLUMNS = [
   ['attendance', 'review_reason', 'TEXT'],
   // The approved hourly permission that made a late arrival an agreed one.
   ['attendance', 'permission_id', 'TEXT'],
+  // When the current session began, for a day with more than one: set on
+  // checking in again after a check-out, NULL for an ordinary single session.
+  ['attendance', 'session_started_at', 'TEXT'],
 ];
 
 function addColumns() {

@@ -12,7 +12,7 @@ import { DUE_DATE_RE, DUE_TIME_RE, formatDueTime, localToUtc, timeInTz } from '.
 import {
   PENDING, decorate, dayKind, historyFor, holidaysBetween, hoursLabel, logAttendance,
   scheduleFor, tzFor, workDayFor, workspaceSchedule, workMinutes, assessCheckIn,
-  weekOffDays, weekdayOf, permissionCovering,
+  weekOffDays, weekdayOf, permissionCovering, minutesAtCheckout, statusAtCheckout,
 } from '../services/attendance.js';
 import {
   METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork,
@@ -55,8 +55,14 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
   // One check-in per person per day. A second press is not an error - it is
   // somebody making sure it took - so it answers with the record they already
   // have rather than a message that reads like something went wrong.
-  if (existing?.check_in_at) {
+  if (existing?.check_in_at && !existing.check_out_at) {
     return ok(res, { ...decorate(tenantId, existing), already_checked_in: true });
+  }
+  // Back after checking out - a permission, an errand, a site visit. The day
+  // keeps its first check-in (that is what lateness was judged on) and starts
+  // a new session; the hours already worked carry over.
+  if (existing?.check_in_at && existing.check_out_at) {
+    return checkInAgain(req, res, existing, at, body);
   }
 
   const schedule = scheduleFor(tenantId, userId);
@@ -187,7 +193,71 @@ function checkInMessage(network, assessed, status) {
     : `Check-in successful.${within}`;
 }
 
-/** Stamping out. Server clock again, and once per day. */
+/**
+ * A second (or later) check-in on the same day. The network is checked again
+ * when the check is on: coming back from home is not the same as coming back
+ * to the office, and a miss sends the day to HR like any other.
+ */
+function checkInAgain(req, res, row, at, body) {
+  const { tenantId, userId } = req.auth;
+  const tz = tzFor(tenantId);
+  const network = verifyCheckIn(tenantId, requestIp(req));
+  const offNetwork = network.enabled && !network.verified;
+  const reasons = new Set(String(row.review_reason || '').split(',').filter(Boolean));
+  if (offNetwork) reasons.add('off_network');
+  // The day is in progress again, so a half day decided at the last check-out
+  // no longer stands; the next check-out works it out afresh.
+  const status = offNetwork ? PENDING : (row.status === 'half_day' ? 'present' : row.status);
+
+  tx(() => {
+    run(
+      `UPDATE attendance SET check_out_at = NULL, session_started_at = ?, status = ?, review_reason = ?,
+         notes = COALESCE(?, notes), updated_at = ? WHERE id = ? AND check_out_at IS NOT NULL`,
+      [at, status, [...reasons].join(',') || null, body.notes ?? null, nowIso(), row.id],
+    );
+    logAttendance({
+      tenantId,
+      attendanceId: row.id,
+      userId,
+      workDate: row.work_date,
+      event: 'checked_in_again',
+      actorId: userId,
+      fromStatus: row.status,
+      toStatus: status,
+      at,
+      note: [`${hoursLabel(row.work_minutes)} worked before this`,
+        network.verified !== null && (network.verified ? `office network: ${network.network.network_name}` : `not on an approved office network${network.enabled ? '' : ' (trial)'}`),
+      ].filter(Boolean).join('; '),
+    });
+  });
+
+  if (offNetwork) {
+    notifyRole({
+      tenantId,
+      roles: ['hr', 'owner'],
+      eventKey: 'attendance.network_review',
+      vars: {
+        person: req.auth.name,
+        actual: formatDueTime(timeInTz(tz, new Date(at))),
+        work_date: row.work_date,
+        late_note: ' This was a return after checking out.',
+      },
+      link: '/hr?tab=attendance',
+      dedupeKey: `attendance:${row.id}:network:${at}`,
+    }).catch(() => {});
+  }
+  audit(req, { entity: 'attendance', entityId: row.id, action: 'update', before: row, after: { session_started_at: at, status } });
+
+  return ok(res, {
+    ...decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [row.id])),
+    checked_in_again: true,
+    message: offNetwork
+      ? 'Welcome back. Your network could not be verified as an approved company network, so HR will review it.'
+      : `Welcome back. ${hoursLabel(row.work_minutes)} already logged today; this session adds to it.`,
+  });
+}
+
+/** Stamping out. Server clock again, once per session. */
 router.post('/attendance/check-out', requires('hr_attendance', 'create'), (req, res) => {
   const { tenantId, userId } = req.auth;
   const body = validate(z.object({ geo: geoSchema.optional() }), req.body || {});
@@ -201,12 +271,10 @@ router.post('/attendance/check-out', requires('hr_attendance', 'create'), (req, 
     return ok(res, { ...decorate(tenantId, row), already_checked_out: true });
   }
 
-  const minutes = workMinutes(row.check_in_at, at);
-  // Checking out does not overrule HR. A day still waiting on a ruling stays
-  // waiting; only a day that was already present can fall back to half a day.
-  const nextStatus = [PENDING, 'not_approved'].includes(row.status)
-    ? row.status
-    : (minutes < 240 ? 'half_day' : 'present');
+  // Every session of the day counts, not only the latest. Checking out does
+  // not overrule HR: a day still waiting on a ruling stays waiting.
+  const minutes = minutesAtCheckout(row, at);
+  const nextStatus = statusAtCheckout(row, minutes);
 
   tx(() => {
     run(
@@ -405,7 +473,7 @@ router.post('/attendance/:id/correct', requires('hr_attendance', 'approve'), (re
     run(
       `UPDATE attendance SET check_in_at = ?, check_out_at = ?, work_minutes = ?, status = ?,
          source = 'regularized', approved_by = ?, approved_at = ?, approval_note = ?,
-         updated_at = ? WHERE id = ?`,
+         session_started_at = NULL, updated_at = ? WHERE id = ?`,
       [checkIn, checkOut, minutes, toStatus, userId, ts, body.note, ts, row.id],
     );
     logAttendance({
@@ -479,7 +547,8 @@ router.post('/attendance/mark', requires('hr_attendance', 'approve'), (req, res)
     if (row) {
       run(
         `UPDATE attendance SET status = ?, check_in_at = ?, check_out_at = ?, work_minutes = ?,
-           source = 'regularized', approved_by = ?, approved_at = ?, approval_note = ?, updated_at = ?
+           source = 'regularized', approved_by = ?, approved_at = ?, approval_note = ?,
+           session_started_at = NULL, updated_at = ?
          WHERE id = ?`,
         [body.status, checkIn, checkOut, minutes, userId, ts, body.note, ts, id],
       );

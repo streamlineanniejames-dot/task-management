@@ -139,6 +139,7 @@ function AttendanceTab() {
       // The server says what happened; the screen only repeats it.
       const msg = res?.data?.message || 'Checked in.';
       if (res?.data?.status === 'pending_approval') toast.info(msg);
+      else if (res?.data?.checked_in_again) toast.success(msg);
       else toast.success(`${msg} (${res?.data?.check_in_label})`);
       invalidate();
     },
@@ -205,6 +206,10 @@ function AttendanceTab() {
                 </p>
                 <p className="text-[13.5px] text-muted mt-1">
                   Checked in at <strong className="text-ink tabular">{me.check_in_label}</strong>
+                  {me.session_started_label && (
+                    <> · back in at <strong className="text-ink tabular">{me.session_started_label}</strong>
+                      {me.work_hours_label && ` (${me.work_hours_label} before)`}</>
+                  )}
                 </p>
                 <Badge tone={statusMeta(me.status).tone} dot className="mt-2">
                   {statusMeta(me.status).label}
@@ -227,6 +232,8 @@ function AttendanceTab() {
                 </div>
                 <p className="text-[12.5px] text-subtle tabular">{me.check_in_label} → {me.check_out_label}</p>
                 <Badge tone={statusMeta(me.status).tone} dot className="mt-2">{statusMeta(me.status).label}</Badge>
+                <Button className="w-full justify-center mt-3" icon={<LogIn size={15} />}
+                  loading={checkIn.isPending} onClick={() => checkIn.mutate()}>Check in again</Button>
               </>
             )}
             {!today.data?.exempt && (

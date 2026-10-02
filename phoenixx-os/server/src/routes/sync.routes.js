@@ -7,6 +7,7 @@ import { uuid, nowIso, todayIso } from '../lib/util.js';
 import { DEFAULT_TZ, DUE_TIME_RE, dueAtIso, formatDueTime, timeInTz } from '../lib/dueTime.js';
 import {
   PENDING, assessCheckIn, logAttendance, scheduleFor, tzFor, workDayFor, workMinutes,
+  minutesAtCheckout, statusAtCheckout,
 } from '../services/attendance.js';
 import { notifyRole } from '../services/notifications.js';
 import { checkEnabled, METHOD as NETWORK_METHOD } from '../services/officeNetwork.js';
@@ -302,11 +303,10 @@ function applyOperation({ tenantId, userId, op, auth }) {
       if (!row?.check_in_at) throw new Error('No check-in recorded for that day');
       if (row.check_out_at) return { entity: 'attendance', id: row.id, skipped: 'already checked out' };
 
-      const minutes = workMinutes(row.check_in_at, at);
-      // A day HR has yet to rule on keeps waiting; checking out is not a verdict.
-      const nextStatus = [PENDING, 'not_approved'].includes(row.status)
-        ? row.status
-        : (minutes < 240 ? 'half_day' : 'present');
+      // Every session of the day counts. A day HR has yet to rule on keeps
+      // waiting; checking out is not a verdict.
+      const minutes = minutesAtCheckout(row, at);
+      const nextStatus = statusAtCheckout(row, minutes);
       run(
         `UPDATE attendance SET check_out_at = ?, out_lat = ?, out_lng = ?, work_minutes = ?,
            status = ?, updated_at = ? WHERE id = ?`,
