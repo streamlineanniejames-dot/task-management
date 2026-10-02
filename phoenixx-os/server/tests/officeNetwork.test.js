@@ -211,6 +211,29 @@ describe('check-in with the check switched on', () => {
     assert.equal(row.review_reason, 'offline');
   });
 
+  test('behind Render (internal 10.x hop) the Cloudflare client IP is used', async () => {
+    const e = await employee();
+    const res = await api.post('/hr/attendance/check-in', {}, {
+      token: e.token,
+      headers: { 'X-Forwarded-For': '10.26.34.133', 'CF-Connecting-IP': OFFICE_IP },
+    });
+    assert.equal(res.body.data.status, 'present');
+    const t = await api.get('/hr/networks/test', {
+      token, headers: { 'X-Forwarded-For': '10.26.34.133', 'CF-Connecting-IP': OFFICE_IP },
+    });
+    assert.equal(t.body.data.ip, OFFICE_IP);
+    assert.equal(t.body.data.diagnostics.proxy_ip, '10.26.34.133');
+  });
+
+  test('a CF-Connecting-IP header on a request that did not come through the proxy is ignored', async () => {
+    const e = await employee();
+    const res = await api.post('/hr/attendance/check-in', {}, {
+      token: e.token,
+      headers: { 'X-Forwarded-For': '103.21.244.20', 'CF-Connecting-IP': OFFICE_IP },
+    });
+    assert.equal(res.body.data.status, 'pending_approval');
+  });
+
   test('the owner still does not check in', async () => {
     const res = await checkIn({ token }, OFFICE_IP);
     assert.equal(res.status, 403);

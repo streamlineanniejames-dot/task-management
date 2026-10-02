@@ -1083,6 +1083,11 @@ function NetworksModal({ onClose }: { onClose: () => void }) {
               {test.matched
                 ? `matches ${test.network.network_name}${test.network.ssid ? ` (${test.network.ssid})` : ''}.`
                 : 'does not match any active network. A check-in from here would go to HR.'}
+              {!test.matched && test.diagnostics && (
+                <span className="block mt-1 text-subtle tabular">
+                  Proxy {test.diagnostics.proxy_ip || '—'} · {test.diagnostics.edge_header} {test.diagnostics.edge_ip || 'not sent'}
+                </span>
+              )}
             </p>
           )}
         </div>

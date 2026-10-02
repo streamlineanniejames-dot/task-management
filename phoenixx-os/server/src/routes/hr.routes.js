@@ -15,8 +15,8 @@ import {
   weekOffDays, weekdayOf,
 } from '../services/attendance.js';
 import {
-  METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork, normaliseIp,
-  parseRange, verifyCheckIn,
+  METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork,
+  parseRange, verifyCheckIn, requestIp, ipDiagnostics,
 } from '../services/officeNetwork.js';
 
 const router = Router();
@@ -64,7 +64,7 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
   // The network is judged from the address the request arrived from - never
   // from anything in the body, which zod has already stripped down to geo,
   // source and notes. A `wifi` field sent by a tampered client is dropped.
-  const network = verifyCheckIn(tenantId, req.ip);
+  const network = verifyCheckIn(tenantId, requestIp(req));
   const offNetwork = network.enabled && !network.verified;
   const reasons = [assessed.late && 'late', offNetwork && 'off_network'].filter(Boolean);
   const status = reasons.length ? PENDING : 'present';
@@ -606,7 +606,7 @@ router.get('/networks', requires('hr_attendance', 'approve'), (req, res) => {
  */
 router.get('/networks/test', requires('hr_attendance', 'approve'), (req, res) => {
   const { tenantId } = req.auth;
-  const ip = normaliseIp(req.ip);
+  const ip = requestIp(req);
   const match = matchNetwork(tenantId, ip);
   return ok(res, {
     ip,
@@ -614,6 +614,7 @@ router.get('/networks/test', requires('hr_attendance', 'approve'), (req, res) =>
     matched: !!match,
     network: match ? { id: match.id, network_name: match.network_name, ssid: match.ssid } : null,
     enabled: checkEnabled(tenantId),
+    diagnostics: ipDiagnostics(req),
   });
 });
 

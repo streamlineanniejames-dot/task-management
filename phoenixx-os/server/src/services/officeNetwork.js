@@ -53,7 +53,39 @@ export const isPrivateRange = (range) => PRIVATE.check(range.addr, range.type);
 /** A range too broad to mean "our office" - a /8 covers sixteen million addresses. */
 export const isTooBroad = (range) => (range.type === 'ipv4' ? range.prefix < 16 : range.prefix < 48);
 
-export const checkEnabled = (tenantId) => !!get('SELECT network_check FROM tenants WHERE id = ?', [tenantId])?.network_check;
+/**
+ * The visitor's public address.
+ *
+ * On Render a request passes Cloudflare, then Render's own load balancer, so
+ * `req.ip` (with `trust proxy` = 1) lands on an internal 10.x hop, not the
+ * visitor. Cloudflare writes the real address into CF-Connecting-IP and
+ * overwrites any value a client sends, so that header is authoritative - but
+ * only when the request reached us through that internal hop. A request whose
+ * nearest address is already public did not come through the platform proxy,
+ * and a header on it is just something the sender typed, so it is ignored.
+ */
+const IP_HEADER = (process.env.CLIENT_IP_HEADER || 'cf-connecting-ip').toLowerCase();
+
+export function requestIp(req) {
+  const nearest = normaliseIp(req.ip);
+  const nearestRange = nearest && parseRange(nearest);
+  const viaInternalProxy = !nearest || (nearestRange && isPrivateRange(nearestRange));
+  if (viaInternalProxy) {
+    const fromEdge = normaliseIp(String(req.get?.(IP_HEADER) || '').split(',')[0]);
+    if (fromEdge) return fromEdge;
+  }
+  return nearest;
+}
+
+/** What each source said, for HR's Test panel when the setup needs debugging. */
+export const ipDiagnostics = (req) => ({
+  proxy_ip: normaliseIp(req.ip),
+  edge_header: IP_HEADER,
+  edge_ip: normaliseIp(String(req.get?.(IP_HEADER) || '').split(',')[0]),
+  forwarded_for: req.get?.('x-forwarded-for') || null,
+});
+
+export const checkEnabled =(tenantId) => !!get('SELECT network_check FROM tenants WHERE id = ?', [tenantId])?.network_check;
 
 export const activeNetworks = (tenantId) => all(
   `SELECT * FROM approved_networks
