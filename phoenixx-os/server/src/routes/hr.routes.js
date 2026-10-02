@@ -14,6 +14,10 @@ import {
   scheduleFor, tzFor, workDayFor, workspaceSchedule, workMinutes, assessCheckIn,
   weekOffDays, weekdayOf,
 } from '../services/attendance.js';
+import {
+  METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork, normaliseIp,
+  parseRange, verifyCheckIn,
+} from '../services/officeNetwork.js';
 
 const router = Router();
 
@@ -57,26 +61,39 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
 
   const schedule = scheduleFor(tenantId, userId);
   const assessed = assessCheckIn({ tenantId, workDate, at, schedule });
+  // The network is judged from the address the request arrived from - never
+  // from anything in the body, which zod has already stripped down to geo,
+  // source and notes. A `wifi` field sent by a tampered client is dropped.
+  const network = verifyCheckIn(tenantId, req.ip);
+  const offNetwork = network.enabled && !network.verified;
+  const reasons = [assessed.late && 'late', offNetwork && 'off_network'].filter(Boolean);
+  const status = reasons.length ? PENDING : 'present';
 
   const id = existing?.id || uuid();
   const fields = [at, body.geo?.lat ?? null, body.geo?.lng ?? null, body.geo?.accuracy ?? null,
-    body.source || 'web', assessed.status, assessed.late_minutes,
-    assessed.scheduled_start, assessed.scheduled_end, body.notes ?? null];
+    body.source || 'web', status, assessed.late_minutes,
+    assessed.scheduled_start, assessed.scheduled_end, body.notes ?? null,
+    network.verified === null ? null : Number(network.verified), network.method,
+    network.network?.id ?? null, network.network ? (network.network.ssid || network.network.network_name) : null,
+    network.enabled ? network.ip : null, reasons.join(',') || null];
 
   tx(() => {
     if (existing) {
       run(
         `UPDATE attendance SET check_in_at = ?, in_lat = ?, in_lng = ?, in_accuracy = ?, source = ?,
            status = ?, late_minutes = ?, scheduled_start = ?, scheduled_end = ?,
-           notes = COALESCE(?, notes), updated_at = ? WHERE id = ?`,
+           notes = COALESCE(?, notes), network_verified = ?, verification_method = ?,
+           network_id = ?, network_label = ?, client_ip = ?, review_reason = ?,
+           updated_at = ? WHERE id = ?`,
         [...fields, nowIso(), id],
       );
     } else {
       run(
         `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, in_lat, in_lng,
            in_accuracy, source, status, late_minutes, scheduled_start, scheduled_end, notes,
-           created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           network_verified, verification_method, network_id, network_label, client_ip,
+           review_reason, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, tenantId, userId, workDate, ...fields, nowIso(), nowIso()],
       );
     }
@@ -87,17 +104,35 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
       workDate,
       event: 'checked_in',
       actorId: userId,
-      toStatus: assessed.status,
+      toStatus: status,
       at,
-      note: assessed.late
-        ? `${assessed.late_minutes} min after a ${formatDueTime(schedule.start)} start`
-        : null,
+      note: [
+        assessed.late && `${assessed.late_minutes} min after a ${formatDueTime(schedule.start)} start`,
+        network.enabled && (network.verified
+          ? `office network: ${network.network.network_name}`
+          : 'not on an approved office network'),
+      ].filter(Boolean).join('; ') || null,
     });
   });
 
-  // A late arrival is not marked present by the system. It goes to HR with the
-  // two numbers they need in order to rule on it, and waits there.
-  if (assessed.late) {
+  // Off the office network: the day goes to HR, whatever the clock said.
+  if (offNetwork) {
+    notifyRole({
+      tenantId,
+      roles: ['hr', 'owner'],
+      eventKey: 'attendance.network_review',
+      vars: {
+        person: req.auth.name,
+        actual: formatDueTime(timeInTz(tz, new Date(at))),
+        work_date: workDate,
+        late_note: assessed.late ? ` It was also ${assessed.late_minutes} min late.` : '',
+      },
+      link: '/hr?tab=attendance',
+      dedupeKey: `attendance:${id}:network`,
+    }).catch(() => {});
+  } else if (assessed.late) {
+    // A late arrival is not marked present by the system. It goes to HR with
+    // the two numbers they need in order to rule on it, and waits there.
     notifyRole({
       tenantId,
       roles: ['hr', 'owner'],
@@ -118,15 +153,34 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
     entity: 'attendance',
     entityId: id,
     action: 'create',
-    after: { work_date: workDate, status: assessed.status, late_minutes: assessed.late_minutes },
+    after: {
+      work_date: workDate, status, late_minutes: assessed.late_minutes,
+      network_verified: network.verified, review_reason: reasons.join(',') || null,
+    },
   });
 
   return created(res, {
     ...decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [id])),
+    message: checkInMessage(network, assessed, status),
     schedule,
     day_kind: dayKind(tenantId, workDate).kind,
   });
 });
+
+/**
+ * What the employee is told. Whether the network was approved, never which
+ * address or range was compared - that stays on HR's side of the screen.
+ */
+function checkInMessage(network, assessed, status) {
+  if (network.enabled && !network.verified) {
+    return 'Your network could not be verified as an approved company network. '
+      + 'Your check-in has been sent to HR for review.';
+  }
+  if (status === PENDING) return 'You checked in after your start time, so HR has been asked to approve it.';
+  return network.enabled
+    ? 'Check-in successful. You are connected to an approved company network.'
+    : 'Check-in successful.';
+}
 
 /** Stamping out. Server clock again, and once per day. */
 router.post('/attendance/check-out', requires('hr_attendance', 'create'), (req, res) => {
@@ -232,12 +286,13 @@ router.get('/attendance/today', requires('hr_attendance', 'view'), (req, res) =>
 router.get('/attendance/pending', requires('hr_attendance', 'approve'), (req, res) => {
   const { tenantId } = req.auth;
   return ok(res, all(
-    `SELECT a.*, u.name AS user_name, u.avatar_url, u.designation
+    `SELECT a.*, u.name AS user_name, u.avatar_url, u.designation, n.network_name
        FROM attendance a JOIN users u ON u.id = a.user_id
+       LEFT JOIN approved_networks n ON n.id = a.network_id
       WHERE a.tenant_id = ? AND a.status = ?
       ORDER BY a.work_date DESC, a.check_in_at DESC LIMIT 200`,
     [tenantId, PENDING],
-  ).map((r) => decorate(tenantId, r)));
+  ).map((r) => decorate(tenantId, r, { withNetwork: true })));
 });
 
 /**
@@ -257,7 +312,7 @@ router.post('/attendance/:id/decide', requires('hr_attendance', 'approve'), (req
   if (row.status !== PENDING) {
     throw badRequest(row.approved_by
       ? 'This day has already been decided'
-      : 'Only a late check-in waiting on approval can be decided');
+      : 'Only a check-in waiting on approval can be decided');
   }
   const reason = (note || '').trim();
   if (decision === 'reject' && reason.length < 3) {
@@ -268,11 +323,14 @@ router.post('/attendance/:id/decide', requires('hr_attendance', 'approve'), (req
   const toStatus = decision === 'approve' ? 'present' : 'not_approved';
 
   tx(() => {
-    run(
+    // Conditional on the row still being pending, so two HR people pressing
+    // at once cannot both rule on it: the second finds nothing to update.
+    const result = run(
       `UPDATE attendance SET status = ?, approved_by = ?, approved_at = ?, approval_note = ?,
-         updated_at = ? WHERE id = ?`,
-      [toStatus, userId, ts, reason || null, ts, row.id],
+         updated_at = ? WHERE id = ? AND status = ?`,
+      [toStatus, userId, ts, reason || null, ts, row.id, PENDING],
     );
+    if (!result.changes) throw badRequest('This day has already been decided');
     logAttendance({
       tenantId,
       attendanceId: row.id,
@@ -395,7 +453,7 @@ router.get('/attendance/day', requires('hr_attendance', 'view'), (req, res) => {
     holiday: day.holiday,
     leave: leave || null,
     schedule: scheduleFor(tenantId, targetId),
-    attendance: decorate(tenantId, row) || null,
+    attendance: decorate(tenantId, row, { withNetwork: can(req.auth, 'hr_attendance', 'approve') }) || null,
     history: row ? historyFor(tenantId, row.id) : [],
   });
 });
@@ -492,6 +550,133 @@ router.patch('/work-schedules', requires('hr_attendance', 'approve'), (req, res)
   );
   audit(req, { entity: 'tenant', entityId: tenantId, action: 'update', before, after: workspaceSchedule(tenantId) });
   return ok(res, workspaceSchedule(tenantId));
+});
+
+// ======================================================== OFFICE NETWORKS
+/**
+ * The office connections a check-in is approved from, and the switch that
+ * makes the check count. Everything here is HR's to change; nothing about a
+ * network lives in code.
+ */
+const networkSchema = z.object({
+  network_name: z.string().trim().min(2).max(80),
+  ssid: z.string().trim().max(64).optional().nullable(),
+  public_ip: z.string().trim().min(3).max(64),
+  is_active: z.boolean().optional(),
+  description: z.string().trim().max(300).optional().nullable(),
+});
+
+/** Refuses an address that cannot work, saying why in words HR can act on. */
+function checkedRange(value) {
+  const range = parseRange(value);
+  if (!range) throw badRequest('Enter a public IP such as 49.206.113.67, or a range such as 49.206.113.0/24');
+  if (isPrivateRange(range)) {
+    throw badRequest('That is a private network address (like 192.168.x.x). The server never sees those, '
+      + 'and every home router uses them. Open whatismyipaddress.com on the office Wi-Fi and enter the public IP shown.');
+  }
+  if (isTooBroad(range)) throw badRequest('That range is too wide to identify one office. Use a single IP or a narrower range.');
+  return range.prefix === (range.type === 'ipv4' ? 32 : 128) ? range.addr : `${range.addr}/${range.prefix}`;
+}
+
+const networkRow = (tenantId, id) => get(
+  `SELECT n.*, u.name AS updated_by_name FROM approved_networks n
+     LEFT JOIN users u ON u.id = COALESCE(n.updated_by, n.created_by)
+    WHERE n.id = ? AND n.tenant_id = ? AND n.deleted_at IS NULL`,
+  [id, tenantId],
+);
+
+router.get('/networks', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  return ok(res, {
+    enabled: checkEnabled(tenantId),
+    method: NETWORK_METHOD,
+    networks: all(
+      `SELECT n.*, u.name AS updated_by_name FROM approved_networks n
+         LEFT JOIN users u ON u.id = COALESCE(n.updated_by, n.created_by)
+        WHERE n.tenant_id = ? AND n.deleted_at IS NULL ORDER BY n.network_name, n.ssid`,
+      [tenantId],
+    ),
+  });
+});
+
+/**
+ * "Would a check-in from here count?" Answered from the request HR is making
+ * right now, so pressing it on the office Wi-Fi proves the setup end to end -
+ * including what address the hosting proxy actually hands the server.
+ */
+router.get('/networks/test', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  const ip = normaliseIp(req.ip);
+  const match = matchNetwork(tenantId, ip);
+  return ok(res, {
+    ip,
+    ip_version: ip && ip.includes(':') ? 6 : 4,
+    matched: !!match,
+    network: match ? { id: match.id, network_name: match.network_name, ssid: match.ssid } : null,
+    enabled: checkEnabled(tenantId),
+  });
+});
+
+router.patch('/networks/settings', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId } = req.auth;
+  const { enabled } = validate(z.object({ enabled: z.boolean() }), req.body);
+  const before = checkEnabled(tenantId);
+  run('UPDATE tenants SET network_check = ?, updated_at = ? WHERE id = ?', [enabled ? 1 : 0, nowIso(), tenantId]);
+  audit(req, { entity: 'tenant', entityId: tenantId, action: 'update', before: { network_check: before }, after: { network_check: enabled } });
+  return ok(res, { enabled });
+});
+
+router.post('/networks', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const body = validate(networkSchema, req.body);
+  const ip = checkedRange(body.public_ip);
+  const id = uuid();
+  const ts = nowIso();
+  run(
+    `INSERT INTO approved_networks (id, tenant_id, network_name, ssid, public_ip, verification_method,
+       is_active, description, created_by, updated_by, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [id, tenantId, body.network_name, body.ssid || null, ip, NETWORK_METHOD,
+      body.is_active === false ? 0 : 1, body.description || null, userId, userId, ts, ts],
+  );
+  const row = networkRow(tenantId, id);
+  audit(req, { entity: 'approved_network', entityId: id, action: 'create', after: row });
+  return created(res, row);
+});
+
+router.patch('/networks/:id', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const before = networkRow(tenantId, req.params.id);
+  if (!before) throw notFound('Network');
+  const body = validate(networkSchema.partial(), req.body);
+  const patch = {};
+  if (body.network_name !== undefined) patch.network_name = body.network_name;
+  if (body.ssid !== undefined) patch.ssid = body.ssid || null;
+  if (body.public_ip !== undefined) patch.public_ip = checkedRange(body.public_ip);
+  if (body.is_active !== undefined) patch.is_active = body.is_active ? 1 : 0;
+  if (body.description !== undefined) patch.description = body.description || null;
+  const cols = Object.keys(patch);
+  if (cols.length) {
+    run(
+      `UPDATE approved_networks SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_by = ?, updated_at = ?
+        WHERE id = ? AND tenant_id = ?`,
+      [...cols.map((c) => patch[c]), userId, nowIso(), before.id, tenantId],
+    );
+  }
+  const after = networkRow(tenantId, before.id);
+  audit(req, { entity: 'approved_network', entityId: before.id, action: 'update', before, after });
+  return ok(res, after);
+});
+
+/** Soft delete: past check-ins still point at the network they matched. */
+router.delete('/networks/:id', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const before = networkRow(tenantId, req.params.id);
+  if (!before) throw notFound('Network');
+  run('UPDATE approved_networks SET deleted_at = ?, updated_by = ?, updated_at = ? WHERE id = ?',
+    [nowIso(), userId, nowIso(), before.id]);
+  audit(req, { entity: 'approved_network', entityId: before.id, action: 'delete', before });
+  return ok(res, { id: before.id, deleted: true });
 });
 
 // ============================================================== HOLIDAYS

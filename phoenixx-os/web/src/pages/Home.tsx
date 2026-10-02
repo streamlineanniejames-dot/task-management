@@ -40,9 +40,10 @@ export default function Home() {
     mutationFn: () => api.post('/hr/attendance/check-in', { source: 'web' }),
     onSuccess: (res: any) => {
       const row = res?.data;
-      toast.success(row?.status === 'pending_approval'
-        ? `Checked in at ${row.check_in_label}. HR has been asked to approve it.`
-        : `Checked in at ${row?.check_in_label}. Have a good one.`);
+      // The server says what happened; the screen only repeats it.
+      const msg = row?.message || 'Checked in.';
+      if (row?.status === 'pending_approval') toast.info(msg);
+      else toast.success(`${msg} (${row?.check_in_label})`);
       qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
       qc.invalidateQueries({ queryKey: ['attendance'] });
@@ -418,7 +419,9 @@ function AttendanceCard({ attendance: a, day, onCheckIn, onCheckOut, checkingIn,
 
             {pending && (
               <p className="mt-3 rounded-md bg-warning-soft px-2.5 py-2 text-[12.5px] text-muted">
-                {a.late_minutes} min after your {clockTime(a.scheduled_start)} start — awaiting HR approval.
+                {a.review_reasons?.includes('off_network') || a.review_reasons?.includes('offline')
+                  ? 'Your network could not be verified as an approved company network — awaiting HR review.'
+                  : `${a.late_minutes} min after your ${clockTime(a.scheduled_start)} start — awaiting HR approval.`}
               </p>
             )}
             {rejected && a.approval_note && (

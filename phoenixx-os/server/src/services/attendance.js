@@ -206,11 +206,16 @@ export function hoursLabel(minutes) {
  * Everything a screen needs to talk about one attendance row, worked out once
  * here so My Day, the register and the CSV cannot drift apart.
  */
-export function decorate(tenantId, row, { now = new Date() } = {}) {
+export function decorate(tenantId, row, { now = new Date(), withNetwork = false } = {}) {
   if (!row) return row;
   const tz = tzFor(tenantId);
+  // The address a check-in came from is for HR's review queue only; the
+  // employee is told whether the network was approved, never the details.
+  const { client_ip: clientIp, ...rest } = row;
   return {
-    ...row,
+    ...rest,
+    ...(withNetwork ? { client_ip: clientIp ?? null } : {}),
+    review_reasons: row.review_reason ? String(row.review_reason).split(',') : [],
     checkout_missing: checkoutMissing(tenantId, row, now),
     work_hours_label: row.work_minutes ? hoursLabel(row.work_minutes) : null,
     check_in_label: row.check_in_at ? formatDueTime(timeInTz(tz, new Date(row.check_in_at))) : null,

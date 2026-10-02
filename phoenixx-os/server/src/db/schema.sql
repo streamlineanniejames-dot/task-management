@@ -667,6 +667,32 @@ CREATE TABLE IF NOT EXISTS holidays (
 );
 CREATE INDEX IF NOT EXISTS ix_holiday_date ON holidays(tenant_id, holiday_date);
 
+/**
+ * The office internet connections a check-in counts as "at work" from.
+ *
+ * Matched on the public address the request reaches the server from - the one
+ * network fact the server observes itself and the browser cannot write. The
+ * Wi-Fi name is a label for HR: no browser exposes it, so it proves nothing.
+ * Private LAN ranges (192.168.x.x and friends) are refused on input, because
+ * the server never sees them and every home router hands them out.
+ */
+CREATE TABLE IF NOT EXISTS approved_networks (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  network_name TEXT NOT NULL,
+  ssid TEXT,                               -- label only, never verified
+  public_ip TEXT NOT NULL,                 -- an address or CIDR range, IPv4 or IPv6
+  verification_method TEXT NOT NULL DEFAULT 'public_ip',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  description TEXT,
+  created_by TEXT REFERENCES users(id),
+  updated_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_approved_networks ON approved_networks(tenant_id, is_active);
+
 CREATE TABLE IF NOT EXISTS attendance_regularizations (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,

@@ -349,6 +349,16 @@ export const openapi = {
       patch: simpleOp('HR', 'Rename or move a holiday', 'patch'),
       delete: simpleOp('HR', 'Remove a holiday', 'delete'),
     },
+    '/hr/networks': {
+      get: simpleOp('HR', 'Approved office networks and whether the network check is on'),
+      post: simpleOp('HR', 'Add an office network (public IP or CIDR; private ranges are refused)', 'post'),
+    },
+    '/hr/networks/{id}': {
+      patch: simpleOp('HR', 'Edit, enable or disable an office network', 'patch'),
+      delete: simpleOp('HR', 'Remove an office network', 'delete'),
+    },
+    '/hr/networks/test': { get: simpleOp('HR', 'The address this request came from, and whether it matches an approved network') },
+    '/hr/networks/settings': { patch: simpleOp('HR', 'Switch the office-network check on or off', 'patch') },
     '/hr/attendance/regularize': { post: simpleOp('HR', 'Request a regularization', 'post') },
     '/hr/leave/requests': { get: listOp('HR', 'Leave and permission requests'), post: simpleOp('HR', 'Apply for leave', 'post') },
     '/hr/leave/requests/{id}/decide': { post: simpleOp('HR', 'Approve or reject leave', 'post') },

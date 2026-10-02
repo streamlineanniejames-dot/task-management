@@ -9,6 +9,7 @@ import {
   PENDING, assessCheckIn, logAttendance, scheduleFor, tzFor, workDayFor, workMinutes,
 } from '../services/attendance.js';
 import { notifyRole } from '../services/notifications.js';
+import { checkEnabled, METHOD as NETWORK_METHOD } from '../services/officeNetwork.js';
 import { ok, created, validate, notFound, badRequest, ApiError } from '../lib/http.js';
 import { config } from '../config.js';
 import { syncDeadline } from './actionItems.routes.js';
@@ -221,18 +222,28 @@ function applyOperation({ tenantId, userId, op, auth }) {
 
       const schedule = scheduleFor(tenantId, userId);
       const assessed = assessCheckIn({ tenantId, workDate, at, schedule });
+      // A queued check-in reaches the server later, from wherever the phone is
+      // by then - its address says nothing about where the button was pressed.
+      // With the office-network check on, it cannot be verified, so HR decides.
+      const networkCheck = checkEnabled(tenantId);
+      const reasons = [assessed.late && 'late', networkCheck && 'offline'].filter(Boolean);
+      const status = reasons.length ? 'pending_approval' : 'present';
       const id = existing?.id || uuid();
       run(
         `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, in_lat, in_lng,
-           source, status, late_minutes, scheduled_start, scheduled_end, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?, 'mobile', ?,?,?,?,?,?)
+           source, status, late_minutes, scheduled_start, scheduled_end, network_verified,
+           verification_method, review_reason, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?, 'mobile', ?,?,?,?,?,?,?,?,?)
          ON CONFLICT (tenant_id, user_id, work_date) DO UPDATE SET
            check_in_at = excluded.check_in_at, in_lat = excluded.in_lat, in_lng = excluded.in_lng,
            source = 'mobile', status = excluded.status, late_minutes = excluded.late_minutes,
            scheduled_start = excluded.scheduled_start, scheduled_end = excluded.scheduled_end,
-           updated_at = excluded.updated_at`,
+           network_verified = excluded.network_verified,
+           verification_method = excluded.verification_method,
+           review_reason = excluded.review_reason, updated_at = excluded.updated_at`,
         [id, tenantId, userId, workDate, at, op.payload.lat ?? null, op.payload.lng ?? null,
-          assessed.status, assessed.late_minutes, assessed.scheduled_start, assessed.scheduled_end,
+          status, assessed.late_minutes, assessed.scheduled_start, assessed.scheduled_end,
+          networkCheck ? 0 : null, networkCheck ? NETWORK_METHOD : null, reasons.join(',') || null,
           ts, ts],
       );
       logAttendance({
@@ -242,11 +253,25 @@ function applyOperation({ tenantId, userId, op, auth }) {
         workDate,
         event: 'checked_in',
         actorId: userId,
-        toStatus: assessed.status,
+        toStatus: status,
         at,
-        note: 'queued offline on mobile',
+        note: networkCheck ? 'queued offline on mobile; network could not be verified' : 'queued offline on mobile',
       });
-      if (assessed.late) {
+      if (networkCheck) {
+        notifyRole({
+          tenantId,
+          roles: ['hr', 'owner'],
+          eventKey: 'attendance.network_review',
+          vars: {
+            person: auth?.name || 'An employee',
+            actual: formatDueTime(timeInTz(tzFor(tenantId), new Date(at))),
+            work_date: workDate,
+            late_note: assessed.late ? ` It was also ${assessed.late_minutes} min late.` : '',
+          },
+          link: '/hr?tab=attendance',
+          dedupeKey: `attendance:${id}:network`,
+        }).catch(() => {});
+      } else if (assessed.late) {
         notifyRole({
           tenantId,
           roles: ['hr', 'owner'],
@@ -262,7 +287,7 @@ function applyOperation({ tenantId, userId, op, auth }) {
           dedupeKey: `attendance:${id}:late`,
         }).catch(() => {});
       }
-      return { entity: 'attendance', id, status: assessed.status, server_updated_at: ts };
+      return { entity: 'attendance', id, status, server_updated_at: ts };
     }
 
     case 'attendance.check_out': {

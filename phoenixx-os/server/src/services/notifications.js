@@ -131,9 +131,14 @@ export const DEFAULT_TEMPLATES = {
     body: '{{person}} checked in at {{actual}} on {{work_date}}. Scheduled start {{scheduled}} '
       + '({{late_minutes}} min late). It stays pending until you approve or reject it.',
   },
+  'attendance.network_review': {
+    subject: 'Check-in to review: {{person}} (not on office network)',
+    body: '{{person}} checked in at {{actual}} on {{work_date}} from a network that is not an '
+      + 'approved office connection.{{late_note}} It stays pending until you approve or reject it.',
+  },
   'attendance.approved': {
     subject: 'Attendance approved for {{work_date}}',
-    body: '{{person}} approved your late check-in on {{work_date}}. The day counts as present.',
+    body: '{{person}} approved your check-in on {{work_date}}. The day counts as present.',
   },
   'attendance.rejected': {
     subject: 'Attendance not approved for {{work_date}}',

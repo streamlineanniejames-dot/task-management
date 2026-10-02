@@ -52,8 +52,10 @@ export default function MobileHR() {
   const punch = useMutation({
     mutationFn: (dir: 'in' | 'out') =>
       api.post(`/hr/attendance/check-${dir}`, { source: 'mobile' }),
-    onSuccess: (_res, dir) => {
-      toast.success(dir === 'in' ? 'Checked in.' : 'Checked out.');
+    onSuccess: (res: any, dir) => {
+      if (dir === 'out') toast.success('Checked out.');
+      else if (res?.data?.status === 'pending_approval') toast.info(res.data.message || 'Sent to HR for review.');
+      else toast.success(res?.data?.message || 'Checked in.');
       qc.invalidateQueries({ queryKey: HOME_KEY });
     },
     onError: (e: any) => toast.error(e.message),

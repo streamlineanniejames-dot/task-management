@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import {
   Plus, LogIn, LogOut, CalendarDays, CalendarOff, Download, Check, X, Clock, Users2, Briefcase,
-  TrendingUp, RefreshCw, Star, AlertTriangle, Trash2,
+  TrendingUp, RefreshCw, Star, AlertTriangle, Trash2, Wifi, Pencil,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -84,6 +84,7 @@ function AttendanceTab() {
   const [regularizeOpen, setRegularizeOpen] = useState(false);
   const [timingsOpen, setTimingsOpen] = useState(false);
   const [holidaysOpen, setHolidaysOpen] = useState(false);
+  const [networksOpen, setNetworksOpen] = useState(false);
   const [openDay, setOpenDay] = useState<{ userId: string; date: string } | null>(null);
   const [decide, setDecide] = useState<{ row: any; decision: 'approve' | 'reject' } | null>(null);
 
@@ -135,9 +136,10 @@ function AttendanceTab() {
   const checkIn = useMutation({
     mutationFn: () => api.post('/hr/attendance/check-in', { source: 'web' }),
     onSuccess: (res: any) => {
-      toast.success(res?.data?.status === 'pending_approval'
-        ? `Checked in at ${res.data.check_in_label} — sent to HR for approval.`
-        : `Checked in at ${res?.data?.check_in_label}.`);
+      // The server says what happened; the screen only repeats it.
+      const msg = res?.data?.message || 'Checked in.';
+      if (res?.data?.status === 'pending_approval') toast.info(msg);
+      else toast.success(`${msg} (${res?.data?.check_in_label})`);
       invalidate();
     },
     onError: (e: any) => toast.error(e.message),
@@ -209,7 +211,9 @@ function AttendanceTab() {
                 </Badge>
                 {me.status === 'pending_approval' && (
                   <p className="mt-2 text-[12.5px] text-[var(--warning)]">
-                    {me.late_minutes} min late — awaiting HR approval.
+                    {me.review_reasons?.includes('off_network') || me.review_reasons?.includes('offline')
+                      ? 'Network not verified as an approved company network — awaiting HR review.'
+                      : `${me.late_minutes} min late — awaiting HR approval.`}
                   </p>
                 )}
                 <Button className="w-full justify-center mt-3" icon={<LogOut size={15} />}
@@ -241,6 +245,7 @@ function AttendanceTab() {
               <div className="flex gap-2">
                 <Button size="sm" icon={<Clock size={14} />} onClick={() => setTimingsOpen(true)}>Work timings</Button>
                 <Button size="sm" icon={<CalendarOff size={14} />} onClick={() => setHolidaysOpen(true)}>Holidays</Button>
+                <Button size="sm" icon={<Wifi size={14} />} onClick={() => setNetworksOpen(true)}>Office networks</Button>
               </div>
             )} />
           <div className="p-4">
@@ -282,14 +287,15 @@ function AttendanceTab() {
       {/* ------------------------------------------- late check-in approvals */}
       {approver && pending.data?.length > 0 && (
         <Card className="mb-5 border-l-4 border-l-[var(--accent-bg)]">
-          <CardHeader title="Late check-ins waiting on you"
+          <CardHeader title="Check-ins waiting on you"
             subtitle={`${pending.data.length} day${pending.data.length > 1 ? 's' : ''} stay pending until you decide`}
             icon={<AlertTriangle size={16} />} />
           <Table>
             <THead>
               <tr>
                 <TH>Employee</TH><TH width="110px">Date</TH><TH width="110px">Scheduled</TH>
-                <TH width="110px">Checked in</TH><TH width="90px">Late by</TH><TH width="180px" />
+                <TH width="110px">Checked in</TH><TH width="170px">Reason</TH><TH width="170px">Network</TH>
+                <TH width="180px" />
               </tr>
             </THead>
             <tbody>
@@ -299,7 +305,8 @@ function AttendanceTab() {
                   <TD><span className="text-muted text-[13px]">{date(r.work_date)}</span></TD>
                   <TD><span className="text-muted text-[13px] tabular">{r.scheduled_start_label}</span></TD>
                   <TD><span className="font-medium text-ink text-[13px] tabular">{r.check_in_label}</span></TD>
-                  <TD><Badge tone="warning">{r.late_minutes}m</Badge></TD>
+                  <TD><ReviewReasons row={r} /></TD>
+                  <TD><NetworkCell row={r} /></TD>
                   <TD>
                     <span className="flex gap-2">
                       <Button size="sm" variant="primary" icon={<Check size={13} />}
@@ -486,6 +493,7 @@ function AttendanceTab() {
       {regularizeOpen && <RegularizeModal onClose={() => setRegularizeOpen(false)} />}
       {timingsOpen && <WorkTimingsModal onClose={() => setTimingsOpen(false)} />}
       {holidaysOpen && <HolidaysModal onClose={() => setHolidaysOpen(false)} />}
+      {networksOpen && <NetworksModal onClose={() => setNetworksOpen(false)} />}
       {openDay && (
         <DayDetailModal userId={openDay.userId} workDate={openDay.date}
           canCorrect={approver} onClose={() => setOpenDay(null)} />
@@ -494,6 +502,40 @@ function AttendanceTab() {
         <DecideLateModal row={decide.row} decision={decide.decision} onClose={() => setDecide(null)} />
       )}
     </>
+  );
+}
+
+/* ------------------------------------------ why a check-in is with HR */
+const REASON_LABEL: Record<string, string> = {
+  late: 'Late',
+  off_network: 'Not on office network',
+  offline: 'Queued offline — network unverified',
+};
+
+function ReviewReasons({ row }: { row: any }) {
+  // Rows from before the network check carry no reason; they were late.
+  const reasons: string[] = row.review_reasons?.length ? row.review_reasons : ['late'];
+  return (
+    <span className="flex flex-wrap gap-1">
+      {reasons.map((k) => (
+        <Badge key={k} tone="warning">
+          {k === 'late' ? `Late ${row.late_minutes}m` : REASON_LABEL[k] || k}
+        </Badge>
+      ))}
+    </span>
+  );
+}
+
+/** What the server saw. The address is shown to HR only. */
+function NetworkCell({ row }: { row: any }) {
+  if (row.network_verified == null) return <span className="text-subtle text-[12.5px]">Not checked</span>;
+  return (
+    <span className="block text-[12.5px] leading-tight">
+      <span className={cx('font-medium', row.network_verified ? 'text-[var(--positive)]' : 'text-[var(--warning)]')}>
+        {row.network_verified ? row.network_name || row.network_label || 'Office network' : 'Not verified'}
+      </span>
+      {row.client_ip && <span className="block text-subtle tabular mt-0.5">{row.client_ip}</span>}
+    </span>
   );
 }
 
@@ -549,8 +591,20 @@ function DecideLateModal({ row, decision, onClose }: {
           </div>
           <div>
             <dt className="label-cap">Late by</dt>
-            <dd className="text-[var(--warning)] mt-0.5 tabular font-medium">{row.late_minutes} min</dd>
+            <dd className={cx('mt-0.5 tabular font-medium', row.late_minutes > 0 ? 'text-[var(--warning)]' : 'text-ink')}>
+              {row.late_minutes} min
+            </dd>
           </div>
+          <div className="col-span-3">
+            <dt className="label-cap">Why it is waiting</dt>
+            <dd className="mt-1"><ReviewReasons row={row} /></dd>
+          </div>
+          {row.verification_method && (
+            <div className="col-span-3">
+              <dt className="label-cap">Network</dt>
+              <dd className="mt-0.5"><NetworkCell row={row} /></dd>
+            </div>
+          )}
         </dl>
         <Field label={rejecting ? 'Reason' : 'Note'} required={rejecting}
           hint={rejecting
@@ -913,6 +967,195 @@ function HolidaysModal({ onClose }: { onClose: () => void }) {
                       <TD>
                         <Button size="sm" variant="ghost" icon={<Trash2 size={14} />}
                           aria-label={`Delete ${h.name}`} onClick={() => remove.mutate(h.id)} />
+                      </TD>
+                    </TR>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------ office networks */
+/**
+ * The office connections a check-in is approved from. Matched on the public
+ * address the server sees; the Wi-Fi name is a label for HR, because no
+ * browser can read it. Test answers from HR's own connection right now.
+ */
+const EMPTY_NETWORK = { network_name: '', ssid: '', public_ip: '', description: '' };
+
+function NetworksModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [draft, setDraft] = useState(EMPTY_NETWORK);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [test, setTest] = useState<any>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['attendance', 'networks'],
+    queryFn: () => api.get('/hr/networks').then((r) => r.data),
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['attendance', 'networks'] });
+  const reset = () => { setDraft(EMPTY_NETWORK); setEditing(null); };
+  const set = (k: keyof typeof EMPTY_NETWORK) => (e: any) => setDraft((d) => ({ ...d, [k]: e.target.value }));
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body = {
+        network_name: draft.network_name.trim(),
+        ssid: draft.ssid.trim() || null,
+        public_ip: draft.public_ip.trim(),
+        description: draft.description.trim() || null,
+      };
+      return editing ? api.patch(`/hr/networks/${editing}`, body) : api.post('/hr/networks', body);
+    },
+    onSuccess: () => { toast.success(editing ? 'Network updated.' : 'Network added.'); reset(); invalidate(); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const toggle = useMutation({
+    mutationFn: (n: any) => api.patch(`/hr/networks/${n.id}`, { is_active: !n.is_active }),
+    onSuccess: invalidate,
+    onError: (e: any) => toast.error(e.message),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.del(`/hr/networks/${id}`),
+    onSuccess: () => { toast.success('Removed.'); invalidate(); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const setEnabled = useMutation({
+    mutationFn: (enabled: boolean) => api.patch('/hr/networks/settings', { enabled }),
+    onSuccess: (res: any) => {
+      toast.success(res?.data?.enabled
+        ? 'Network check is on. Check-ins from other networks now go to HR.'
+        : 'Network check is off.');
+      invalidate();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const runTest = useMutation({
+    mutationFn: () => api.get('/hr/networks/test').then((r) => r.data),
+    onSuccess: setTest,
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const enabled = !!data?.enabled;
+  const networks: any[] = data?.networks || [];
+  const activeCount = networks.filter((n) => n.is_active).length;
+
+  return (
+    <Modal open onClose={onClose} size="lg" title="Office networks"
+      subtitle="Check-ins from these connections count as present; anything else goes to HR"
+      footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
+      <div className="space-y-4">
+        <div className={cx('flex items-start justify-between gap-3 rounded-lg p-3.5',
+          enabled ? 'bg-positive-soft' : 'bg-sunken')}>
+          <div>
+            <p className="text-[13.5px] font-medium text-ink">Network check is {enabled ? 'on' : 'off'}</p>
+            <p className="text-[12.5px] text-muted mt-0.5">
+              {enabled
+                ? `${activeCount} active network${activeCount === 1 ? '' : 's'}. Check-ins from anywhere else wait for HR.`
+                : 'Check-ins are judged on time only. Press Test from the office before switching it on.'}
+            </p>
+          </div>
+          <Button size="sm" variant={enabled ? 'ghost' : 'primary'} loading={setEnabled.isPending}
+            disabled={!enabled && activeCount === 0}
+            onClick={() => setEnabled.mutate(!enabled)}>
+            {enabled ? 'Switch off' : 'Switch on'}
+          </Button>
+        </div>
+
+        <div className="rounded-lg border border-line p-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[13.5px] font-medium text-ink">Test this connection</p>
+              <p className="text-[12.5px] text-muted mt-0.5">Shows the public IP the server sees from you right now.</p>
+            </div>
+            <Button size="sm" icon={<Wifi size={14} />} loading={runTest.isPending}
+              onClick={() => runTest.mutate()}>Test</Button>
+          </div>
+          {test && (
+            <p className={cx('mt-3 rounded-md px-2.5 py-2 text-[12.5px] text-ink',
+              test.matched ? 'bg-positive-soft' : 'bg-warning-soft')}>
+              Your IP: <strong className="tabular">{test.ip || 'unknown'}</strong>
+              {test.ip_version === 6 && ' (IPv6)'} —{' '}
+              {test.matched
+                ? `matches ${test.network.network_name}${test.network.ssid ? ` (${test.network.ssid})` : ''}.`
+                : 'does not match any active network. A check-in from here would go to HR.'}
+            </p>
+          )}
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Field label="Network name">
+            <Input value={draft.network_name} placeholder="ACT office" onChange={set('network_name')} />
+          </Field>
+          <Field label="Wi-Fi name (label)" hint="For reference only — browsers cannot read it.">
+            <Input value={draft.ssid} placeholder="ACTFIBERNET" onChange={set('ssid')} />
+          </Field>
+          <Field label="Public IP or range" hint="From whatismyipaddress.com on that Wi-Fi. Not 192.168.x.x.">
+            <Input value={draft.public_ip} placeholder="49.206.113.67" onChange={set('public_ip')} />
+          </Field>
+          <Field label="Description">
+            <Input value={draft.description} placeholder="2.4 GHz, ground floor" onChange={set('description')} />
+          </Field>
+        </div>
+        <div className="flex justify-end gap-2">
+          {editing && <Button onClick={reset}>Cancel edit</Button>}
+          <Button variant="primary" icon={editing ? <Check size={14} /> : <Plus size={14} />}
+            loading={save.isPending}
+            disabled={draft.network_name.trim().length < 2 || draft.public_ip.trim().length < 3}
+            onClick={() => save.mutate()}>{editing ? 'Save network' : 'Add network'}</Button>
+        </div>
+
+        {isLoading ? <TableSkeleton rows={4} cols={5} />
+          : !networks.length ? <EmptyState compact title="No office networks yet" />
+            : (
+              <Table>
+                <THead>
+                  <tr>
+                    <TH>Network</TH><TH width="140px">Public IP</TH><TH width="90px">Status</TH>
+                    <TH width="130px">Last updated</TH><TH width="150px" />
+                  </tr>
+                </THead>
+                <tbody>
+                  {networks.map((n) => (
+                    <TR key={n.id}>
+                      <TD>
+                        <span className="block text-[13px] font-medium text-ink">{n.ssid || n.network_name}</span>
+                        <span className="block text-[12px] text-subtle">
+                          {[n.ssid ? n.network_name : null, n.description].filter(Boolean).join(' · ')}
+                        </span>
+                      </TD>
+                      <TD><span className="text-[13px] tabular text-muted">{n.public_ip}</span></TD>
+                      <TD>
+                        <Badge tone={n.is_active ? 'positive' : 'neutral'} dot>
+                          {n.is_active ? 'Active' : 'Disabled'}
+                        </Badge>
+                      </TD>
+                      <TD>
+                        <span className="block text-[12.5px] text-muted">{relative(n.updated_at)}</span>
+                        {n.updated_by_name && <span className="block text-[12px] text-subtle">{n.updated_by_name}</span>}
+                      </TD>
+                      <TD>
+                        <span className="flex gap-1 justify-end">
+                          <Button size="sm" variant="ghost" icon={<Pencil size={13} />}
+                            aria-label={`Edit ${n.ssid || n.network_name}`}
+                            onClick={() => {
+                              setEditing(n.id);
+                              setDraft({
+                                network_name: n.network_name, ssid: n.ssid || '',
+                                public_ip: n.public_ip, description: n.description || '',
+                              });
+                            }} />
+                          <Button size="sm" variant="ghost" onClick={() => toggle.mutate(n)}>
+                            {n.is_active ? 'Disable' : 'Enable'}
+                          </Button>
+                          <Button size="sm" variant="ghost" icon={<Trash2 size={14} />}
+                            aria-label={`Delete ${n.ssid || n.network_name}`}
+                            onClick={() => window.confirm(`Remove ${n.ssid || n.network_name}?`) && remove.mutate(n.id)} />
+                        </span>
                       </TD>
                     </TR>
                   ))}

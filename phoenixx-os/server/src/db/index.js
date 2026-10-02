@@ -82,6 +82,38 @@ function backfill() {
     db.exec(`UPDATE tenants SET week_off_days = '[0]' WHERE week_off_days = '[0,6]'`);
   });
 
+  /**
+   * Phoenixx's own office connections, entered once as starting data so HR
+   * does not begin from an empty list. From here on they are ordinary rows HR
+   * edits, disables or deletes on the settings screen - nothing reads these
+   * values from code. The check itself stays off: HR presses Test from the
+   * office first, then switches it on.
+   */
+  once('approved_networks_phoenixx_seed', () => {
+    if (!tableExists('approved_networks')) return;
+    const tenants = db.prepare(
+      `SELECT id FROM tenants WHERE LOWER(slug) LIKE 'phoenixx%' OR LOWER(name) LIKE 'phoenixx%'`,
+    ).all();
+    const insert = db.prepare(
+      `INSERT INTO approved_networks (id, tenant_id, network_name, ssid, public_ip, description,
+         created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`,
+    );
+    const ts = new Date().toISOString();
+    const seed = [
+      ['Airtel office', 'Airtel_renn_1546-5G_EXT', '117.98.188.168', 'Airtel extender (5 GHz)'],
+      ['Airtel office', 'Airtel_renn_1546-5G', '117.98.188.168', 'Airtel router (5 GHz)'],
+      ['ACT office', 'ACTFIBERNET_5G', '49.206.113.67', 'ACT router (5 GHz)'],
+      ['ACT office', 'ACTFIBERNET', '49.206.113.67', 'ACT router (2.4 GHz)'],
+    ];
+    for (const t of tenants) {
+      const has = db.prepare('SELECT 1 FROM approved_networks WHERE tenant_id = ? LIMIT 1').get(t.id);
+      if (has) continue;
+      for (const [name, ssid, ip, desc] of seed) {
+        insert.run(crypto.randomUUID(), t.id, name, ssid, ip, desc, ts, ts);
+      }
+    }
+  });
+
   // A workspace left with no weekly off at all - the toggle used to allow it -
   // goes back to Sunday. Self-limiting: it only ever matches an empty list, and
   // the API no longer accepts one, so this cannot fight a deliberate choice.
@@ -185,6 +217,18 @@ const ADDED_COLUMNS = [
   ['attendance', 'approved_by', 'TEXT'],
   ['attendance', 'approved_at', 'TEXT'],
   ['attendance', 'approval_note', 'TEXT'],
+  // Office-network check. Off until HR switches it on, so a workspace that has
+  // never configured a network keeps the attendance it always had.
+  ['tenants', 'network_check', 'INTEGER NOT NULL DEFAULT 0'],
+  // What the server saw at check-in. `network_verified` is NULL when the check
+  // was off, 1 for an approved network, 0 otherwise. `client_ip` is HR-only.
+  ['attendance', 'network_verified', 'INTEGER'],
+  ['attendance', 'verification_method', 'TEXT'],
+  ['attendance', 'network_id', 'TEXT'],
+  ['attendance', 'network_label', 'TEXT'],
+  ['attendance', 'client_ip', 'TEXT'],
+  // Why the day is waiting on HR: comma-separated late|off_network|offline.
+  ['attendance', 'review_reason', 'TEXT'],
 ];
 
 function addColumns() {
