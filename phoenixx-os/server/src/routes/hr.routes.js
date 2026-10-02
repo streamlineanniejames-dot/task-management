@@ -75,7 +75,7 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
     assessed.scheduled_start, assessed.scheduled_end, body.notes ?? null,
     network.verified === null ? null : Number(network.verified), network.method,
     network.network?.id ?? null, network.network ? (network.network.ssid || network.network.network_name) : null,
-    network.enabled ? network.ip : null, reasons.join(',') || null];
+    network.verified === null ? null : network.ip, reasons.join(',') || null];
 
   tx(() => {
     if (existing) {
@@ -108,9 +108,9 @@ router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, r
       at,
       note: [
         assessed.late && `${assessed.late_minutes} min after a ${formatDueTime(schedule.start)} start`,
-        network.enabled && (network.verified
+        network.verified !== null && `${network.verified
           ? `office network: ${network.network.network_name}`
-          : 'not on an approved office network'),
+          : 'not on an approved office network'}${network.enabled ? '' : ' (trial - check switched off)'}`,
       ].filter(Boolean).join('; ') || null,
     });
   });
@@ -258,11 +258,12 @@ router.get('/attendance/today', requires('hr_attendance', 'view'), (req, res) =>
     )) || null,
     team: approver
       ? all(
-        `SELECT a.*, u.name, u.avatar_url, u.designation FROM attendance a
+        `SELECT a.*, u.name, u.avatar_url, u.designation, n.network_name FROM attendance a
            JOIN users u ON u.id = a.user_id
+           LEFT JOIN approved_networks n ON n.id = a.network_id
           WHERE a.tenant_id = ? AND a.work_date = ? ORDER BY a.check_in_at`,
         [tenantId, today],
-      ).map((r) => decorate(tenantId, r))
+      ).map((r) => decorate(tenantId, r, { withNetwork: true }))
       : [],
     absent: approver
       ? all(

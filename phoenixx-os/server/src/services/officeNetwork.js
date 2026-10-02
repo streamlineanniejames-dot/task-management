@@ -109,14 +109,20 @@ export function matchNetwork(tenantId, rawIp) {
 }
 
 /**
- * The verdict for one check-in. `verified` is null when the workspace has the
- * check switched off - "not checked" is a different fact from "failed".
+ * The verdict for one check-in.
+ *
+ * Checked and recorded whenever the workspace has a network listed, switched
+ * on or not: with the switch off it is a trial run, so HR can see who would
+ * have matched before anybody's day depends on it. `enabled` is what decides
+ * whether a miss sends the day to HR. `verified` is null only when there is
+ * nothing to check against - "not checked" is a different fact from "failed".
  */
 export function verifyCheckIn(tenantId, rawIp) {
   const ip = normaliseIp(rawIp);
-  if (!checkEnabled(tenantId)) {
+  const enabled = checkEnabled(tenantId);
+  if (!enabled && !activeNetworks(tenantId).length) {
     return { enabled: false, verified: null, method: null, network: null, ip };
   }
   const network = matchNetwork(tenantId, ip);
-  return { enabled: true, verified: !!network, method: METHOD, network, ip };
+  return { enabled, verified: !!network, method: METHOD, network, ip };
 }

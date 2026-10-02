@@ -100,12 +100,29 @@ describe('network settings', () => {
 });
 
 describe('check-in with the check switched off', () => {
-  test('behaves exactly as before: present, nothing recorded about the network', async () => {
+  test('trial run: a miss is recorded for HR but the day stays present', async () => {
     const e = await employee();
     const res = await checkIn(e, '8.8.8.8');
     assert.equal(res.status, 201);
     assert.equal(res.body.data.status, 'present');
-    assert.equal(rowFor(e).network_verified, null);
+    assert.equal(res.body.data.message, 'Check-in successful.', 'the employee is told nothing about a trial');
+    const row = rowFor(e);
+    assert.equal(row.network_verified, 0);
+    assert.equal(row.client_ip, '8.8.8.8');
+    assert.equal(row.review_reason, null);
+  });
+
+  test('trial run: a match is recorded too', async () => {
+    const e = await employee();
+    await checkIn(e, OFFICE_IP);
+    assert.equal(rowFor(e).network_verified, 1);
+  });
+
+  test('HR sees the trial result on "who is in today"', async () => {
+    const t = await api.get('/hr/attendance/today', { token });
+    const hit = t.body.data.team.find((r) => r.client_ip === OFFICE_IP);
+    assert.equal(hit.network_verified, 1);
+    assert.equal(hit.network_name, 'ACT office');
   });
 });
 

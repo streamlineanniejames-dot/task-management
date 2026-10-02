@@ -259,6 +259,14 @@ function AttendanceTab() {
                       <Avatar name={a.name} url={a.avatar_url} size={22} />
                       <span className="text-[12.5px] text-ink">{a.name}</span>
                       <span className="text-[11px] text-subtle tabular">{a.check_in_label}</span>
+                      {a.network_verified != null && (
+                        <span title={a.network_verified
+                          ? `Office network: ${a.network_name || a.network_label || ''} (${a.client_ip || ''})`
+                          : `Not an office network (${a.client_ip || 'IP unknown'})`}>
+                          <Wifi size={12} aria-label={a.network_verified ? 'on office network' : 'not on office network'}
+                            className={a.network_verified ? 'text-[var(--positive)]' : 'text-[var(--warning)]'} />
+                        </span>
+                      )}
                       {a.status === 'pending_approval' && (
                         <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" aria-label="pending approval" />
                       )}
