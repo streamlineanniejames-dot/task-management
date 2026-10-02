@@ -18,6 +18,7 @@ import { api } from '../lib/api';
 import { cx } from '../components/ui';
 import { MobileChrome } from './chrome';
 import { Loading } from './ui';
+import TodoReminders from '../components/TodoReminders';
 
 const MHome = lazy(() => import('./screens/Home'));
 const MChat = lazy(() => import('./screens/Chat'));
@@ -104,6 +105,7 @@ export default function MobileApp() {
         </Routes>
       </Suspense>
       <TabBar chatUnread={chatUnread} />
+      <TodoReminders />
     </div>
     </MobileChrome>
   );

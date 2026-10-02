@@ -14,6 +14,7 @@ import { Logo } from './Logo';
 import { applyStatusBarTheme } from '../lib/native';
 import { Avatar, Badge, Button, cx, EmptyState } from './ui';
 import { relative } from '../lib/format';
+import TodoReminders from './TodoReminders';
 
 /* ------------------------------------------------------------------ theme */
 /** Exported so the mobile shell shares it — two copies would let the native
@@ -293,6 +294,7 @@ export default function Layout() {
         <main className="flex-1 min-w-0 px-4 py-5 sm:px-6 lg:px-7 max-w-[1600px] w-full mx-auto">
           <Outlet />
         </main>
+        <TodoReminders />
         <footer className="border-t border-line px-4 sm:px-6 py-3 text-[12px] text-subtle flex flex-wrap gap-x-4 gap-y-1 justify-between no-print">
           <span>Phoenixx OS · {tenant?.name}</span>
           <span>All times {tenant?.timezone?.replace('_', ' ')} · amounts in {tenant?.currency}</span>

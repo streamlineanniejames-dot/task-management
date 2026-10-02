@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { announceCheckIn } from '../components/TodoReminders';
 import {
   date, dateTime, time, monthLabel, percent, relative, money, titleCase, num, clockTime,
 } from '../lib/format';
@@ -141,6 +142,7 @@ function AttendanceTab() {
       if (res?.data?.status === 'pending_approval') toast.info(msg);
       else if (res?.data?.checked_in_again) toast.success(msg);
       else toast.success(`${msg} (${res?.data?.check_in_label})`);
+      if (!res?.data?.checked_in_again && !res?.data?.already_checked_in) announceCheckIn();
       invalidate();
     },
     onError: (e: any) => toast.error(e.message),

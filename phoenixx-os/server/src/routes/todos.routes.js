@@ -73,6 +73,22 @@ router.get('/', (req, res) => {
   });
 });
 
+/**
+ * What is coming up after `date` (default today): open to-dos and reminders
+ * saved for a later day, soonest first, so the card can show them without a
+ * second screen.
+ */
+router.get('/upcoming', (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : todayIso();
+  return ok(res, all(
+    `SELECT * FROM personal_todos
+      WHERE tenant_id = ? AND user_id = ? AND deleted_at IS NULL AND status = 'pending' AND todo_date > ?
+      ORDER BY todo_date, ${ORDER} LIMIT 50`,
+    [tenantId, userId, day],
+  ));
+});
+
 /** Everything, for the "all my to-dos" view. Still only ever the caller's own. */
 router.get('/all', (req, res) => {
   const { page, limit, offset } = paginate(req);

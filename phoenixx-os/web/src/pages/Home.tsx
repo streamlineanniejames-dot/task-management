@@ -16,6 +16,7 @@ import {
 } from '../components/ui';
 import MiniChat from '../components/MiniChat';
 import PersonalTodos from '../components/PersonalTodos';
+import { announceCheckIn } from '../components/TodoReminders';
 import { DailyUpdateModal } from '../components/DailyUpdate';
 
 /**
@@ -45,6 +46,8 @@ export default function Home() {
       if (row?.status === 'pending_approval') toast.info(msg);
       else if (row?.checked_in_again) toast.success(msg);
       else toast.success(`${msg} (${row?.check_in_label})`);
+      // The day's first check-in opens today's to-dos.
+      if (!row?.checked_in_again && !row?.already_checked_in) announceCheckIn();
       qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
       qc.invalidateQueries({ queryKey: ['attendance'] });

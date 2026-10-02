@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, CheckCircle2, ListTodo, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowDownToLine, CalendarDays, CheckCircle2, ListTodo, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
+import { date as fmtDate } from '../lib/format';
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Select, Skeleton, cx, useToast } from './ui';
 
 /**
- * My Day - the personal to-do list.
+ * To-do & reminders - the personal list.
  *
  * A quiet counterpart to the action-item queue beside it: nobody assigns these,
  * nobody chases them, and nobody else can see them. That is the whole point, so
@@ -14,13 +15,15 @@ import { Badge, Button, Card, CardHeader, EmptyState, Input, Select, Skeleton, c
  */
 
 export const TODOS_KEY = ['todos', 'today'];
+export const UPCOMING_KEY = ['todos', 'upcoming'];
 
 type Todo = {
   id: string; title: string; todo_date: string; due_time: string | null;
   priority: 'low' | 'normal' | 'high'; status: 'pending' | 'completed';
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+/** Today on this device's calendar - the day the person means by "today". */
+export const today = () => new Date().toLocaleDateString('en-CA');
 
 /** "18:30" as the reader would say it. Shared with the mobile Today screen. */
 export const clock = (hhmm?: string | null) => {
@@ -38,12 +41,18 @@ export default function PersonalTodos({ className }: { className?: string }) {
   const [title, setTitle] = useState('');
   const [time, setTime] = useState('');
   const [priority, setPriority] = useState<Todo['priority']>('normal');
+  const [day, setDay] = useState(today());
   const [detailed, setDetailed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: TODOS_KEY,
-    queryFn: () => api.get('/todos').then((r) => ({ items: r.data as Todo[], meta: r.meta })),
+    queryFn: () => api.get('/todos', { date: today() }).then((r) => ({ items: r.data as Todo[], meta: r.meta })),
+    staleTime: 30_000,
+  });
+  const upcoming = useQuery({
+    queryKey: UPCOMING_KEY,
+    queryFn: () => api.get('/todos/upcoming', { date: today() }).then((r) => r.data as Todo[]),
     staleTime: 30_000,
   });
 
@@ -51,10 +60,12 @@ export default function PersonalTodos({ className }: { className?: string }) {
 
   const add = useMutation({
     mutationFn: (body: Record<string, any>) => api.post('/todos', body),
-    onSuccess: () => {
+    onSuccess: (_res, body) => {
+      if (body.todo_date && body.todo_date !== today()) toast.success(`Saved for ${fmtDate(body.todo_date)}.`);
       setTitle('');
       setTime('');
       setPriority('normal');
+      setDay(today());
       refresh();
       // Straight back to the field: adding three things in a row is the norm.
       inputRef.current?.focus();
@@ -98,6 +109,7 @@ export default function PersonalTodos({ className }: { className?: string }) {
     if (!text) return;
     add.mutate({
       title: text,
+      todo_date: day || today(),
       ...(time ? { due_time: time } : {}),
       ...(priority !== 'normal' ? { priority } : {}),
     });
@@ -111,8 +123,8 @@ export default function PersonalTodos({ className }: { className?: string }) {
   return (
     <Card className={className}>
       <CardHeader
-        title="My day"
-        subtitle="Private to you, not company work"
+        title="To-do & reminders"
+        subtitle="Private to you. Add a time to get a reminder 10 minutes before"
         icon={<ListTodo size={16} />}
         action={done.length > 0 && (
           <button onClick={() => clearDone.mutate()}
@@ -131,8 +143,8 @@ export default function PersonalTodos({ className }: { className?: string }) {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onFocus={() => setDetailed(true)}
-            placeholder="Add something for today…"
-            aria-label="New personal to-do"
+            placeholder="Add a to-do or reminder…"
+            aria-label="New to-do or reminder"
             maxLength={200}
             className="h-8 min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-subtle
                        border-0 outline-none focus:ring-0"
@@ -145,6 +157,8 @@ export default function PersonalTodos({ className }: { className?: string }) {
         {/* Time and priority stay out of the way until the field is in use. */}
         {detailed && (
           <div className="mt-2 flex flex-wrap items-center gap-2 pl-[23px] pr-0.5">
+            <Input type="date" value={day} min={today()} onChange={(e) => setDay(e.target.value || today())}
+              aria-label="Day" className="h-8 min-w-[130px] flex-1 text-[13px]" />
             <Input type="time" value={time} onChange={(e) => setTime(e.target.value)}
               aria-label="Due time (optional)" className="h-8 min-w-[96px] flex-1 text-[13px]" />
             <Select value={priority} onChange={(e) => setPriority(e.target.value as Todo['priority'])}
@@ -153,8 +167,8 @@ export default function PersonalTodos({ className }: { className?: string }) {
               <option value="normal">Normal</option>
               <option value="high">High</option>
             </Select>
-            {(time || priority !== 'normal') && (
-              <button type="button" onClick={() => { setTime(''); setPriority('normal'); }}
+            {(time || priority !== 'normal' || day !== today()) && (
+              <button type="button" onClick={() => { setTime(''); setPriority('normal'); setDay(today()); }}
                 className="text-[12.5px] text-subtle hover:text-ink transition-colors cursor-pointer">
                 Reset
               </button>
@@ -169,8 +183,8 @@ export default function PersonalTodos({ className }: { className?: string }) {
           {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-6" />)}
         </div>
       ) : !items.length ? (
-        <EmptyState compact icon={<ListTodo size={20} />} title="Nothing on your list"
-          message="Jot down the small things you want to get through today." />
+        <EmptyState compact icon={<ListTodo size={20} />} title="Nothing for today"
+          message="Jot down a to-do, or pick a later day to save a reminder for then." />
       ) : (
         <>
           <ul className="divide-y divide-[var(--border)]">
@@ -219,6 +233,29 @@ export default function PersonalTodos({ className }: { className?: string }) {
           </div>
         </>
       )}
+
+      {/* ------------------------------------------------- later days */}
+      {!!upcoming.data?.length && (
+        <>
+          <p className="label-cap flex items-center gap-1.5 border-t border-line px-4 pb-1 pt-2.5">
+            <CalendarDays size={12} aria-hidden /> Upcoming · {upcoming.data.length}
+          </p>
+          <ul className="divide-y divide-[var(--border)]">
+            {upcoming.data.map((t) => (
+              <TodoRow
+                key={t.id} todo={t}
+                editing={editing === t.id}
+                onEdit={() => setEditing(t.id)}
+                onCancelEdit={() => setEditing(null)}
+                onSave={(body) => save.mutate({ id: t.id, body })}
+                onToggle={() => toggle.mutate(t.id)}
+                onRemove={() => remove.mutate(t.id)}
+                onPullForward={() => pullForward.mutate(t.id)}
+              />
+            ))}
+          </ul>
+        </>
+      )}
     </Card>
   );
 }
@@ -237,9 +274,11 @@ function TodoRow({ todo: t, editing, onEdit, onCancelEdit, onSave, onToggle, onR
   const [draft, setDraft] = useState(t.title);
   const [time, setTime] = useState(t.due_time || '');
   const [priority, setPriority] = useState(t.priority);
+  const [day, setDay] = useState(t.todo_date);
 
   const isDone = t.status === 'completed';
   const stale = !isDone && t.todo_date < today();
+  const later = !isDone && t.todo_date > today();
 
   if (editing) {
     return (
@@ -248,13 +287,15 @@ function TodoRow({ todo: t, editing, onEdit, onCancelEdit, onSave, onToggle, onR
           onSubmit={(e) => {
             e.preventDefault();
             if (!draft.trim()) return;
-            onSave({ title: draft.trim(), due_time: time || null, priority });
+            onSave({ title: draft.trim(), due_time: time || null, priority, ...(day !== t.todo_date ? { todo_date: day } : {}) });
           }}
           className="space-y-2"
         >
           <Input value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
             aria-label="Edit to-do" maxLength={200} className="h-8 text-[13.5px]" />
           <div className="flex flex-wrap items-center gap-2">
+            <Input type="date" value={day} onChange={(e) => setDay(e.target.value || t.todo_date)}
+              aria-label="Day" className="h-8 min-w-[130px] flex-1 text-[13px]" />
             <Input type="time" value={time} onChange={(e) => setTime(e.target.value)}
               aria-label="Due time" className="h-8 min-w-[96px] flex-1 text-[13px]" />
             <Select value={priority} onChange={(e) => setPriority(e.target.value as Todo['priority'])}
@@ -274,6 +315,7 @@ function TodoRow({ todo: t, editing, onEdit, onCancelEdit, onSave, onToggle, onR
   }
 
   const meta = [
+    later && fmtDate(t.todo_date),
     t.due_time && clock(t.due_time),
     // Priority reads as a word, not only as a colour.
     !isDone && t.priority !== 'normal' && t.priority,
@@ -325,7 +367,7 @@ function TodoRow({ todo: t, editing, onEdit, onCancelEdit, onSave, onToggle, onR
       <span className="absolute right-2 top-1.5 flex items-center gap-0.5 rounded-md
                        bg-[var(--surface-hover)] pl-1 opacity-0 transition-opacity
                        group-hover:opacity-100 focus-within:opacity-100">
-        {stale && onPullForward && (
+        {(stale || later) && onPullForward && (
           <IconButton label={`Move "${t.title}" to today`} onClick={onPullForward}>
             <ArrowDownToLine size={14} />
           </IconButton>

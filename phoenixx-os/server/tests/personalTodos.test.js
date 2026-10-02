@@ -164,6 +164,18 @@ describe('a personal list is private', () => {
     assert.equal(items.body.data.some((a) => a.title === 'Buy a birthday card'), false);
   });
 
+  test('a to-do saved for a later day shows under upcoming, not today', async () => {
+    const later = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const res = await api.post('/todos', { title: 'Renew domain', todo_date: later, due_time: '11:00' }, { token: priya.token });
+    assert.equal(res.status, 201);
+    const day = await api.get(`/todos?date=${today}`, { token: priya.token });
+    assert.ok(!day.body.data.some((t) => t.title === 'Renew domain'));
+    const up = await api.get(`/todos/upcoming?date=${today}`, { token: priya.token });
+    assert.ok(up.body.data.some((t) => t.title === 'Renew domain' && t.todo_date === later));
+    const theirs = await api.get(`/todos/upcoming?date=${today}`, { token: rahul.token });
+    assert.ok(!theirs.body.data.some((t) => t.title === 'Renew domain'), 'still private');
+  });
+
   test('the list is unreachable without a session', async () => {
     assert.equal((await api.get('/todos')).status, 401);
   });

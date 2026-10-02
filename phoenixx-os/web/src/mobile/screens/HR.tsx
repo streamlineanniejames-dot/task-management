@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { announceCheckIn } from '../../components/TodoReminders';
 import { date as fmtDate, time as fmtTime } from '../../lib/format';
 import { useToast } from '../../components/ui';
 import { HOME_KEY, useHomeFeed } from '../MobileApp';
@@ -63,6 +64,7 @@ export default function MobileHR() {
       if (dir === 'out') toast.success('Checked out.');
       else if (res?.data?.status === 'pending_approval' || res?.data?.checked_in_again) toast.info(res.data.message || 'Sent to HR for review.');
       else toast.success(res?.data?.message || 'Checked in.');
+      if (dir === 'in' && !res?.data?.checked_in_again && !res?.data?.already_checked_in) announceCheckIn();
       qc.invalidateQueries({ queryKey: HOME_KEY });
     },
     onError: (e: any) => toast.error(e.message),
