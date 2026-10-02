@@ -81,6 +81,8 @@ export default function Home() {
   // Nobody is expected in on a holiday or a weekly off, so the button that
   // would mark them late is not offered on one.
   const offToday = attendanceDay?.kind && attendanceDay.kind !== 'working';
+  // The owner is not on the attendance register at all.
+  const keepsAttendance = user?.role !== 'owner';
   const approvals = data?.pending_approvals || {};
   const approvalTotal = (approvals.leave || 0) + (approvals.regularizations || 0)
     + (approvals.late_check_ins || 0)
@@ -101,7 +103,7 @@ export default function Home() {
                 Quick add
               </Button>
             )}
-            {offToday ? (
+            {!keepsAttendance ? null : offToday ? (
               <Badge tone="info" dot>
                 {attendanceDay.kind === 'holiday'
                   ? attendanceDay.holiday?.name || 'Company holiday'
@@ -152,14 +154,16 @@ export default function Home() {
           {/* The personal list sits above the assigned work on purpose: the
               first thing someone does with this page is add what they already
               know they have to do today. */}
-          <AttendanceCard
-            attendance={attendance}
-            day={attendanceDay}
-            onCheckIn={() => checkIn.mutate()}
-            onCheckOut={() => checkOut.mutate()}
-            checkingIn={checkIn.isPending}
-            checkingOut={checkOut.isPending}
-          />
+          {keepsAttendance && (
+            <AttendanceCard
+              attendance={attendance}
+              day={attendanceDay}
+              onCheckIn={() => checkIn.mutate()}
+              onCheckOut={() => checkOut.mutate()}
+              checkingIn={checkIn.isPending}
+              checkingOut={checkOut.isPending}
+            />
+          )}
 
           <PersonalTodos />
 

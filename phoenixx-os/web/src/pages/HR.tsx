@@ -175,7 +175,12 @@ function AttendanceTab() {
         <Card>
           <CardHeader title="Today" subtitle={date(new Date().toISOString(), 'long')} icon={<Clock size={16} />} />
           <div className="p-4">
-            {dayKind && dayKind !== 'working' ? (
+            {today.data?.exempt ? (
+              <div className="rounded-lg bg-info-soft p-3">
+                <p className="text-[13.5px] font-medium text-ink">Attendance not tracked</p>
+                <p className="text-[12.5px] text-muted mt-0.5">The owner does not check in.</p>
+              </div>
+            ) : dayKind && dayKind !== 'working' ? (
               <div className="rounded-lg bg-info-soft p-3">
                 <p className="text-[13.5px] font-medium text-ink">
                   {dayKind === 'holiday' ? today.data?.holiday?.name || 'Company holiday' : 'Weekly off'}
@@ -220,8 +225,10 @@ function AttendanceTab() {
                 <Badge tone={statusMeta(me.status).tone} dot className="mt-2">{statusMeta(me.status).label}</Badge>
               </>
             )}
-            <Button variant="ghost" size="sm" className="w-full justify-center mt-3"
-              onClick={() => setRegularizeOpen(true)}>Request a regularization</Button>
+            {!today.data?.exempt && (
+              <Button variant="ghost" size="sm" className="w-full justify-center mt-3"
+                onClick={() => setRegularizeOpen(true)}>Request a regularization</Button>
+            )}
           </div>
         </Card>
 

@@ -212,6 +212,7 @@ function applyOperation({ tenantId, userId, op, auth }) {
     // It is still judged by the same rules - a queued late arrival reaches HR
     // pending, exactly as it would have done online.
     case 'attendance.check_in': {
+      if (auth.role === 'owner') return { entity: 'attendance', id: null, skipped: 'owner does not keep attendance' };
       const at = op.created_at || ts;
       const workDate = op.payload.work_date || workDayFor(tenantId, new Date(at));
       const existing = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',

@@ -72,6 +72,8 @@ export default function MobileHR() {
       <Screen title="Attendance" subtitle={fmtDate(new Date().toISOString(), 'long')}>
 
         {/* ------------------------------------------------ punch card */}
+        {/* The owner is not on the attendance register, so there is nothing to punch. */}
+        {user?.role !== 'owner' && (
         <div className="card p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -125,6 +127,7 @@ export default function MobileHR() {
             )}
           </div>
         </div>
+        )}
 
         {/* ------------------------------------------------ quick actions */}
         <div className="grid grid-cols-2 gap-3">
