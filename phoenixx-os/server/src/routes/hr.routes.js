@@ -421,6 +421,97 @@ router.post('/attendance/:id/correct', requires('hr_attendance', 'approve'), (re
   return ok(res, decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [row.id])));
 });
 
+/**
+ * HR marks a day by hand - present, half day, WFH or absent - whether or not
+ * anything was recorded for it. The day somebody was at a client site with no
+ * signal, forgot to check in, or worked from the other office: the register
+ * should say what happened, and HR is the one who knows.
+ *
+ * Creates the row if there is none, overrides it if there is. Either way the
+ * reason is mandatory and lands in the day's history under HR's name, so a
+ * hand-marked day is never mistaken for a stamped one.
+ */
+router.post('/attendance/mark', requires('hr_attendance', 'approve'), (req, res) => {
+  const { tenantId, userId } = req.auth;
+  const body = validate(z.object({
+    user_id: z.string().min(1),
+    work_date: z.string().regex(DUE_DATE_RE),
+    status: z.enum(['present', 'half_day', 'wfh', 'absent']),
+    check_in_time: z.string().regex(DUE_TIME_RE).optional().nullable(),
+    check_out_time: z.string().regex(DUE_TIME_RE).optional().nullable(),
+    note: z.string().trim().min(3).max(1000),
+  }), req.body);
+
+  const employee = get(
+    `SELECT id, name, role FROM users
+      WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role NOT IN ('client', 'owner')`,
+    [body.user_id, tenantId],
+  );
+  if (!employee) throw notFound('Employee');
+  if (body.work_date > workDayFor(tenantId)) throw badRequest('A day that has not happened yet cannot be marked');
+  const day = dayKind(tenantId, body.work_date);
+  if (day.kind !== 'working') {
+    throw badRequest(day.kind === 'holiday'
+      ? 'That day is a company holiday - remove the holiday first if people were expected in'
+      : 'That day is a weekly off - nobody is expected in');
+  }
+
+  const tz = tzFor(tenantId);
+  const row = get('SELECT * FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date = ?',
+    [tenantId, employee.id, body.work_date]);
+  const toInstant = (hhmm) => (hhmm ? localToUtc(body.work_date, hhmm, tz).toISOString() : null);
+  const checkIn = body.check_in_time ? toInstant(body.check_in_time) : (row?.check_in_at ?? null);
+  const checkOut = body.check_out_time ? toInstant(body.check_out_time) : (row?.check_out_at ?? null);
+  if (checkIn && checkOut && new Date(checkOut) < new Date(checkIn)) {
+    throw badRequest('Check-out cannot be before check-in');
+  }
+  const minutes = workMinutes(checkIn, checkOut);
+  const schedule = scheduleFor(tenantId, employee.id);
+  const ts = nowIso();
+  const id = row?.id || uuid();
+
+  tx(() => {
+    if (row) {
+      run(
+        `UPDATE attendance SET status = ?, check_in_at = ?, check_out_at = ?, work_minutes = ?,
+           source = 'regularized', approved_by = ?, approved_at = ?, approval_note = ?, updated_at = ?
+         WHERE id = ?`,
+        [body.status, checkIn, checkOut, minutes, userId, ts, body.note, ts, id],
+      );
+    } else {
+      run(
+        `INSERT INTO attendance (id, tenant_id, user_id, work_date, check_in_at, check_out_at,
+           source, status, work_minutes, late_minutes, scheduled_start, scheduled_end,
+           approved_by, approved_at, approval_note, created_at, updated_at)
+         VALUES (?,?,?,?,?,?, 'regularized', ?,?,0,?,?,?,?,?,?,?)`,
+        [id, tenantId, employee.id, body.work_date, checkIn, checkOut, body.status, minutes,
+          schedule.start, schedule.end, userId, ts, body.note, ts, ts],
+      );
+    }
+    logAttendance({
+      tenantId,
+      attendanceId: id,
+      userId: employee.id,
+      workDate: body.work_date,
+      event: 'marked',
+      actorId: userId,
+      fromStatus: row?.status ?? null,
+      toStatus: body.status,
+      note: body.note,
+      at: ts,
+    });
+  });
+
+  audit(req, {
+    entity: 'attendance',
+    entityId: id,
+    action: row ? 'update' : 'create',
+    before: row || null,
+    after: { user_id: employee.id, work_date: body.work_date, status: body.status, marked_by: userId, note: body.note },
+  });
+  return ok(res, decorate(tenantId, get('SELECT * FROM attendance WHERE id = ?', [id])));
+});
+
 /** One employee, one day, with everything that ever happened to it. */
 router.get('/attendance/day', requires('hr_attendance', 'view'), (req, res) => {
   const { tenantId } = req.auth;

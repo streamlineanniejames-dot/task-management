@@ -642,6 +642,8 @@ function DayDetailModal({ userId, workDate, canCorrect, onClose }: {
   const toast = useToast();
   const [fixing, setFixing] = useState(false);
   const [form, setForm] = useState({ check_in_time: '', check_out_time: '', note: '' });
+  const [marking, setMarking] = useState(false);
+  const [mark, setMark] = useState({ status: 'present', check_in_time: '', check_out_time: '', note: '' });
 
   const { data, isLoading } = useQuery({
     queryKey: ['attendance', 'day', userId, workDate],
@@ -663,7 +665,29 @@ function DayDetailModal({ userId, workDate, canCorrect, onClose }: {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const markDay = useMutation({
+    mutationFn: () => api.post('/hr/attendance/mark', {
+      user_id: userId,
+      work_date: workDate,
+      status: mark.status,
+      ...(mark.check_in_time ? { check_in_time: mark.check_in_time } : {}),
+      ...(mark.check_out_time ? { check_out_time: mark.check_out_time } : {}),
+      note: mark.note.trim(),
+    }),
+    onSuccess: () => {
+      toast.success(`Marked ${statusMeta(mark.status).label.toLowerCase()} — the change is on the record.`);
+      qc.invalidateQueries({ queryKey: ['attendance'] });
+      qc.invalidateQueries({ queryKey: ['dashboard', 'home'] });
+      setMarking(false);
+      onClose();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const a = data?.attendance;
+  // Any past or present working day can be marked by hand, recorded or not.
+  const canMark = canCorrect && data?.day_kind === 'working'
+    && workDate <= new Date().toLocaleDateString('en-CA', { timeZone: data?.schedule?.timezone || 'Asia/Kolkata' });
   const meta = statusMeta(data?.day_kind === 'holiday' ? 'holiday'
     : data?.day_kind === 'weekoff' ? 'weekoff' : a?.status);
 
@@ -673,7 +697,18 @@ function DayDetailModal({ userId, workDate, canCorrect, onClose }: {
       footer={
         <>
           <Button onClick={onClose}>Close</Button>
-          {canCorrect && a && !fixing && (
+          {canMark && !fixing && !marking && (
+            <Button icon={<Check size={14} />} onClick={() => {
+              setMark({ status: 'present', check_in_time: '', check_out_time: '', note: '' });
+              setMarking(true);
+            }}>Mark attendance</Button>
+          )}
+          {marking && (
+            <Button variant="primary" loading={markDay.isPending}
+              disabled={mark.note.trim().length < 3}
+              onClick={() => markDay.mutate()}>Save as {statusMeta(mark.status).label.toLowerCase()}</Button>
+          )}
+          {canCorrect && a && !fixing && !marking && (
             <Button icon={<RefreshCw size={14} />} onClick={() => {
               setForm({
                 check_in_time: '', check_out_time: '', note: '',
@@ -726,6 +761,36 @@ function DayDetailModal({ userId, workDate, canCorrect, onClose }: {
             <p className="rounded-md bg-raised border border-line px-3 py-2 text-[13px] text-muted">
               “{a.approval_note}”
             </p>
+          )}
+
+          {marking && (
+            <div className="rounded-lg border border-line bg-sunken p-3 space-y-3">
+              <p className="label-cap">Mark this day</p>
+              <Field label="Mark as">
+                <Select value={mark.status} onChange={(e) => setMark((m) => ({ ...m, status: e.target.value }))}>
+                  <option value="present">Present</option>
+                  <option value="half_day">Half day</option>
+                  <option value="wfh">Work from home</option>
+                  <option value="absent">Absent</option>
+                </Select>
+              </Field>
+              {mark.status !== 'absent' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Check-in" hint={a?.check_in_label ? `Now ${a.check_in_label}` : 'Optional'}>
+                    <Input type="time" value={mark.check_in_time}
+                      onChange={(e) => setMark((m) => ({ ...m, check_in_time: e.target.value }))} />
+                  </Field>
+                  <Field label="Check-out" hint={a?.check_out_label ? `Now ${a.check_out_label}` : 'Optional'}>
+                    <Input type="time" value={mark.check_out_time}
+                      onChange={(e) => setMark((m) => ({ ...m, check_out_time: e.target.value }))} />
+                  </Field>
+                </div>
+              )}
+              <Field label="Why" required hint="Kept on the day's history under your name.">
+                <Input value={mark.note} onChange={(e) => setMark((m) => ({ ...m, note: e.target.value }))}
+                  placeholder="At the client site all day — confirmed by the reporting manager." />
+              </Field>
+            </div>
           )}
 
           {fixing && (
