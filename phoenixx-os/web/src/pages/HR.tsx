@@ -86,7 +86,8 @@ function AttendanceTab() {
   const [regularizeOpen, setRegularizeOpen] = useState(false);
   const [timingsOpen, setTimingsOpen] = useState(false);
   const [holidaysOpen, setHolidaysOpen] = useState(false);
-  const [networksOpen, setNetworksOpen] = useState(false);
+  // false = closed, '' = open, an address = open with that address filled in.
+  const [networksOpen, setNetworksOpen] = useState<false | string>(false);
   const [openDay, setOpenDay] = useState<{ userId: string; date: string } | null>(null);
   const [decide, setDecide] = useState<{ row: any; decision: 'approve' | 'reject' } | null>(null);
 
@@ -255,7 +256,7 @@ function AttendanceTab() {
               <div className="flex gap-2">
                 <Button size="sm" icon={<Clock size={14} />} onClick={() => setTimingsOpen(true)}>Work timings</Button>
                 <Button size="sm" icon={<CalendarOff size={14} />} onClick={() => setHolidaysOpen(true)}>Holidays</Button>
-                <Button size="sm" icon={<Wifi size={14} />} onClick={() => setNetworksOpen(true)}>Office networks</Button>
+                <Button size="sm" icon={<Wifi size={14} />} onClick={() => setNetworksOpen('')}>Office networks</Button>
               </div>
             )} />
           <div className="p-4">
@@ -324,7 +325,7 @@ function AttendanceTab() {
                   <TD><span className="text-muted text-[13px] tabular">{r.scheduled_start_label}</span></TD>
                   <TD><span className="font-medium text-ink text-[13px] tabular">{r.check_in_label}</span></TD>
                   <TD><ReviewReasons row={r} /></TD>
-                  <TD><NetworkCell row={r} /></TD>
+                  <TD><NetworkCell row={r} onTrust={setNetworksOpen} /></TD>
                   <TD>
                     <span className="flex gap-2">
                       <Button size="sm" variant="primary" icon={<Check size={13} />}
@@ -511,7 +512,7 @@ function AttendanceTab() {
       {regularizeOpen && <RegularizeModal onClose={() => setRegularizeOpen(false)} />}
       {timingsOpen && <WorkTimingsModal onClose={() => setTimingsOpen(false)} />}
       {holidaysOpen && <HolidaysModal onClose={() => setHolidaysOpen(false)} />}
-      {networksOpen && <NetworksModal onClose={() => setNetworksOpen(false)} />}
+      {networksOpen !== false && <NetworksModal initialIp={networksOpen} onClose={() => setNetworksOpen(false)} />}
       {openDay && (
         <DayDetailModal userId={openDay.userId} workDate={openDay.date}
           canCorrect={approver} onClose={() => setOpenDay(null)} />
@@ -545,7 +546,7 @@ function ReviewReasons({ row }: { row: any }) {
 }
 
 /** What the server saw. The address is shown to HR only. */
-function NetworkCell({ row }: { row: any }) {
+function NetworkCell({ row, onTrust }: { row: any; onTrust?: (ip: string) => void }) {
   if (row.network_verified == null) return <span className="text-subtle text-[12.5px]">Not checked</span>;
   return (
     <span className="block text-[12.5px] leading-tight">
@@ -553,6 +554,12 @@ function NetworkCell({ row }: { row: any }) {
         {row.network_verified ? row.network_name || row.network_label || 'Office network' : 'Not verified'}
       </span>
       {row.client_ip && <span className="block text-subtle tabular mt-0.5">{row.client_ip}</span>}
+      {/* HR recognises an office connection here; one click lists it, and the
+          server then re-verifies today's check-ins from that address. */}
+      {!row.network_verified && row.client_ip && onTrust && (
+        <button type="button" className="mt-0.5 text-[12px] text-[var(--accent)] hover:underline"
+          onClick={() => onTrust(row.client_ip)}>Add as office network</button>
+      )}
     </span>
   );
 }
@@ -1069,10 +1076,10 @@ function HolidaysModal({ onClose }: { onClose: () => void }) {
  */
 const EMPTY_NETWORK = { network_name: '', ssid: '', public_ip: '', description: '' };
 
-function NetworksModal({ onClose }: { onClose: () => void }) {
+function NetworksModal({ initialIp = '', onClose }: { initialIp?: string; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [draft, setDraft] = useState(EMPTY_NETWORK);
+  const [draft, setDraft] = useState({ ...EMPTY_NETWORK, public_ip: initialIp });
   const [editing, setEditing] = useState<string | null>(null);
   const [test, setTest] = useState<any>(null);
 
