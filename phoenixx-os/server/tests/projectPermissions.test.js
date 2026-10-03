@@ -58,12 +58,23 @@ describe('an employee has read-only access to projects and teams', () => {
     assert.equal(detail.status, 200);
     assert.equal(detail.body.data.team.length, 2);
 
-    // Including a project they are not staffed on - visibility is not the same
-    // question as write access.
-    assert.equal((await api.get(`/projects/${project.id}`, { token: rahul.token })).status, 200);
-    assert.equal((await api.get(`/projects/${project.id}/members`, { token: rahul.token })).status, 200);
     assert.equal((await api.get('/projects/workload', { token: priya.token })).status, 200);
     assert.equal((await api.get(`/projects/${project.id}/members/export/csv`, { token: priya.token })).status, 200);
+  });
+
+  test('a project they are not associated with is invisible to them', async () => {
+    const list = (await api.get('/projects', { token: rahul.token })).body.data;
+    assert.ok(!list.some((p) => p.id === project.id));
+    // Not found, not forbidden: they are not told it exists.
+    assert.equal((await api.get(`/projects/${project.id}`, { token: rahul.token })).status, 404);
+    assert.equal((await api.get(`/projects/${project.id}/members`, { token: rahul.token })).status, 404);
+    assert.equal((await api.get(`/projects/${project.id}/members/export/csv`, { token: rahul.token })).status, 404);
+
+    const workload = (await api.get('/projects/workload', { token: rahul.token })).body.data;
+    assert.ok(workload.every((u) => u.projects.every((p) => p.project_id !== project.id)));
+
+    const clientView = (await api.get(`/crm/clients/${client.id}`, { token: rahul.token })).body.data;
+    assert.ok(!clientView.projects.some((p) => p.id === project.id));
   });
 
   test('they cannot create a project', async () => {
@@ -171,5 +182,38 @@ describe('managers and admins keep their project permissions', () => {
     assert.ok(asManager.projects.includes('create'));
     assert.ok(asManager.projects.includes('edit'));
     assert.ok(asManager.projects.includes('delete'));
+  });
+});
+
+
+describe('managers see only the projects they are associated with', () => {
+  let other;
+  let karthik;
+  before(async () => {
+    karthik = await join('Karthik', 'karthik@delivery.test', 'manager');
+    other = (await api.post('/projects', { client_id: client.id, name: 'Not Divya\'s' }, { token: ownerToken })).body.data;
+  });
+
+  test('a manager sees the project they manage, not one they have nothing to do with', async () => {
+    const list = (await api.get('/projects', { token: divya.token })).body.data.map((p) => p.id);
+    assert.ok(list.includes(project.id));
+    assert.ok(!list.includes(other.id));
+    assert.equal((await api.get(`/projects/${other.id}`, { token: divya.token })).status, 404);
+    assert.equal((await api.patch(`/projects/${other.id}`, { name: 'x' }, { token: divya.token })).status, 404);
+  });
+
+  test('being an owner is enough to see it, without a seat on the team', async () => {
+    const res = await api.put(`/projects/${other.id}/owners`, { user_ids: [karthik.user.id] }, { token: ownerToken });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const list = (await api.get('/projects', { token: karthik.token })).body.data.map((p) => p.id);
+    assert.ok(list.includes(other.id));
+    assert.equal((await api.get(`/projects/${other.id}`, { token: karthik.token })).status, 200);
+  });
+
+  test('the workspace Owner and finance still see every project', async () => {
+    for (const token of [ownerToken, meera.token]) {
+      const list = (await api.get('/projects', { token })).body.data.map((p) => p.id);
+      assert.ok(list.includes(project.id) && list.includes(other.id));
+    }
   });
 });

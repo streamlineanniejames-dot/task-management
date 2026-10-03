@@ -12,6 +12,7 @@ import { scopeFilter } from '../middleware/auth.js';
 import { scoreClient } from '../services/scoring.js';
 import { upsertDeadline } from '../services/deadlines.js';
 import { emitWebhook } from '../services/webhooks.js';
+import { seesAllProjects, associatedSql } from '../services/projectOversight.js';
 
 const router = Router();
 
@@ -292,8 +293,11 @@ router.get('/clients/:id', requires('crm', 'view'), (req, res) => {
          FROM projects p
          LEFT JOIN users u ON u.id = p.manager_id
          LEFT JOIN users l ON l.id = p.lead_id
-        WHERE p.client_id = ? AND p.deleted_at IS NULL ORDER BY p.created_at DESC`,
-      [client.id],
+        WHERE p.client_id = ? AND p.deleted_at IS NULL
+          ${seesAllProjects(req.auth) ? '' : `AND ${associatedSql('p')}`}
+        ORDER BY p.created_at DESC`,
+      // Employees and managers see only the projects they are associated with.
+      seesAllProjects(req.auth) ? [client.id] : [client.id, req.auth.userId, req.auth.userId],
     ),
     proposals: all(
       "SELECT id, number, title, status, total_minor, sent_at, view_count, accepted_at, valid_until FROM proposals WHERE client_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",

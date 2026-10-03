@@ -5,9 +5,22 @@ import { uuid, nowIso, toCsv } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, conflict, audit } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
 import { syncProjectChannel } from '../services/chat.js';
-import { OWNER_ROLES, ownersFor, setProjectOwners } from '../services/projectOversight.js';
+import {
+  OWNER_ROLES, ownersFor, setProjectOwners, seesAllProjects, associatedSql, canSeeProject,
+} from '../services/projectOversight.js';
 
 const router = Router();
+
+/**
+ * Employees and managers only ever see the projects they are on or own. Every
+ * `/:id` route goes through this first, and a project outside their reach is
+ * reported as not found rather than forbidden - its existence is not theirs to
+ * know either.
+ */
+router.param('id', (req, res, next, id) => {
+  if (!canSeeProject(req.auth, id)) return next(notFound('Project'));
+  return next();
+});
 
 /**
  * Module F - projects and the delivery team behind each one.
@@ -22,8 +35,9 @@ const router = Router();
  *
  * Permissions come from the `projects` module rather than `crm`, because who
  * may run a project is a different question from who may work a deal. An
- * employee holds `view` only: they can see every project and its team but
- * cannot create, edit, restaff or delete one. Managers, finance-side admins
+ * employee holds `view` only: they can see the projects they are associated
+ * with (on the team, or an owner) and those teams, but cannot create, edit,
+ * restaff or delete one. Managers are held to the same visibility. Managers, finance-side admins
  * and owners hold the write actions. Both mounts carry these guards, and every
  * write path below is guarded server-side - hiding the buttons is presentation,
  * not enforcement.
@@ -120,6 +134,10 @@ function rosterFor(tenantId, projectIds) {
 router.get('/', requires('projects', 'view'), (req, res) => {
   const filters = ['p.tenant_id = ?', 'p.deleted_at IS NULL'];
   const params = [req.auth.tenantId];
+  if (!seesAllProjects(req.auth)) {
+    filters.push(associatedSql('p'));
+    params.push(req.auth.userId, req.auth.userId);
+  }
   if (req.query.client_id) { filters.push('p.client_id = ?'); params.push(req.query.client_id); }
   if (req.query.status) { filters.push('p.status = ?'); params.push(req.query.status); }
   if (req.query.manager_id) { filters.push('p.manager_id = ?'); params.push(req.query.manager_id); }
@@ -166,8 +184,9 @@ router.get('/workload', requires('projects', 'view'), (req, res) => {
        JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
        JOIN clients c ON c.id = p.client_id
       WHERE pm.tenant_id = ? AND pm.deleted_at IS NULL
+        ${seesAllProjects(req.auth) ? '' : `AND ${associatedSql('p')}`}
       ORDER BY seat_rank, p.name`,
-    [req.auth.tenantId],
+    seesAllProjects(req.auth) ? [req.auth.tenantId] : [req.auth.tenantId, req.auth.userId, req.auth.userId],
   );
   const byUser = {};
   for (const r of rows) (byUser[r.user_id] ||= []).push(r);

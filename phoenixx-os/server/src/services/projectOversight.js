@@ -138,19 +138,32 @@ export function taskProgressFor(tenantId, projectIds) {
 }
 
 /**
- * The projects whose updates this person may read. A workspace Owner sees
- * them all; anyone else sees the projects they own or are on the team of.
+ * Employees and managers see only the projects they are associated with - on
+ * the team in any seat, or one of its owners. Everyone else (workspace Owner,
+ * finance, HR, platform admin) sees every project, because costs, invoicing
+ * and staffing are cross-project by nature.
  */
+const OWN_PROJECTS_ONLY = ['employee', 'manager'];
+export const seesAllProjects = (auth) => !OWN_PROJECTS_ONLY.includes(auth.role);
+
+/** SQL predicate over a projects alias: "this person is associated with p". */
+export const associatedSql = (alias = 'p') => `(
+  EXISTS (SELECT 1 FROM project_owners po WHERE po.project_id = ${alias}.id AND po.user_id = ?)
+  OR EXISTS (SELECT 1 FROM project_members pm_a WHERE pm_a.project_id = ${alias}.id
+               AND pm_a.user_id = ? AND pm_a.deleted_at IS NULL))`;
+
+export const canSeeProject = (auth, projectId) => seesAllProjects(auth) || !!get(
+  `SELECT 1 AS y FROM projects p WHERE p.id = ? AND p.tenant_id = ? AND ${associatedSql('p')}`,
+  [projectId, auth.tenantId, auth.userId, auth.userId],
+);
+
+/** The projects this person may see - and so read the updates of. */
 export function visibleProjectIds(auth) {
-  if (auth.role === 'owner' || auth.role === 'super_admin') {
+  if (seesAllProjects(auth)) {
     return all('SELECT id FROM projects WHERE tenant_id = ? AND deleted_at IS NULL', [auth.tenantId]).map((r) => r.id);
   }
   return all(
-    `SELECT p.id FROM projects p
-      WHERE p.tenant_id = ? AND p.deleted_at IS NULL AND (
-        EXISTS (SELECT 1 FROM project_owners po WHERE po.project_id = p.id AND po.user_id = ?)
-        OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id
-                     AND pm.user_id = ? AND pm.deleted_at IS NULL))`,
+    `SELECT p.id FROM projects p WHERE p.tenant_id = ? AND p.deleted_at IS NULL AND ${associatedSql('p')}`,
     [auth.tenantId, auth.userId, auth.userId],
   ).map((r) => r.id);
 }
