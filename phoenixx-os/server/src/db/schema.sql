@@ -1635,3 +1635,50 @@ CREATE TABLE IF NOT EXISTS action_validations (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_avalidation_item ON action_validations(tenant_id, action_item_id, created_at);
+
+-- --------------------------------------------------- PROJECTS: OWNERSHIP
+-- Who the project answers to. Separate from `project_members` on purpose: an
+-- owner is oversight, not a delivery seat - they carry no allocation, and a
+-- manager can be the project manager on the team *and* one of its owners.
+-- Every live project keeps at least one; the API refuses to remove the last.
+-- Only workspace Owners and Managers may hold it.
+CREATE TABLE IF NOT EXISTS project_owners (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  added_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_powner_once ON project_owners(project_id, user_id);
+CREATE INDEX IF NOT EXISTS ix_powner_user ON project_owners(tenant_id, user_id);
+
+-- ----------------------------------------------- PROJECTS: DAILY UPDATES
+-- The project-level standup, filed by the manager and the lead and read by
+-- the owners. One row per person per project per day, upserted, exactly like
+-- action_updates one level down. `progress_pct` is the filer's own estimate;
+-- the task-completion figure it is shown against is computed, never stored.
+CREATE TABLE IF NOT EXISTS project_updates (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  update_date TEXT NOT NULL,               -- YYYY-MM-DD, the day being reported
+  seat TEXT,                               -- manager|lead at the time of filing
+  todays_work TEXT,
+  completed_today TEXT,
+  tomorrow_plan TEXT,
+  progress_pct INTEGER,                    -- 0-100, self-reported
+  has_blocker INTEGER NOT NULL DEFAULT 0,
+  blocker_type TEXT,                       -- technical|client|resource|dependency|other
+  blocker_description TEXT,
+  help_required TEXT,
+  estimated_delay_days INTEGER,
+  status TEXT NOT NULL DEFAULT 'on_track', -- on_track|at_risk|blocked
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  UNIQUE (tenant_id, project_id, user_id, update_date)
+);
+CREATE INDEX IF NOT EXISTS ix_pupdate_day ON project_updates(tenant_id, update_date);
+CREATE INDEX IF NOT EXISTS ix_pupdate_project ON project_updates(tenant_id, project_id, update_date);

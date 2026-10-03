@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, FolderKanban, UserPlus, Crown, Star, ShieldCheck, Eye, Trash2, Download,
-  Users2, Briefcase, PencilLine, GraduationCap, Wrench,
+  Users2, Briefcase, PencilLine, GraduationCap, Wrench, Send,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -13,6 +13,9 @@ import {
   EmptyState, ErrorState, Field, Input, Meter, Modal, PageHeader, SearchInput, Select,
   StatusBadge, Table, TableSkeleton, TD, TH, THead, TR, Tabs, useToast, cx,
 } from '../components/ui';
+import {
+  EditOwnersModal, OwnerChecklist, OWNER_ROLES, ProjectUpdateHistory, ProjectUpdateModal, ProjectUpdatesTab,
+} from '../components/ProjectUpdates';
 
 /**
  * Module F - projects and the people delivering them.
@@ -79,11 +82,13 @@ export default function Projects() {
   const readOnly = !can('projects', 'create') && !can('projects', 'edit');
   const { id: routeId } = useParams();
   const navigate = useNavigate();
-  const [tab, setTab] = useState('projects');
+  // Notifications deep-link here as ?tab=updates&open=<project>.
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get('tab') || 'projects');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(routeId ?? null);
+  const [openId, setOpenId] = useState<string | null>(routeId ?? params.get('open'));
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['projects', search, status],
@@ -120,6 +125,7 @@ export default function Projects() {
         tabs={
           <Tabs active={tab} onChange={setTab} tabs={[
             { id: 'projects', label: 'Projects' },
+            { id: 'updates', label: 'Daily updates' },
             { id: 'workload', label: 'Who is on what' },
           ]} />
         }
@@ -160,6 +166,7 @@ export default function Projects() {
         </>
       )}
 
+      {tab === 'updates' && <ProjectUpdatesTab onOpenProject={setOpenId} />}
       {tab === 'workload' && <WorkloadTab onOpenProject={setOpenId} />}
 
       {createOpen && <CreateProjectModal onClose={() => setCreateOpen(false)} onCreated={setOpenId} />}
@@ -189,6 +196,13 @@ function ProjectCard({ project: p, onOpen }: { project: any; onOpen: () => void 
           <SeatLine seat="manager" member={manager} />
           <SeatLine seat="lead" member={lead} />
         </div>
+
+        {p.owners?.length > 0 && (
+          <p className="mt-3 text-[11.5px] text-subtle truncate" title="Project owners - they receive the daily updates">
+            <Crown size={11} className="mr-1 inline-block -mt-px" aria-hidden />
+            Owners: {p.owners.map((o: any) => o.name).join(', ')}
+          </p>
+        )}
 
         <div className="mt-3.5 flex items-center justify-between gap-3 border-t border-line pt-3">
           <span className="flex items-center gap-2 min-w-0">
@@ -296,6 +310,7 @@ function WorkloadTab({ onOpenProject }: { onOpenProject: (id: string) => void })
 
 /* ---------------------------------------------------------- new project */
 function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const { user } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
   const [form, setForm] = useState({
@@ -303,6 +318,9 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
     start_date: new Date().toISOString().slice(0, 10), end_date: '', budget: '',
     manager_id: '', lead_id: '', scope_total: '',
   });
+  // Whoever creates it owns it unless they choose otherwise - when they are allowed to.
+  const [ownerIds, setOwnerIds] = useState<string[]>(
+    user && OWNER_ROLES.includes(user.role) ? [user.id] : []);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const { data: meta } = useQuery({
@@ -332,6 +350,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
       manager_id: form.manager_id || null,
       lead_id: form.lead_id || null,
       scope_total: form.scope_total ? Number(form.scope_total) : 0,
+      owner_ids: ownerIds,
     }),
     onSuccess: (res: any) => {
       toast.success('Project created. Add the rest of the team next.');
@@ -352,7 +371,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={create.isPending}
-            disabled={!form.client_id || form.name.trim().length < 2}
+            disabled={!form.client_id || form.name.trim().length < 2 || !ownerIds.length}
             onClick={() => create.mutate()}>Create project</Button>
         </>
       }>
@@ -366,6 +385,10 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
         <Field label="Project name" required error={errors.name} className="sm:col-span-2">
           <Input value={form.name} onChange={(e) => set('name', e.target.value)}
             placeholder="Brand refresh & always-on marketing" autoFocus />
+        </Field>
+        <Field label="Project owners" required error={errors.owner_ids} className="sm:col-span-2"
+          hint="They receive the manager's and lead's daily update. Owners and Managers only.">
+          <OwnerChecklist people={people} value={ownerIds} onChange={setOwnerIds} />
         </Field>
         <Field label="Project manager" hint="Accountable for scope, budget and the client">
           <Select value={form.manager_id} onChange={(e) => set('manager_id', e.target.value)}>
@@ -419,9 +442,11 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
 
 /* --------------------------------------------------------------- drawer */
 function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const [tab, setTab] = useState('team');
   const [addOpen, setAddOpen] = useState(false);
+  const [ownersOpen, setOwnersOpen] = useState(false);
+  const [filing, setFiling] = useState(false);
 
   const { data: p, isLoading } = useQuery({
     queryKey: ['project', id],
@@ -433,6 +458,9 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   }
 
   const editable = can('projects', 'edit');
+  // The manager and the lead are the two who file the daily project update.
+  const mySeat = p.team?.find((m: any) => m.user_id === user?.id)?.seat;
+  const files = mySeat === 'manager' || mySeat === 'lead';
 
   return (
     <>
@@ -451,6 +479,11 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
               onClick={() => api.download(`/projects/${id}/members/export/csv`, `${p.name}-team.csv`)}>
               Export team
             </Button>
+            {files && p.status === 'active' && (
+              <Button variant={editable ? 'secondary' : 'primary'} icon={<Send size={15} />} onClick={() => setFiling(true)}>
+                File today's update
+              </Button>
+            )}
             {editable && (
               <Button variant="primary" icon={<UserPlus size={15} />} onClick={() => setAddOpen(true)}>
                 Add to team
@@ -458,19 +491,50 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             )}
           </>
         }>
+        <div className="flex items-center gap-2 border-b border-line px-5 py-2.5 text-[12.5px]">
+          <Crown size={13} className="text-subtle shrink-0" aria-hidden />
+          <span className="text-subtle shrink-0">Owners</span>
+          <span className="min-w-0 flex-1 truncate text-ink">
+            {p.owners?.length ? p.owners.map((o: any) => o.name).join(', ') : <span className="text-[var(--warning)]">None assigned</span>}
+          </span>
+          {editable && (
+            <Button variant="ghost" size="sm" icon={<PencilLine size={13} />} onClick={() => setOwnersOpen(true)}>
+              Change
+            </Button>
+          )}
+        </div>
+
         <div className="border-b border-line px-5">
           <Tabs active={tab} onChange={setTab} tabs={[
             { id: 'team', label: `Team (${p.team_size})` },
+            { id: 'updates', label: 'Daily updates' },
             { id: 'details', label: 'Project details' },
           ]} />
         </div>
 
         {tab === 'team' ? <TeamTab project={p} editable={editable} onAdd={() => setAddOpen(true)} />
-          : <DetailsTab project={p} editable={editable} />}
+          : tab === 'updates' ? <ProjectUpdateHistory projectId={p.id} />
+            : <DetailsTab project={p} editable={editable} />}
       </Drawer>
 
       {addOpen && <AddMemberModal project={p} onClose={() => setAddOpen(false)} />}
+      {ownersOpen && <EditOwnersModal project={p} onClose={() => setOwnersOpen(false)} />}
+      {filing && <DrawerFiling project={p} seat={mySeat} onClose={() => setFiling(false)} />}
     </>
+  );
+}
+
+/** Opens the update form with whatever this person has already filed today. */
+function DrawerFiling({ project: p, seat, onClose }: { project: any; seat?: string; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['project-updates-to-file'],
+    queryFn: () => api.get('/projects/updates/to-file').then((r) => r.data),
+  });
+  if (isLoading) return null;
+  const mine = data?.projects?.find((x: any) => x.id === p.id);
+  return (
+    <ProjectUpdateModal project={{ id: p.id, name: p.name, client_name: p.client_name, seat }}
+      existing={mine?.update} previous={mine?.previous} onClose={onClose} />
   );
 }
 

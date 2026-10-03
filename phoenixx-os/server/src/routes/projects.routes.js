@@ -5,6 +5,7 @@ import { uuid, nowIso, toCsv } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, conflict, audit } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
 import { syncProjectChannel } from '../services/chat.js';
+import { OWNER_ROLES, ownersFor, setProjectOwners } from '../services/projectOversight.js';
 
 const router = Router();
 
@@ -62,6 +63,8 @@ const projectSchema = z.object({
   lead_id: z.string().optional().nullable(),
   scope_total: z.number().int().min(0).optional(),
   scope_delivered: z.number().int().min(0).optional(),
+  /** Who the project answers to. Owners and Managers only; at least one. */
+  owner_ids: z.array(z.string()).max(20).optional(),
 });
 
 const PROJECT_SELECT = `
@@ -121,6 +124,10 @@ router.get('/', requires('projects', 'view'), (req, res) => {
   if (req.query.status) { filters.push('p.status = ?'); params.push(req.query.status); }
   if (req.query.manager_id) { filters.push('p.manager_id = ?'); params.push(req.query.manager_id); }
   if (req.query.service_line_id) { filters.push('p.service_line_id = ?'); params.push(req.query.service_line_id); }
+  if (req.query.owner_id) {
+    filters.push('EXISTS (SELECT 1 FROM project_owners po WHERE po.project_id = p.id AND po.user_id = ?)');
+    params.push(req.query.owner_id);
+  }
   if (req.query.member_id) {
     filters.push(`EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id
                             AND pm.user_id = ? AND pm.deleted_at IS NULL)`);
@@ -133,8 +140,10 @@ router.get('/', requires('projects', 'view'), (req, res) => {
   }
 
   const projects = all(`${PROJECT_SELECT} WHERE ${filters.join(' AND ')} ORDER BY p.created_at DESC`, params);
-  const roster = rosterFor(req.auth.tenantId, projects.map((p) => p.id));
-  return ok(res, projects.map((p) => ({ ...p, team: roster[p.id] || [] })));
+  const ids = projects.map((p) => p.id);
+  const roster = rosterFor(req.auth.tenantId, ids);
+  const owners = ownersFor(req.auth.tenantId, ids);
+  return ok(res, projects.map((p) => ({ ...p, team: roster[p.id] || [], owners: owners[p.id] || [] })));
 });
 
 router.get('/seats', (req, res) => ok(res, SEATS));
@@ -184,6 +193,7 @@ router.get('/:id', requires('projects', 'view'), (req, res) => {
   return ok(res, {
     ...project,
     team,
+    owners: ownersFor(req.auth.tenantId, [project.id])[project.id] || [],
     /** Same people, bucketed by seat, so the UI does not have to group them. */
     team_by_seat: SEATS.map((s) => ({ ...s, members: team.filter((m) => m.seat === s.id) }))
       .filter((s) => s.members.length),
@@ -213,6 +223,11 @@ router.post('/', requires('projects', 'create'), (req, res) => {
     // Whoever was named at creation joins the team in that seat straight away.
     if (body.manager_id) addMember(req, id, { user_id: body.manager_id, seat: 'manager' });
     if (body.lead_id && body.lead_id !== body.manager_id) addMember(req, id, { user_id: body.lead_id, seat: 'lead' });
+    // Nobody named: whoever is creating it owns it, if they are allowed to.
+    // setProjectOwners refuses an empty list, so a project is never ownerless.
+    const ownerIds = body.owner_ids?.length ? body.owner_ids
+      : (OWNER_ROLES.includes(req.auth.role) ? [req.auth.userId] : []);
+    setProjectOwners({ tenantId: req.auth.tenantId, actorId: req.auth.userId }, id, ownerIds);
   });
 
   // The team gets a room the moment the project exists (Module B).
@@ -227,9 +242,12 @@ router.patch('/:id', requires('projects', 'edit'), (req, res) => {
   const before = r.findById(req.params.id);
   if (!before) throw notFound('Project');
 
-  const body = validate(projectSchema.partial().omit({ client_id: true }), req.body);
+  const { owner_ids: ownerIds, ...body } = validate(projectSchema.partial().omit({ client_id: true }), req.body);
   const after = tx(() => {
     const row = r.update(req.params.id, { ...body, updated_at: nowIso() });
+    if (ownerIds !== undefined) {
+      setProjectOwners({ tenantId: req.auth.tenantId, actorId: req.auth.userId }, row.id, ownerIds);
+    }
     // Naming a manager or lead here is the same act as seating them on the team.
     for (const seat of SINGLE_SEATS) {
       const key = SEAT_COLUMN[seat];
@@ -266,6 +284,23 @@ router.delete('/:id', requires('projects', 'delete'), (req, res) => {
 
   audit(req, { entity: 'project', entityId: req.params.id, action: 'delete' });
   return ok(res, { ok: true });
+});
+
+// ------------------------------------------------------------- the owners
+router.get('/:id/owners', requires('projects', 'view'), (req, res) => {
+  projectOr404(req.auth.tenantId, req.params.id);
+  return ok(res, ownersFor(req.auth.tenantId, [req.params.id])[req.params.id] || []);
+});
+
+/** Replace the owner list in one go - the picker sends the whole set. */
+router.put('/:id/owners', requires('projects', 'edit'), (req, res) => {
+  projectOr404(req.auth.tenantId, req.params.id);
+  const body = validate(z.object({ user_ids: z.array(z.string()).max(20) }), req.body);
+  const change = tx(() => setProjectOwners({ tenantId: req.auth.tenantId, actorId: req.auth.userId },
+    req.params.id, body.user_ids));
+
+  audit(req, { entity: 'project', entityId: req.params.id, action: 'update', after: { owners: change } });
+  return ok(res, ownersFor(req.auth.tenantId, [req.params.id])[req.params.id] || []);
 });
 
 // -------------------------------------------------------------- the team

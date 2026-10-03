@@ -518,6 +518,58 @@ function seedPhoenixx() {
   }
   console.log(`✓ ${projects.length} projects staffed with ${memberCount} team assignments`);
 
+  // Every project answers to Arun plus its project manager, and the manager
+  // and lead have been filing daily updates - so the owner's screen opens on
+  // a realistic mix of on track, at risk, blocked and not-yet-filed.
+  const updateScript = {
+    'Cotton India Textiles': [
+      ['manager', 'Monthly review deck with the client', 'August report signed off', 'Plan the festive creative sprint', 80, 'on_track'],
+      ['lead', 'Festive campaign key visuals', 'Three hero concepts finalised', 'Adapt the hero for social formats', 75, 'on_track'],
+    ],
+    'Sree Balaji Constructions': [
+      ['lead', 'Microsite enquiry form tracking', 'GA4 events wired on the form', 'QA the lead routing to the sales team', 70, 'at_risk',
+        { type: 'client', desc: 'Site photos for the project gallery still not shared', help: 'Divya to chase the client PM', delay: 2 }],
+    ],
+    'ThermaCool HVAC Systems': [
+      ['manager', 'Sprint review with ThermaCool', 'Ticketing module demoed', 'Lock the scope for the field-tech app', 55, 'at_risk'],
+      ['lead', 'Backend API integration', 'API authentication completed', 'Frontend API integration', 60, 'blocked',
+        { type: 'technical', desc: 'API response format mismatch with the client ERP', help: 'Need a backend developer review', delay: 1 }],
+    ],
+    'Meridian Financial Advisory': [
+      ['lead', 'Sales playbook v2 walkthrough', 'Objection-handling module recorded', 'Roll the playbook out to the second team', 90, 'on_track'],
+    ],
+  };
+  const today = todayIso();
+  const yesterday = addDays(new Date(), -1).toISOString().slice(0, 10);
+  let updateCount = 0;
+  for (const p of projects) {
+    const pid = projectIds[p.client];
+    const team = teams[p.client] || [];
+    const managerEmail = team.find((m) => m[1] === 'manager')?.[0];
+    for (const uid of new Set([ownerId, users[managerEmail]].filter(Boolean))) {
+      run('INSERT INTO project_owners (id, tenant_id, project_id, user_id, added_by, created_at) VALUES (?,?,?,?,?,?)',
+        [uuid(), tenantId, pid, uid, ownerId, ts]);
+    }
+    for (const [seat, work, done, next, progress, status, blocker] of updateScript[p.client] || []) {
+      const email = team.find((m) => m[1] === seat)?.[0];
+      if (!email) continue;
+      // Yesterday's entry first, a little behind, so the trend has two points.
+      for (const [day, pct, st] of [[yesterday, Math.max(0, progress - 5), 'on_track'], [today, progress, status]]) {
+        const b = day === today ? blocker : null;
+        run(
+          `INSERT INTO project_updates (id, tenant_id, project_id, user_id, update_date, seat, todays_work,
+             completed_today, tomorrow_plan, progress_pct, has_blocker, blocker_type, blocker_description,
+             help_required, estimated_delay_days, status, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [uuid(), tenantId, pid, users[email], day, seat, work, done, next, pct, b ? 1 : 0,
+            b?.type ?? null, b?.desc ?? null, b?.help ?? null, b?.delay ?? null, st, ts, ts],
+        );
+        updateCount += 1;
+      }
+    }
+  }
+  console.log(`✓ project owners assigned, ${updateCount} daily project updates filed`);
+
   // ---------------------------------------------------------- action items
   const items = [
     { title: 'Publish August performance report for Cotton India', client: 'Cotton India Textiles', owner: 'priya@phoenixxit.com', cat: 'delivery', pri: 'high', due: 1 },

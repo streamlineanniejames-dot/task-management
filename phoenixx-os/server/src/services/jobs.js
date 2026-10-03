@@ -14,6 +14,7 @@ import {
 import { flushWebhooks } from './webhooks.js';
 import { notifyRole, notifyMany } from './notifications.js';
 import { createInvoiceFromTemplate } from './invoicing.js';
+import { filersFor, isWeekOff } from './projectOversight.js';
 
 /**
  * In-process job runner.
@@ -313,6 +314,114 @@ export const dailyUpdateReminder = record('action_items.update_reminder', async 
   return sent;
 });
 
+// --------------------------------------- F: daily project update reminder
+/**
+ * 18:30 IST: every project manager and team lead with an active project and no
+ * update filed for it today gets one in-app message naming those projects.
+ * Skipped on the workspace's weekly off. Deduped on the date.
+ */
+export const projectUpdateReminder = record('projects.update_reminder', async () => {
+  const today = todayIso();
+  let sent = 0;
+
+  for (const tenantId of activeTenants()) {
+    if (isWeekOff(tenantId, today)) continue;
+    const pending = all(
+      `SELECT pm.user_id, COUNT(*) AS n, GROUP_CONCAT(p.name, ' · ') AS names
+         FROM project_members pm
+         JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL AND p.status = 'active'
+         JOIN users u ON u.id = pm.user_id AND u.deleted_at IS NULL AND u.status = 'active'
+        WHERE pm.tenant_id = ? AND pm.deleted_at IS NULL AND pm.seat IN ('manager','lead')
+          AND NOT EXISTS (
+            SELECT 1 FROM project_updates pu
+             WHERE pu.project_id = p.id AND pu.user_id = pm.user_id
+               AND pu.update_date = ? AND pu.deleted_at IS NULL)
+        GROUP BY pm.user_id`,
+      [tenantId, today],
+    );
+
+    for (const row of pending) {
+      await notifyMany({
+        tenantId,
+        userIds: [row.user_id],
+        eventKey: 'project.update_due',
+        vars: { count: Number(row.n), projects: row.names },
+        link: '/projects?tab=updates',
+        channels: ['in_app'],
+        dedupeKey: `project_update_due:${today}`,
+      });
+      sent += 1;
+    }
+  }
+  return sent;
+});
+
+// ------------------------------------------------ F: owner's evening digest
+/**
+ * 19:00 IST: each project owner gets one in-app summary of their active
+ * projects for the day - how many updates came in against how many were
+ * expected, the status counts, and the projects that need them by name.
+ */
+export const projectOwnerDigest = record('projects.owner_digest', async () => {
+  const today = todayIso();
+  let sent = 0;
+
+  for (const tenantId of activeTenants()) {
+    if (isWeekOff(tenantId, today)) continue;
+    const owned = all(
+      `SELECT po.user_id, p.id AS project_id, p.name
+         FROM project_owners po
+         JOIN projects p ON p.id = po.project_id AND p.deleted_at IS NULL AND p.status = 'active'
+        WHERE po.tenant_id = ?`,
+      [tenantId],
+    );
+    if (!owned.length) continue;
+
+    const pids = [...new Set(owned.map((o) => o.project_id))];
+    const filers = filersFor(tenantId, pids);
+    const updates = all(
+      `SELECT project_id, user_id, status FROM project_updates
+        WHERE tenant_id = ? AND update_date = ? AND deleted_at IS NULL`,
+      [tenantId, today],
+    );
+    const rank = { on_track: 1, at_risk: 2, blocked: 3 };
+
+    const byOwner = {};
+    for (const o of owned) (byOwner[o.user_id] ||= []).push(o);
+
+    for (const [ownerId, projects] of Object.entries(byOwner)) {
+      const t = { expected: 0, filed: 0, on_track: 0, at_risk: 0, blocked: 0 };
+      const silent = [];
+      const flagged = [];
+      for (const p of projects) {
+        const seats = filers[p.project_id] || [];
+        const mine = updates.filter((u) => u.project_id === p.project_id);
+        t.expected += seats.length;
+        t.filed += seats.filter((s) => mine.some((u) => u.user_id === s.user_id)).length;
+        const worst = mine.reduce((w, u) => (!w || rank[u.status] > rank[w] ? u.status : w), null);
+        if (worst) t[worst] += 1; else silent.push(p.name);
+        if (worst === 'blocked' || worst === 'at_risk') flagged.push(`${p.name} (${worst.replace('_', ' ')})`);
+      }
+      await notifyMany({
+        tenantId,
+        userIds: [ownerId],
+        eventKey: 'project.digest',
+        vars: {
+          ...t,
+          projects: projects.length,
+          missing_note: silent.length ? ` No update yet: ${silent.slice(0, 5).join(', ')}${silent.length > 5 ? ` +${silent.length - 5} more` : ''}.` : '',
+          flag_note: flagged.length ? ` Needs you: ${flagged.slice(0, 5).join(', ')}.` : '',
+        },
+        link: '/projects?tab=updates',
+        channels: ['in_app'],
+        dedupeKey: `project_digest:${today}`,
+      });
+      sent += 1;
+    }
+  }
+  return sent;
+});
+
 // -------------------------------------------------------- G1: scheduled reports
 export const scheduledReports = record('reports.scheduled', async () => {
   let n = 0;
@@ -487,6 +596,8 @@ const JOBS = [
   { key: 'crm.scores', atHourUtc: 2, fn: recomputeScores },
   { key: 'dashboard.intel', atHourUtc: 2, fn: refreshDashboardIntel },
   { key: 'action_items.update_reminder', atHourUtc: 12, fn: dailyUpdateReminder }, // 17:30 IST
+  { key: 'projects.update_reminder', atHourUtc: 13, fn: projectUpdateReminder }, // 18:30 IST
+  { key: 'projects.owner_digest', atHourUtc: 13, atMinuteUtc: 30, fn: projectOwnerDigest }, // 19:00 IST
   { key: 'notifications.daily_digest', atHourUtc: 3, fn: dailyDigest },   // 08:30 IST
   { key: 'reports.scheduled', atHourUtc: 3, fn: scheduledReports },
   { key: 'reports.weekly_escalation', atHourUtc: 4, onDayOfWeek: 1, fn: weeklyEscalationReport },
@@ -504,7 +615,8 @@ async function tick() {
     if (job.everyMin) {
       due = Date.now() - last >= job.everyMin * 60_000;
     } else {
-      const hourMatches = now.getUTCHours() === job.atHourUtc;
+      // atMinuteUtc lets a job sit on the half hour: due from that minute on, within the hour.
+      const hourMatches = now.getUTCHours() === job.atHourUtc && now.getUTCMinutes() >= (job.atMinuteUtc || 0);
       const dayMatches = job.onDayOfWeek == null || now.getUTCDay() === job.onDayOfWeek;
       const domMatches = job.onDayOfMonth == null || now.getUTCDate() === job.onDayOfMonth;
       const ranToday = new Date(last).toDateString() === now.toDateString();
@@ -544,6 +656,8 @@ export const JOB_REGISTRY = {
   'dashboard.intel': refreshDashboardIntel,
   'action_items.recurring': rollRecurringActionItems,
   'action_items.update_reminder': dailyUpdateReminder,
+  'projects.update_reminder': projectUpdateReminder,
+  'projects.owner_digest': projectOwnerDigest,
   'notifications.daily_digest': dailyDigest,
   'reports.scheduled': scheduledReports,
   'reports.weekly_escalation': weeklyEscalationReport,

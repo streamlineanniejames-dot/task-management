@@ -19,6 +19,7 @@ import { invoicesRouter } from './invoices.routes.js';
 import { financeRouter } from './finance.routes.js';
 import { todosRouter } from './todos.routes.js';
 import { projectsRouter } from './projects.routes.js';
+import { projectUpdatesRouter } from './projectUpdates.routes.js';
 import { reportsRouter } from './reports.routes.js';
 import { dashboardRouter } from './dashboard.routes.js';
 import { settingsRouter } from './settings.routes.js';
@@ -74,6 +75,8 @@ api.use('/clients', clientsRouter);
 api.use('/proposals', proposalsRouter);
 api.use('/invoices', invoicesRouter);
 api.use('/finance', financeRouter);
+// Daily project updates first: its /updates/... paths must win over /:id.
+api.use('/projects', projectUpdatesRouter);
 api.use('/projects', projectsRouter);
 api.use('/reports', reportsRouter);
 api.use('/dashboard', dashboardRouter);

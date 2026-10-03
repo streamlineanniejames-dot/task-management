@@ -126,6 +126,23 @@ export const DEFAULT_TEMPLATES = {
     subject: 'OVERDUE: {{title}}',
     body: '"{{title}}" was due {{due}} and is now {{overdue_for}} overdue.',
   },
+  'project.update_filed': {
+    subject: '{{project}}: {{status_label}} · {{progress}}%',
+    body: '{{person}} ({{seat}}) filed today\'s update on {{project}}. Completed: {{completed}}. Next: {{next}}.',
+  },
+  'project.update_flagged': {
+    subject: '{{status_label}}: {{project}}',
+    body: '{{person}} ({{seat}}) marked {{project}} {{status_label}}. Blocker ({{blocker_type}}): {{blocker}}. '
+      + 'Help needed: {{help}}. Estimated delay: {{delay}}.',
+  },
+  'project.update_due': {
+    subject: 'Daily project update pending on {{count}} project(s)',
+    body: 'Hi {{user.name}}, today\'s update is not filed yet for: {{projects}}. Your project owners read these every evening.',
+  },
+  'project.digest': {
+    subject: 'Projects today: {{blocked}} blocked, {{at_risk}} at risk, {{on_track}} on track',
+    body: '{{filed}} of {{expected}} updates filed across your {{projects}} project(s).{{missing_note}}{{flag_note}}',
+  },
   'attendance.late_check_in': {
     subject: 'Late check-in approval required: {{person}}',
     body: '{{person}} checked in at {{actual}} on {{work_date}}. Scheduled start {{scheduled}} '

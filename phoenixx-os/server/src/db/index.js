@@ -121,6 +121,41 @@ function backfill() {
     db.exec(`UPDATE tenants SET week_off_days = '[0]'
               WHERE week_off_days IS NULL OR TRIM(week_off_days) IN ('', '[]')`);
   }
+
+  if (tableExists('project_owners')) backfillProjectOwners();
+}
+
+/**
+ * Every project answers to at least one owner. Projects that predate owners -
+ * or were written straight into the table, as the seed does - get their
+ * project manager when that person is a workspace Owner or Manager, and the
+ * workspace Owner(s) otherwise. Self-limiting: it only ever touches projects
+ * with no owner at all, which the API never leaves behind.
+ */
+export function backfillProjectOwners() {
+  const orphans = db.prepare(
+    `SELECT p.id, p.tenant_id, p.manager_id FROM projects p
+      WHERE p.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM project_owners po WHERE po.project_id = p.id)`,
+  ).all();
+  if (!orphans.length) return;
+
+  const eligible = db.prepare(
+    `SELECT id, role FROM users WHERE tenant_id = ? AND deleted_at IS NULL
+        AND status != 'disabled' AND role IN ('owner','manager')`,
+  );
+  const insert = db.prepare(
+    'INSERT INTO project_owners (id, tenant_id, project_id, user_id, created_at) VALUES (?,?,?,?,?)',
+  );
+  const at = new Date().toISOString();
+  const byTenant = new Map();
+  for (const p of orphans) {
+    if (!byTenant.has(p.tenant_id)) byTenant.set(p.tenant_id, eligible.all(p.tenant_id));
+    const people = byTenant.get(p.tenant_id);
+    const manager = people.find((u) => u.id === p.manager_id);
+    const owners = manager ? [manager] : people.filter((u) => u.role === 'owner');
+    for (const u of owners) insert.run(crypto.randomUUID(), p.tenant_id, p.id, u.id, at);
+  }
 }
 
 /** Runs `fn` the first time this database sees `key`, and never again. */
