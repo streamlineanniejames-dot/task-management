@@ -1682,3 +1682,130 @@ CREATE TABLE IF NOT EXISTS project_updates (
 );
 CREATE INDEX IF NOT EXISTS ix_pupdate_day ON project_updates(tenant_id, update_date);
 CREATE INDEX IF NOT EXISTS ix_pupdate_project ON project_updates(tenant_id, project_id, update_date);
+
+-- ====================================================== MARKETING: LEADS
+-- Marketing leads live in their own table, attached to a marketing project
+-- (projects.kind = 'marketing'), separate from the CRM's sales pipeline. A
+-- lead is entered once: the ⭐ Progressive view, "My leads", "Follow-up today"
+-- and the rest are filters over these rows, never copies. A lead that is won
+-- can be converted into a CRM client (converted_client_id); a lead that is
+-- given up on is marked dead and recorded in dead_leads.
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  company_name TEXT NOT NULL,
+  contact_name TEXT,
+  designation TEXT,
+  phone TEXT,
+  email TEXT,
+  website TEXT,
+  location TEXT,
+  industry TEXT,
+  source TEXT,                             -- email|linkedin|website|referral|campaign|cold_call|event|other
+  assigned_to TEXT REFERENCES users(id),
+  -- new|contacted|interested|qualified|proposal|negotiation|won|dead
+  status TEXT NOT NULL DEFAULT 'new',
+  temperature TEXT NOT NULL DEFAULT 'cold', -- cold|warm|hot
+  -- ⭐ is an attention flag that can sit on any open status, not a status.
+  is_progressive INTEGER NOT NULL DEFAULT 0,
+  progressive_priority TEXT,               -- critical|high|normal
+  progressive_reasons TEXT NOT NULL DEFAULT '[]',
+  progressive_note TEXT,
+  progressive_since TEXT,
+  expected_value_minor INTEGER NOT NULL DEFAULT 0,
+  expected_close_date TEXT,
+  next_action TEXT,
+  next_followup_date TEXT,                 -- YYYY-MM-DD, workspace-local
+  last_activity_at TEXT,
+  last_outcome TEXT,                       -- latest daily-update outcome, feeds health
+  owner_action_required INTEGER NOT NULL DEFAULT 0,
+  owner_action_text TEXT,
+  owner_action_due TEXT,
+  owner_action_priority TEXT,
+  owner_action_raised_by TEXT REFERENCES users(id),
+  owner_action_raised_at TEXT,
+  notes TEXT,
+  converted_client_id TEXT REFERENCES clients(id),
+  won_at TEXT,
+  dead_at TEXT,
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_leads_project ON leads(tenant_id, project_id, status);
+CREATE INDEX IF NOT EXISTS ix_leads_assignee ON leads(tenant_id, assigned_to, status);
+CREATE INDEX IF NOT EXISTS ix_leads_followup ON leads(tenant_id, next_followup_date);
+
+-- Every single thing that happens to a lead, in order: created, status moved,
+-- reassigned, called, emailed, met, starred, unstarred, marked dead, revived.
+-- Append-only - it is the lead's timeline and the source of every report.
+CREATE TABLE IF NOT EXISTS lead_activities (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  lead_id TEXT NOT NULL REFERENCES leads(id),
+  project_id TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id),
+  event_type TEXT NOT NULL,
+  description TEXT,
+  meta TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_lact_lead ON lead_activities(tenant_id, lead_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_lact_project ON lead_activities(tenant_id, project_id, created_at DESC);
+
+-- The short daily update on a lead. One per person per lead per day, upserted.
+CREATE TABLE IF NOT EXISTS lead_updates (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  lead_id TEXT NOT NULL REFERENCES leads(id),
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  update_date TEXT NOT NULL,
+  outcome TEXT NOT NULL,                   -- no_response|follow_up_done|interested|meeting_done|proposal_sent|negotiation|converted|other
+  progress_note TEXT,
+  next_action TEXT,
+  next_followup_date TEXT,
+  owner_action_required INTEGER NOT NULL DEFAULT 0,
+  owner_action_text TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  UNIQUE (tenant_id, lead_id, user_id, update_date)
+);
+CREATE INDEX IF NOT EXISTS ix_lupd_project ON lead_updates(tenant_id, project_id, update_date);
+
+-- ⭐ added, removed, priority changed, converted, died. Never edited.
+CREATE TABLE IF NOT EXISTS progressive_lead_history (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  lead_id TEXT NOT NULL REFERENCES leads(id),
+  action TEXT NOT NULL,                    -- enabled|disabled|priority_changed|converted|dead
+  reason TEXT,
+  priority TEXT,
+  changed_by TEXT REFERENCES users(id),
+  changed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_plh_lead ON progressive_lead_history(tenant_id, lead_id, changed_at);
+
+-- Leads given up on, with why. The lead row stays (status 'dead') so its
+-- timeline survives; this is the register of deaths, with a snapshot of the
+-- lead as it stood. Reviving a lead stamps revived_at rather than deleting.
+CREATE TABLE IF NOT EXISTS dead_leads (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  lead_id TEXT NOT NULL REFERENCES leads(id),
+  project_id TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  reason_note TEXT,
+  status_at_death TEXT NOT NULL,
+  was_progressive INTEGER NOT NULL DEFAULT 0,
+  snapshot TEXT NOT NULL DEFAULT '{}',
+  marked_by TEXT REFERENCES users(id),
+  marked_at TEXT NOT NULL,
+  revived_at TEXT,
+  revived_by TEXT REFERENCES users(id),
+  revive_note TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_dead_project ON dead_leads(tenant_id, project_id, marked_at DESC);

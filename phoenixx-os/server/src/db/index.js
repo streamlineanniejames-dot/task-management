@@ -282,6 +282,13 @@ const ADDED_COLUMNS = [
   ['performance_reviews', 'acknowledged_at', 'TEXT'],
   // Workspace overrides of the scorecard weights; NULL means the defaults.
   ['tenants', 'performance_weights', 'TEXT'],
+  // delivery | marketing. A marketing project carries a lead pipeline.
+  ['projects', 'kind', "TEXT NOT NULL DEFAULT 'delivery'"],
+  // Marketing thresholds and report times; NULL means the defaults.
+  ['tenants', 'marketing_settings', 'TEXT'],
+  // A report about one project (the marketing reports) is only shown to the
+  // people who can see that project.
+  ['report_runs', 'project_id', 'TEXT'],
 ];
 
 function addColumns() {

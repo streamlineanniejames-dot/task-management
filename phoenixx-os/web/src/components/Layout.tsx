@@ -5,7 +5,7 @@ import {
   LayoutDashboard, ListChecks, CalendarDays, Users2, FileText, Receipt, Wallet,
   BookOpenCheck, BarChart3, Settings, Bell, Menu, X, LogOut, Sun, Moon, Search,
   Building2, ShieldCheck, ChevronDown, CreditCard, Clock, AlertTriangle, Target, CheckCircle2,
-  FolderKanban, MessagesSquare, Contact, FileSpreadsheet, History, Send, Landmark,
+  FolderKanban, Megaphone, MessagesSquare, Contact, FileSpreadsheet, History, Send, Landmark,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -69,6 +69,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/crm', label: 'CRM pipeline', icon: Users2, module: 'crm' },
       { to: '/proposals', label: 'Proposals', icon: FileText, module: 'proposals' },
       { to: '/projects', label: 'Projects & teams', icon: FolderKanban, module: 'projects' },
+      { to: '/marketing', label: 'Marketing leads', icon: Megaphone, module: 'crm' },
     ],
   },
   {

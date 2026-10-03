@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, FolderKanban, UserPlus, Crown, Star, ShieldCheck, Eye, Trash2, Download,
-  Users2, Briefcase, PencilLine, GraduationCap, Wrench, Send,
+  Users2, Briefcase, PencilLine, GraduationCap, Wrench, Send, Megaphone,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -189,7 +189,10 @@ function ProjectCard({ project: p, onOpen }: { project: any; onOpen: () => void 
             <p className="font-medium text-ink truncate">{p.name}</p>
             <p className="text-[12.5px] text-subtle truncate">{p.client_name}</p>
           </div>
-          <StatusBadge status={p.status} />
+          <span className="flex shrink-0 items-center gap-1.5">
+            {p.kind === 'marketing' && <Badge tone="accent">Marketing</Badge>}
+            <StatusBadge status={p.status} />
+          </span>
         </div>
 
         <div className="mt-3.5 space-y-2">
@@ -316,7 +319,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
   const [form, setForm] = useState({
     client_id: '', name: '', code: '', service_line_id: '', model: 'project', status: 'active',
     start_date: new Date().toISOString().slice(0, 10), end_date: '', budget: '',
-    manager_id: '', lead_id: '', scope_total: '',
+    manager_id: '', lead_id: '', scope_total: '', kind: 'delivery',
   });
   // Whoever creates it owns it unless they choose otherwise - when they are allowed to.
   const [ownerIds, setOwnerIds] = useState<string[]>(
@@ -351,6 +354,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
       lead_id: form.lead_id || null,
       scope_total: form.scope_total ? Number(form.scope_total) : 0,
       owner_ids: ownerIds,
+      kind: form.kind,
     }),
     onSuccess: (res: any) => {
       toast.success('Project created. Add the rest of the team next.');
@@ -385,6 +389,13 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
         <Field label="Project name" required error={errors.name} className="sm:col-span-2">
           <Input value={form.name} onChange={(e) => set('name', e.target.value)}
             placeholder="Brand refresh & always-on marketing" autoFocus />
+        </Field>
+        <Field label="Project type" className="sm:col-span-2"
+          hint={form.kind === 'marketing' ? 'Carries a lead pipeline under Marketing leads' : 'Client delivery work'}>
+          <Select value={form.kind} onChange={(e) => set('kind', e.target.value)}>
+            <option value="delivery">Delivery</option>
+            <option value="marketing">Marketing - with a lead pipeline</option>
+          </Select>
         </Field>
         <Field label="Project owners" required error={errors.owner_ids} className="sm:col-span-2"
           hint="They receive the manager's and lead's daily update. Owners and Managers only.">
@@ -443,6 +454,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
 /* --------------------------------------------------------------- drawer */
 function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const { can, user } = useAuth();
+  const navigate = useNavigate();
   const [tab, setTab] = useState('team');
   const [addOpen, setAddOpen] = useState(false);
   const [ownersOpen, setOwnersOpen] = useState(false);
@@ -479,6 +491,9 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
               onClick={() => api.download(`/projects/${id}/members/export/csv`, `${p.name}-team.csv`)}>
               Export team
             </Button>
+            {p.kind === 'marketing' && (
+              <Button icon={<Megaphone size={15} />} onClick={() => navigate(`/marketing/${p.id}`)}>Lead pipeline</Button>
+            )}
             {files && p.status === 'active' && (
               <Button variant={editable ? 'secondary' : 'primary'} icon={<Send size={15} />} onClick={() => setFiling(true)}>
                 File today's update
@@ -741,6 +756,12 @@ function DetailsTab({ project: p, editable }: { project: any; editable: boolean 
               {['planned', 'active', 'on_hold', 'completed', 'cancelled'].map((s) => (
                 <option key={s} value={s}>{titleCase(s)}</option>
               ))}
+            </Select>
+          </Field>
+          <Field label="Project type" hint="Marketing adds a lead pipeline">
+            <Select value={p.kind || 'delivery'} onChange={(e) => update.mutate({ kind: e.target.value })}>
+              <option value="delivery">Delivery</option>
+              <option value="marketing">Marketing</option>
             </Select>
           </Field>
           <Field label="Engagement model">

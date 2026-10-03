@@ -570,6 +570,105 @@ function seedPhoenixx() {
   }
   console.log(`✓ project owners assigned, ${updateCount} daily project updates filed`);
 
+  // ------------------------------------------------------ marketing projects
+  // Two marketing projects with a lead pipeline each: a spread of statuses,
+  // a handful of ⭐ leads in every health state, an owner action and a few
+  // dead leads, all with a backdated timeline so the screens read as real.
+  const internalClient = uuid();
+  run(`INSERT INTO clients (id, tenant_id, name, status, owner_id, created_at, updated_at)
+       VALUES (?,?, 'Phoenixx IT (internal)', 'active', ?, ?, ?)`, [internalClient, tenantId, ownerId, ts, ts]);
+  const mktProjects = [
+    { name: 'Marketing – Inside India', team: [['karthik@phoenixxit.com', 'manager'], ['nithya@phoenixxit.com', 'lead'], ['sundar@phoenixxit.com', 'member']] },
+    { name: 'Marketing – International', team: [['divya@phoenixxit.com', 'manager'], ['priya@phoenixxit.com', 'lead'], ['aishwarya@phoenixxit.com', 'member']] },
+  ];
+  const ago = (days, hh = 11) => { const d = addDays(new Date(), -days); d.setUTCHours(hh - 5, 30, 0, 0); return d.toISOString(); };
+  const dayAgo = (days) => addDays(new Date(), -days).toISOString().slice(0, 10);
+  const leadFixtures = [
+    // company, contact, status, temp, source, assignee seat, value, lastActiveDaysAgo, nextFollowInDays, star [priority, reasons], extra
+    ['ABC Technologies', 'Ramesh Iyer', 'proposal', 'hot', 'linkedin', 'lead', 250_000, 0, 1, ['high', ['quotation_requested', 'proposal_requested']], { owner_action: 'Approve revised quotation' }],
+    ['XYZ Manufacturing', 'Lakshmi Rao', 'interested', 'warm', 'email', 'member', 180_000, 1, 0, ['critical', ['meeting_requested', 'decision_maker_engaged']]],
+    ['Global Industries', 'Arvind Menon', 'negotiation', 'hot', 'referral', 'lead', 420_000, 7, -2, ['high', ['negotiation']]],
+    ['Sunrise Exports', 'Fatima Sheikh', 'qualified', 'warm', 'website', 'member', 150_000, 2, 3, ['normal', ['pricing_asked']], { waiting: true }],
+    ['Vel Textiles', 'Murugan K', 'contacted', 'cold', 'cold_call', 'member', 60_000, 3, 4],
+    ['Bluewave Logistics', 'Sanjana Pillai', 'interested', 'warm', 'campaign', 'lead', 90_000, 1, 2],
+    ['Nova Foods', 'Imran Khan', 'new', 'cold', 'campaign', 'member', 0, 0, 1],
+    ['Pinnacle Realty', 'Deepa Nair', 'contacted', 'warm', 'linkedin', 'member', 120_000, 4, -1],
+    ['Greenleaf Organics', 'Harish Babu', 'new', 'cold', 'website', 'lead', 0, 0, 2],
+    ['Metro Clinics', 'Dr. Kavya S', 'qualified', 'hot', 'referral', 'lead', 300_000, 0, 5],
+  ];
+  const deadFixtures = [
+    ['Orbit Media', 'contacted', 'no_response', 'Five follow-ups over three weeks, no reply.'],
+    ['Crest Hotels', 'interested', 'lost_to_competitor', 'Went with an agency already on their roster.'],
+  ];
+  let mktLeads = 0;
+  for (const [pi, mp] of mktProjects.entries()) {
+    const pid = uuid();
+    run(`INSERT INTO projects (id, tenant_id, client_id, name, model, status, kind, start_date, manager_id, lead_id,
+           scope_total, scope_delivered, created_at, updated_at)
+         VALUES (?,?,?,?, 'retainer', 'active', 'marketing', ?, ?, ?, 100, ?, ?, ?)`,
+    [pid, tenantId, internalClient, mp.name, dayAgo(60), users[mp.team[0][0]], users[mp.team[1][0]], pi ? 41 : 68, ago(60), ago(60)]);
+    for (const [email, seat] of mp.team) {
+      run(`INSERT INTO project_members (id, tenant_id, project_id, user_id, seat, allocation_pct, billable, added_by, created_at, updated_at)
+           VALUES (?,?,?,?,?, 30, 0, ?, ?, ?)`, [uuid(), tenantId, pid, users[email], seat, ownerId, ts, ts]);
+    }
+    for (const uid of new Set([ownerId, users[mp.team[0][0]]])) {
+      run('INSERT INTO project_owners (id, tenant_id, project_id, user_id, added_by, created_at) VALUES (?,?,?,?,?,?)', [uuid(), tenantId, pid, uid, ownerId, ts]);
+    }
+    const seatUser = (seat) => users[mp.team.find((t) => t[1] === seat)[0]];
+    const fixtures = pi ? leadFixtures.slice(0, 6).map((f) => [`${f[0]} Intl`, ...f.slice(1)]) : leadFixtures;
+    for (const [company, contact, status, temp, source, seat, value, lastAgo, nextIn, star, extra = {}] of fixtures) {
+      const lid = uuid();
+      const created = ago(lastAgo + 8);
+      const who = seatUser(seat);
+      run(`INSERT INTO leads (id, tenant_id, project_id, company_name, contact_name, phone, email, source, assigned_to, status,
+             temperature, expected_value_minor, next_action, next_followup_date, last_activity_at, last_outcome, created_by, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [lid, tenantId, pid, company, contact, `98${String(4000_0000 + mktLeads * 7919).slice(0, 8)}`,
+        `${contact.split(' ')[0].toLowerCase().replace(/\W/g, '')}@${company.toLowerCase().replace(/\W+/g, '')}.com`,
+        source, who, status, temp, rupees(value), status === 'new' ? 'First outreach call' : 'Follow up on the last conversation',
+        addDays(new Date(), nextIn).toISOString().slice(0, 10), ago(lastAgo), extra.waiting ? 'waiting' : null, ownerId, created, ago(lastAgo)]);
+      const act = (type, desc, meta, at, by = who) => run(
+        `INSERT INTO lead_activities (id, tenant_id, lead_id, project_id, user_id, event_type, description, meta, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`, [uuid(), tenantId, lid, pid, by, type, desc, JSON.stringify(meta), at]);
+      act('lead_created', 'Lead created', { status: 'new' }, created, ownerId);
+      act('assigned', 'Assigned', { to: who }, created, ownerId);
+      const path = ['new', 'contacted', 'interested', 'qualified', 'proposal', 'negotiation'];
+      const cap = (x) => x[0].toUpperCase() + x.slice(1);
+      const upTo = path.indexOf(status);
+      for (let s = 1; s <= upTo; s += 1) {
+        act(s === 1 ? 'call' : 'email', s === 1 ? 'Intro call - walked through our services' : `Shared ${['', '', 'case studies', 'scope note', 'proposal', 'revised pricing'][s]}`, {}, ago(lastAgo + 8 - s, 12));
+        act('status_changed', `${cap(path[s - 1])} → ${cap(path[s])}`, { from: path[s - 1], to: path[s] }, ago(lastAgo + 8 - s, 12));
+      }
+      act('daily_update', 'Follow-up completed: spoke to the client', { outcome: 'follow_up_done' }, ago(lastAgo, 16));
+      if (star) {
+        run('UPDATE leads SET is_progressive = 1, progressive_priority = ?, progressive_reasons = ?, progressive_since = ? WHERE id = ?',
+          [star[0], JSON.stringify(star[1]), ago(lastAgo + 2), lid]);
+        run(`INSERT INTO progressive_lead_history (id, tenant_id, lead_id, action, reason, priority, changed_by, changed_at)
+             VALUES (?,?,?, 'enabled', ?, ?, ?, ?)`, [uuid(), tenantId, lid, star[1].join(', '), star[0], seatUser('lead'), ago(lastAgo + 2)]);
+        act('progressive_enabled', `⭐ Marked progressive (${star[0]})`, { reasons: star[1], priority: star[0] }, ago(lastAgo + 2), seatUser('lead'));
+      }
+      if (extra.owner_action) {
+        run(`UPDATE leads SET owner_action_required = 1, owner_action_text = ?, owner_action_due = ?, owner_action_priority = 'high',
+               owner_action_raised_by = ?, owner_action_raised_at = ? WHERE id = ?`, [extra.owner_action, dayAgo(-1), who, ago(0), lid]);
+        act('owner_action_raised', `Owner action needed: ${extra.owner_action}`, { priority: 'high' }, ago(0, 15));
+      }
+      mktLeads += 1;
+    }
+    if (!pi) {
+      for (const [company, statusAtDeath, code, note] of deadFixtures) {
+        const lid = uuid();
+        run(`INSERT INTO leads (id, tenant_id, project_id, company_name, source, assigned_to, status, temperature, dead_at, last_activity_at, created_by, created_at, updated_at)
+             VALUES (?,?,?,?, 'campaign', ?, 'dead', 'cold', ?, ?, ?, ?, ?)`, [lid, tenantId, pid, company, seatUser('member'), ago(4), ago(4), ownerId, ago(30), ago(4)]);
+        run(`INSERT INTO dead_leads (id, tenant_id, lead_id, project_id, reason_code, reason_note, status_at_death, snapshot, marked_by, marked_at)
+             VALUES (?,?,?,?,?,?,?, '{}', ?, ?)`, [uuid(), tenantId, lid, pid, code, note, statusAtDeath, seatUser('lead'), ago(4)]);
+        run(`INSERT INTO lead_activities (id, tenant_id, lead_id, project_id, user_id, event_type, description, meta, created_at)
+             VALUES (?,?,?,?,?, 'marked_dead', ?, ?, ?)`, [uuid(), tenantId, lid, pid, seatUser('lead'), `Marked dead: ${note}`, JSON.stringify({ reason_code: code }), ago(4)]);
+        mktLeads += 1;
+      }
+    }
+  }
+  console.log(`✓ 2 marketing projects with ${mktLeads} leads, ⭐ progressive and dead leads`);
+
   // ---------------------------------------------------------- action items
   const items = [
     { title: 'Publish August performance report for Cotton India', client: 'Cotton India Textiles', owner: 'priya@phoenixxit.com', cat: 'delivery', pri: 'high', due: 1 },

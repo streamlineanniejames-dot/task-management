@@ -69,6 +69,8 @@ const projectSchema = z.object({
   code: z.string().optional().nullable(),
   service_line_id: z.string().optional().nullable(),
   model: z.enum(['retainer', 'project', 'hybrid']).optional(),
+  /** delivery, or marketing - a marketing project carries a lead pipeline. */
+  kind: z.enum(['delivery', 'marketing']).optional(),
   status: z.enum(['planned', 'active', 'on_hold', 'completed', 'cancelled']).optional(),
   start_date: z.string().optional().nullable(),
   end_date: z.string().optional().nullable(),
@@ -140,6 +142,7 @@ router.get('/', requires('projects', 'view'), (req, res) => {
   }
   if (req.query.client_id) { filters.push('p.client_id = ?'); params.push(req.query.client_id); }
   if (req.query.status) { filters.push('p.status = ?'); params.push(req.query.status); }
+  if (req.query.kind) { filters.push('p.kind = ?'); params.push(req.query.kind); }
   if (req.query.manager_id) { filters.push('p.manager_id = ?'); params.push(req.query.manager_id); }
   if (req.query.service_line_id) { filters.push('p.service_line_id = ?'); params.push(req.query.service_line_id); }
   if (req.query.owner_id) {
@@ -232,12 +235,12 @@ router.post('/', requires('projects', 'create'), (req, res) => {
   tx(() => {
     run(
       `INSERT INTO projects (id, tenant_id, client_id, name, code, service_line_id, model, status,
-         start_date, end_date, budget_minor, manager_id, lead_id, scope_total, scope_delivered, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         start_date, end_date, budget_minor, manager_id, lead_id, scope_total, scope_delivered, kind, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id, req.auth.tenantId, body.client_id, body.name, body.code ?? null, body.service_line_id ?? null,
         body.model || 'project', body.status || 'active', body.start_date ?? null, body.end_date ?? null,
         body.budget_minor || 0, body.manager_id ?? null, body.lead_id ?? null,
-        body.scope_total || 0, body.scope_delivered || 0, at, at],
+        body.scope_total || 0, body.scope_delivered || 0, body.kind || 'delivery', at, at],
     );
     // Whoever was named at creation joins the team in that seat straight away.
     if (body.manager_id) addMember(req, id, { user_id: body.manager_id, seat: 'manager' });

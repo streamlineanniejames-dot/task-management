@@ -22,6 +22,7 @@ const Clients = lazy(() => import('./pages/Clients'));
 const ClientDetail = lazy(() => import('./pages/ClientDetail'));
 const Proposals = lazy(() => import('./pages/Proposals'));
 const Projects = lazy(() => import('./pages/Projects'));
+const Marketing = lazy(() => import('./pages/Marketing'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const Finance = lazy(() => import('./pages/Finance'));
@@ -102,6 +103,8 @@ export default function App() {
         <Route path="proposals" element={<Suspense fallback={<FullPageSpinner />}><Proposals /></Suspense>} />
         <Route path="projects" element={<Suspense fallback={<FullPageSpinner />}><Projects /></Suspense>} />
         <Route path="projects/:id" element={<Suspense fallback={<FullPageSpinner />}><Projects /></Suspense>} />
+        <Route path="marketing" element={<Suspense fallback={<FullPageSpinner />}><Marketing /></Suspense>} />
+        <Route path="marketing/:projectId" element={<Suspense fallback={<FullPageSpinner />}><Marketing /></Suspense>} />
         <Route path="proposals/:id" element={<Suspense fallback={<FullPageSpinner />}><Proposals /></Suspense>} />
         <Route path="invoices" element={<Suspense fallback={<FullPageSpinner />}><Invoices /></Suspense>} />
         <Route path="invoices/:id" element={<Suspense fallback={<FullPageSpinner />}><InvoiceDetail /></Suspense>} />

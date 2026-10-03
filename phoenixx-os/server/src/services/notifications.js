@@ -126,6 +126,46 @@ export const DEFAULT_TEMPLATES = {
     subject: 'OVERDUE: {{title}}',
     body: '"{{title}}" was due {{due}} and is now {{overdue_for}} overdue.',
   },
+  'marketing.progressive_added': {
+    subject: '⭐ {{lead}} is now progressive ({{priority}})',
+    body: '{{person}} marked {{lead}} on {{project}} as a ⭐ progressive lead: {{reasons}}.',
+  },
+  'marketing.owner_action': {
+    subject: 'Owner action needed: {{lead}}',
+    body: '{{person}} needs you on {{lead}} ({{project}}): {{action}}. Due {{due}}.',
+  },
+  'marketing.followup_pending': {
+    subject: 'Follow up ⭐ {{lead}}',
+    body: '⭐ {{lead}} ({{project}}) needs its follow-up - due {{due}}. Next action: {{next_action}}.',
+  },
+  'marketing.progressive_inactive': {
+    subject: '⭐ {{lead}} inactive for {{days}} days',
+    body: 'Nothing has happened on ⭐ {{lead}} ({{project}}) for {{days}} working days. Next action: {{next_action}}.',
+  },
+  'marketing.progressive_stalled': {
+    subject: 'Stalled: ⭐ {{lead}} needs attention',
+    body: '⭐ {{lead}} ({{project}}) has had no activity for {{days}} working days. Owner: {{assignee}}. Next action: {{next_action}}.',
+  },
+  'marketing.progressive_escalated': {
+    subject: 'Escalated: ⭐ {{lead}} inactive {{days}} days',
+    body: '⭐ {{lead}} ({{project}}) is still stalled after {{days}} working days and has been escalated to the project owner. Owner: {{assignee}}.',
+  },
+  'marketing.priority_status_change': {
+    subject: '⭐ {{lead}}: {{from}} → {{to}}',
+    body: '{{person}} moved ⭐ {{lead}} ({{project}}) from {{from}} to {{to}}.',
+  },
+  'marketing.progressive_converted': {
+    subject: 'Won: ⭐ {{lead}}',
+    body: '{{person}} won ⭐ {{lead}} on {{project}}.',
+  },
+  'marketing.progressive_lost': {
+    subject: 'Dead: ⭐ {{lead}}',
+    body: '{{person}} marked ⭐ {{lead}} ({{project}}) dead: {{reason}}.',
+  },
+  'marketing.update_missing': {
+    subject: 'Lead update pending on {{count}} ⭐ lead(s)',
+    body: 'No update today yet on: {{leads}}. A two-line update keeps them moving.',
+  },
   'performance.reviewed': {
     subject: 'Your {{period}} performance review is ready',
     body: '{{reviewer}} has reviewed your {{period}} scorecard. Overall {{score}}. Open it to read the notes and acknowledge.',

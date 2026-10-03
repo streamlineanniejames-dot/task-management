@@ -20,6 +20,7 @@ import { financeRouter } from './finance.routes.js';
 import { todosRouter } from './todos.routes.js';
 import { projectsRouter } from './projects.routes.js';
 import { projectUpdatesRouter } from './projectUpdates.routes.js';
+import { marketingRouter } from './marketing.routes.js';
 import { reportsRouter } from './reports.routes.js';
 import { dashboardRouter } from './dashboard.routes.js';
 import { settingsRouter } from './settings.routes.js';
@@ -78,6 +79,8 @@ api.use('/finance', financeRouter);
 // Daily project updates first: its /updates/... paths must win over /:id.
 api.use('/projects', projectUpdatesRouter);
 api.use('/projects', projectsRouter);
+// Marketing projects and their lead pipelines.
+api.use('/marketing', marketingRouter);
 api.use('/reports', reportsRouter);
 api.use('/dashboard', dashboardRouter);
 api.use('/settings', settingsRouter);

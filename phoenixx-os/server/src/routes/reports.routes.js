@@ -6,6 +6,7 @@ import { get, all, run, repo } from '../db/index.js';
 import { uuid, nowIso, todayIso, monthIso, addMonths, parseJson, toCsv } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, audit, paginate, pageMeta } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
+import { seesAllProjects, visibleProjectIds, canSeeProject } from '../services/projectOversight.js';
 import {
   generateDailyReport, generateWeeklyReport, generateMonthlyReport,
   generateClientMonthlyReport, runCustomReport, dispatchReport, AVAILABLE_METRICS,
@@ -27,6 +28,12 @@ router.get('/', requires('reports', 'view'), (req, res) => {
   if (req.query.status) { filters.push('r.status = ?'); params.push(req.query.status); }
   // Portal users only ever see their own client's reports.
   if (req.auth.role === 'client') { filters.push('r.client_id = ?'); params.push(req.auth.clientId || '__none__'); }
+  // A report about one project is for the people who can see that project.
+  if (!seesAllProjects(req.auth)) {
+    const ids = visibleProjectIds(req.auth);
+    filters.push(`(r.project_id IS NULL${ids.length ? ` OR r.project_id IN (${ids.map(() => '?').join(',')})` : ''})`);
+    params.push(...ids);
+  }
 
   const where = filters.join(' AND ');
   const total = Number(get(`SELECT COUNT(*) AS n FROM report_runs r WHERE ${where}`, params)?.n || 0);
@@ -54,6 +61,7 @@ router.get('/:id', requires('reports', 'view'), (req, res) => {
   );
   if (!report) throw notFound('Report');
   if (req.auth.role === 'client' && report.client_id !== req.auth.clientId) throw notFound('Report');
+  if (report.project_id && !canSeeProject(req.auth, report.project_id)) throw notFound('Report');
 
   return ok(res, { ...report, payload: parseJson(report.payload, {}) });
 });

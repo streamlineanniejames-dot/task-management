@@ -16,6 +16,7 @@ import { notifyRole, notifyMany } from './notifications.js';
 import { createInvoiceFromTemplate } from './invoicing.js';
 import { filersFor, isWeekOff } from './projectOversight.js';
 import { generateReviews, previousMonth } from './performance.js';
+import { marketingTick } from './marketing.js';
 
 /**
  * In-process job runner.
@@ -436,6 +437,14 @@ export const monthlyPerformance = record('performance.monthly', async () => {
   return n;
 });
 
+// ------------------------------------------------- marketing: the clock
+/**
+ * Every 15 minutes: each workspace's own clock and Settings -> Marketing decide
+ * whether the ⭐ watch, the 6:30 PM update reminder, the daily report or the
+ * weekly report is due. See services/marketing.js.
+ */
+export const marketingClock = record('marketing.tick', () => marketingTick(activeTenants()));
+
 // -------------------------------------------------------- G1: scheduled reports
 export const scheduledReports = record('reports.scheduled', async () => {
   let n = 0;
@@ -605,6 +614,7 @@ const JOBS = [
   { key: 'invoices.deadlines', everyMin: 60, fn: syncInvoiceDeadlines },
   { key: 'crm.follow_ups', everyMin: 60, fn: syncFollowUps },
   { key: 'webhooks.flush', everyMin: 1, fn: () => flushWebhooks() },
+  { key: 'marketing.tick', everyMin: 15, fn: marketingClock },
   { key: 'action_items.recurring', atHourUtc: 0, fn: rollRecurringActionItems },
   { key: 'invoices.recurring', atHourUtc: 1, fn: runRecurringInvoices },
   { key: 'crm.scores', atHourUtc: 2, fn: recomputeScores },
@@ -679,4 +689,5 @@ export const JOB_REGISTRY = {
   'close.monthly': monthlyClose,
   'performance.monthly': monthlyPerformance,
   'webhooks.flush': () => flushWebhooks(),
+  'marketing.tick': marketingClock,
 };
