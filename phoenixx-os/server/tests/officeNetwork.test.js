@@ -251,6 +251,41 @@ describe('check-in with the check switched on', () => {
     assert.equal(res.body.data.status, 'pending_approval');
   });
 
+  test('listing a network after the fact re-verifies today\'s check-ins from it', async () => {
+    const early = await employee();
+    const elsewhere = await employee();
+    await checkIn(early, '122.173.241.132');
+    await checkIn(elsewhere, '106.192.170.132');
+    assert.equal(rowFor(early).status, 'pending_approval');
+
+    const res = await api.post('/hr/networks',
+      { network_name: 'Airtel fibre', ssid: 'Airtel_renn_1546-5G', public_ip: '122.173.241.132' }, { token });
+    assert.equal(res.body.data.rechecked, 1);
+
+    const row = rowFor(early);
+    assert.equal(row.network_verified, 1);
+    assert.equal(row.status, 'present', 'waiting on the network alone, so it settles');
+    assert.equal(row.review_reason, null);
+    assert.ok(row.approved_by);
+    const events = db.all('SELECT event FROM attendance_events WHERE attendance_id = ? ORDER BY rowid', [row.id]);
+    assert.deepEqual(events.map((x) => x.event), ['checked_in', 'network_verified']);
+
+    const other = rowFor(elsewhere);
+    assert.equal(other.network_verified, 0, 'a different address is left alone');
+    assert.equal(other.status, 'pending_approval');
+  });
+
+  test('a late check-in keeps its lateness for HR after the network is re-verified', async () => {
+    const e = await employee();
+    await checkIn(e, '117.99.1.5');
+    db.run("UPDATE attendance SET review_reason = 'late,off_network' WHERE id = ?", [rowFor(e).id]);
+    await api.post('/hr/networks', { network_name: 'Second line', public_ip: '117.99.1.5' }, { token });
+    const row = rowFor(e);
+    assert.equal(row.network_verified, 1);
+    assert.equal(row.status, 'pending_approval');
+    assert.equal(row.review_reason, 'late');
+  });
+
   test('the owner still does not check in', async () => {
     const res = await checkIn({ token }, OFFICE_IP);
     assert.equal(res.status, 403);

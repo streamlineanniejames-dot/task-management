@@ -1080,7 +1080,13 @@ function NetworksModal({ onClose }: { onClose: () => void }) {
     queryKey: ['attendance', 'networks'],
     queryFn: () => api.get('/hr/networks').then((r) => r.data),
   });
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['attendance', 'networks'] });
+  // Adding or fixing a network can re-verify today's check-ins, so the whole
+  // attendance view refreshes, not just this list.
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['attendance'] });
+  const recheckedNote = (res: any) => {
+    const n = res?.data?.rechecked || 0;
+    return n ? ` ${n} of today's check-in${n === 1 ? '' : 's'} now verified.` : '';
+  };
   const reset = () => { setDraft(EMPTY_NETWORK); setEditing(null); };
   const set = (k: keyof typeof EMPTY_NETWORK) => (e: any) => setDraft((d) => ({ ...d, [k]: e.target.value }));
 
@@ -1094,12 +1100,15 @@ function NetworksModal({ onClose }: { onClose: () => void }) {
       };
       return editing ? api.patch(`/hr/networks/${editing}`, body) : api.post('/hr/networks', body);
     },
-    onSuccess: () => { toast.success(editing ? 'Network updated.' : 'Network added.'); reset(); invalidate(); },
+    onSuccess: (res: any) => {
+      toast.success((editing ? 'Network updated.' : 'Network added.') + recheckedNote(res));
+      reset(); invalidate();
+    },
     onError: (e: any) => toast.error(e.message),
   });
   const toggle = useMutation({
     mutationFn: (n: any) => api.patch(`/hr/networks/${n.id}`, { is_active: !n.is_active }),
-    onSuccess: invalidate,
+    onSuccess: (res: any) => { const note = recheckedNote(res).trim(); if (note) toast.success(note); invalidate(); },
     onError: (e: any) => toast.error(e.message),
   });
   const remove = useMutation({

@@ -752,6 +752,59 @@ const networkRow = (tenantId, id) => get(
   [id, tenantId],
 );
 
+/**
+ * Today's check-ins that missed only because the office connection had not
+ * been listed yet. When HR adds or corrects a network, each of today's
+ * unverified rows is matched again against the address the server recorded at
+ * check-in - still never anything the employee sent. A match clears the
+ * off-network reason; a day that was waiting on that alone becomes present.
+ * Lateness is left for HR to decide. Earlier days are not touched.
+ */
+function recheckToday(req) {
+  const { tenantId, userId } = req.auth;
+  const workDate = workDayFor(tenantId, new Date());
+  const rows = all(
+    `SELECT * FROM attendance WHERE tenant_id = ? AND work_date = ?
+       AND network_verified = 0 AND client_ip IS NOT NULL`,
+    [tenantId, workDate],
+  );
+  let count = 0;
+  for (const row of rows) {
+    const match = matchNetwork(tenantId, row.client_ip);
+    if (!match) continue;
+    const reasons = String(row.review_reason || '').split(',').filter((r) => r && r !== 'off_network');
+    const settles = row.status === PENDING && !reasons.length;
+    const status = settles ? 'present' : row.status;
+    const ts = nowIso();
+    const note = `Office network listed after check-in: ${match.network_name} (${row.client_ip})`;
+    tx(() => {
+      run(
+        `UPDATE attendance SET network_verified = 1, network_id = ?, network_label = ?, review_reason = ?,
+           status = ?, approved_by = CASE WHEN ? THEN ? ELSE approved_by END,
+           approved_at = CASE WHEN ? THEN ? ELSE approved_at END,
+           approval_note = CASE WHEN ? THEN ? ELSE approval_note END, updated_at = ?
+         WHERE id = ? AND network_verified = 0`,
+        [match.id, match.ssid || match.network_name, reasons.join(',') || null, status,
+          settles ? 1 : 0, userId, settles ? 1 : 0, ts, settles ? 1 : 0, note, ts, row.id],
+      );
+      logAttendance({
+        tenantId,
+        attendanceId: row.id,
+        userId: row.user_id,
+        workDate: row.work_date,
+        event: 'network_verified',
+        actorId: userId,
+        fromStatus: row.status,
+        toStatus: status,
+        note,
+        at: ts,
+      });
+    });
+    count += 1;
+  }
+  return count;
+}
+
 router.get('/networks', requires('hr_attendance', 'approve'), (req, res) => {
   const { tenantId } = req.auth;
   return ok(res, {
@@ -809,7 +862,7 @@ router.post('/networks', requires('hr_attendance', 'approve'), (req, res) => {
   );
   const row = networkRow(tenantId, id);
   audit(req, { entity: 'approved_network', entityId: id, action: 'create', after: row });
-  return created(res, row);
+  return created(res, { ...row, rechecked: row.is_active ? recheckToday(req) : 0 });
 });
 
 router.patch('/networks/:id', requires('hr_attendance', 'approve'), (req, res) => {
@@ -833,7 +886,7 @@ router.patch('/networks/:id', requires('hr_attendance', 'approve'), (req, res) =
   }
   const after = networkRow(tenantId, before.id);
   audit(req, { entity: 'approved_network', entityId: before.id, action: 'update', before, after });
-  return ok(res, after);
+  return ok(res, { ...after, rechecked: after.is_active ? recheckToday(req) : 0 });
 });
 
 /** Soft delete: past check-ins still point at the network they matched. */
