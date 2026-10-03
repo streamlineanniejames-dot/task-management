@@ -1414,6 +1414,60 @@ if (phoenixxId) {
     }
   }
 
+  // Performance scorecards: the last three months closed, this month live. Two
+  // of last month's are already rated and submitted so the review cycle shows.
+  const { generateReviews } = await import('./services/performance.js');
+
+  // Daily-update history, so reporting discipline has something to judge: on
+  // each past weekday, each person files on one of their open tasks with a
+  // personal habit between 60% and 95% - a realistic spread, not a wall of zeros.
+  const habit = { 'priya@phoenixxit.com': 0.9, 'vignesh@phoenixxit.com': 0.8, 'rahul@phoenixxit.com': 0.6,
+    'aishwarya@phoenixxit.com': 0.95, 'nithya@phoenixxit.com': 0.85, 'sundar@phoenixxit.com': 0.7 };
+  const insertUpdate = db.prepare(
+    `INSERT OR IGNORE INTO action_updates (id, tenant_id, action_item_id, user_id, update_date, completed_today,
+       in_progress, status_at_update, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  let historic = 0;
+  for (const [email, rate] of Object.entries(habit)) {
+    const uid = get('SELECT id FROM users WHERE tenant_id = ? AND email = ?', [phoenixxId, email])?.id;
+    if (!uid) continue;
+    const mine = all(
+      `SELECT id, created_at, completed_at, status FROM action_items
+        WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL AND status != 'cancelled'`,
+      [phoenixxId, uid],
+    );
+    for (let back = 100; back >= 1; back -= 1) {
+      const d = addDays(new Date(), -back).toISOString().slice(0, 10);
+      if (new Date(`${d}T12:00:00Z`).getUTCDay() === 0) continue;
+      const open = mine.find((t) => t.created_at.slice(0, 10) <= d && (!t.completed_at || t.completed_at.slice(0, 10) >= d));
+      if (!open || Math.random() > rate) continue;
+      const at = `${d}T12:30:00.000Z`;
+      historic += Number(insertUpdate.run(uuid(), phoenixxId, open.id, uid, d, 'Worked through the day\'s deliverables',
+        'Continuing tomorrow', open.status, at, at).changes);
+    }
+  }
+  console.log(`✓ ${historic} historic daily updates for reporting discipline`);
+
+  let cards = 0;
+  for (let back = 3; back >= 0; back -= 1) {
+    const m = addMonths(new Date(), -back).toISOString().slice(0, 7);
+    cards += generateReviews(phoenixxId, m).generated;
+  }
+  const lastMonth = addMonths(new Date(), -1).toISOString().slice(0, 7);
+  for (const [email, rating, good, better] of [
+    ['priya@phoenixxit.com', 4, 'Campaign delivery stayed on time through the festive rush.', 'File the daily update every day, not just on busy ones.'],
+    ['vignesh@phoenixxit.com', 3, 'Strong technical ownership on ThermaCool.', 'Fewer late finishes - flag risk earlier.'],
+  ]) {
+    const r = get('SELECT r.* FROM performance_reviews r JOIN users u ON u.id = r.user_id WHERE u.email = ? AND r.period_month = ?', [email, lastMonth]);
+    if (!r) continue;
+    const overall = r.system_score == null ? rating * 20 : Math.round((r.system_score * 0.8 + rating * 20 * 0.2) * 10) / 10;
+    const band = overall >= 90 ? 'outstanding' : overall >= 75 ? 'strong' : overall >= 60 ? 'meets' : overall >= 45 ? 'needs_improvement' : 'concern';
+    const divyaId = get('SELECT id FROM users WHERE email = ?', ['divya@phoenixxit.com'])?.id;
+    run(`UPDATE performance_reviews SET manager_rating = ?, overall_score = ?, band = ?, strengths = ?, improvements = ?,
+           status = 'submitted', reviewer_id = ?, reviewed_at = ? WHERE id = ?`,
+    [rating, overall, band, good, better, divyaId, ts, r.id]);
+  }
+  console.log(`✓ ${cards} performance scorecards across four months`);
+
   const flags = detectImprovementFlags(phoenixxId);
   snapshotMetrics(phoenixxId);
   generateDailyReport(phoenixxId);

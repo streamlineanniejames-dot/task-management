@@ -18,6 +18,7 @@ import {
   METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork,
   parseRange, verifyCheckIn, requestIp, ipDiagnostics,
 } from '../services/officeNetwork.js';
+import * as performance from '../services/performance.js';
 
 const router = Router();
 
@@ -1413,149 +1414,199 @@ router.get('/leave/calendar', requires('hr_leave', 'view'), (req, res) => {
 });
 
 // =========================================================== C3 PERFORMANCE
+/**
+ * Scorecards v2 - see services/performance.js for how a score is built.
+ *
+ * Who sees what:
+ *   - everyone sees their own scorecard, and never a ranking
+ *   - a manager also sees their direct reports and the people on the projects
+ *     they manage or lead
+ *   - the workspace Owner and HR see everyone
+ * Who rates: the person's reporting manager, or the Owner / HR. Never
+ * themselves - a manager's own card is rated by the Owner.
+ */
+const SEES_ALL_PERFORMANCE = ['owner', 'super_admin', 'hr'];
+
+/** User ids whose scorecards this person may see. */
+function performanceScope(auth) {
+  if (SEES_ALL_PERFORMANCE.includes(auth.role)) return null; // everyone
+  const ids = new Set([auth.userId]);
+  if (can(auth, 'hr_performance', 'approve')) {
+    for (const r of all('SELECT id FROM users WHERE tenant_id = ? AND manager_id = ? AND deleted_at IS NULL',
+      [auth.tenantId, auth.userId])) ids.add(r.id);
+    for (const r of all(
+      `SELECT DISTINCT pm.user_id FROM project_members pm
+         JOIN project_members me ON me.project_id = pm.project_id AND me.deleted_at IS NULL
+          AND me.user_id = ? AND me.seat IN ('manager','lead')
+         JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
+        WHERE pm.tenant_id = ? AND pm.deleted_at IS NULL`,
+      [auth.userId, auth.tenantId],
+    )) ids.add(r.user_id);
+  }
+  return [...ids];
+}
+const canSeePerformance = (auth, userId) => {
+  const scope = performanceScope(auth);
+  return scope === null || scope.includes(userId);
+};
+function canRate(auth, subject) {
+  if (subject.id === auth.userId) return false;
+  if (SEES_ALL_PERFORMANCE.includes(auth.role)) return true;
+  return subject.manager_id === auth.userId;
+}
+
+const shapeReview = (r) => {
+  const extra = performance.parseDetail(r.pillars);
+  return { ...r, pillars: extra.pillars || [], coverage_pct: extra.coverage_pct ?? null, direct_reports: extra.direct_reports ?? 0 };
+};
+
 router.get('/performance', requires('hr_performance', 'view'), (req, res) => {
   const { tenantId } = req.auth;
-  const canSeeAll = can(req.auth, 'hr_performance', 'approve');
   const month = req.query.month || monthIso();
-  const filters = ['r.tenant_id = ?', 'r.period_month = ?'];
+  const scope = performanceScope(req.auth);
+  const filters = ['r.tenant_id = ?', 'r.period_month = ?', "u.role NOT IN ('owner','super_admin')"];
   const params = [tenantId, month];
+  if (scope) { filters.push(`r.user_id IN (${scope.map(() => '?').join(',')})`); params.push(...scope); }
+  if (req.query.user_id) { filters.push('r.user_id = ?'); params.push(req.query.user_id); }
 
-  if (!canSeeAll) { filters.push('r.user_id = ?'); params.push(req.auth.userId); }
-  else if (req.auth.role === 'manager') {
-    filters.push('(r.user_id = ? OR r.user_id IN (SELECT id FROM users WHERE manager_id = ?))');
-    params.push(req.auth.userId, req.auth.userId);
-  }
-  if (req.query.user_id && canSeeAll) { filters.push('r.user_id = ?'); params.push(req.query.user_id); }
-
-  return ok(res, all(
-    `SELECT r.*, u.name AS user_name, u.avatar_url, u.designation, u.role AS user_role,
-            rev.name AS reviewer_name
+  const rows = all(
+    `SELECT r.*, u.name AS user_name, u.avatar_url, u.designation, u.role AS user_role, u.manager_id,
+            rev.name AS reviewer_name, sl.name AS service_line_name, mgr.name AS manager_name
        FROM performance_reviews r
        JOIN users u ON u.id = r.user_id
        LEFT JOIN users rev ON rev.id = r.reviewer_id
+       LEFT JOIN users mgr ON mgr.id = u.manager_id
+       LEFT JOIN service_lines sl ON sl.id = u.service_line_id
       WHERE ${filters.join(' AND ')} ORDER BY r.overall_score DESC NULLS LAST, u.name`,
     params,
-  ).map((r) => ({
+  ).map(shapeReview);
+
+  // A rank only means something to someone looking at more than themselves.
+  const ranked = scope === null || scope.length > 1;
+  return ok(res, rows.map((r, i) => ({
     ...r,
+    rank: ranked && r.overall_score != null ? i + 1 : null,
+    can_rate: canRate(req.auth, { id: r.user_id, manager_id: r.manager_id }) && can(req.auth, 'hr_performance', 'edit'),
     kpis: all('SELECT * FROM performance_kpi_scores WHERE review_id = ?', [r.id]),
   })));
 });
 
-/** Recomputes the data-derived half of a review from source records. */
+/** The rules in force - weights, thresholds, bands - for the "how it is calculated" notes. */
+router.get('/performance/config', requires('hr_performance', 'view'), (req, res) => ok(res, {
+  weights: performance.weightsFor(req.auth.tenantId),
+  defaults: performance.DEFAULT_WEIGHTS,
+  pillars: performance.PILLARS,
+  min_sample: performance.MIN_SAMPLE,
+  min_coverage: performance.MIN_COVERAGE,
+  priority_weight: performance.PRIORITY_WEIGHT,
+  bands: performance.BANDS,
+  can_edit: ['owner', 'super_admin', 'hr'].includes(req.auth.role),
+}));
+
+router.put('/performance/config', requires('hr_performance', 'edit'), (req, res) => {
+  if (!['owner', 'super_admin', 'hr'].includes(req.auth.role)) throw forbidden('Only the Owner or HR can change the scorecard weights');
+  const before = performance.weightsFor(req.auth.tenantId);
+  const after = performance.saveWeights(req.auth.tenantId, req.body || {});
+  audit(req, { entity: 'performance_config', entityId: req.auth.tenantId, action: 'update', before, after });
+  return ok(res, after);
+});
+
+/**
+ * One person's scorecard computed live from today's records - the month to
+ * date for the current month. Nothing is saved; the stored review (rating,
+ * notes, status) comes back alongside it.
+ */
+router.get('/performance/scorecard', requires('hr_performance', 'view'), (req, res) => {
+  const { tenantId } = req.auth;
+  const userId = req.query.user_id || req.auth.userId;
+  if (!canSeePerformance(req.auth, userId)) throw forbidden('You can only see your own scorecard and your team\'s');
+  const month = req.query.month || monthIso();
+
+  const { period, weights, cards } = performance.computeScorecards(tenantId, month, [userId]);
+  const card = cards[0];
+  if (!card) {
+    return ok(res, { period, weights, card: null, review: null, reason: 'The workspace Owner is not scored - they rate everyone else.' });
+  }
+  const stored = get('SELECT * FROM performance_reviews WHERE tenant_id = ? AND user_id = ? AND period_month = ?', [tenantId, userId, month]);
+  const subject = get('SELECT id, manager_id FROM users WHERE id = ?', [userId]);
+  const overall = performance.overallFor(card.system_score, stored?.manager_rating, weights.rating_share);
+  return ok(res, {
+    period,
+    weights,
+    card: { ...card, overall_score: overall, band: performance.bandFor(overall, card.coverage_pct) },
+    review: stored ? shapeReview(stored) : null,
+    can_rate: canRate(req.auth, subject) && can(req.auth, 'hr_performance', 'edit'),
+  });
+});
+
+/** Recomputes and stores the month's scorecards. Keeps ratings, notes and status. */
 router.post('/performance/generate', requires('hr_performance', 'create'), (req, res) => {
   const { month = monthIso(), user_id: onlyUser } = req.body || {};
-  const { tenantId } = req.auth;
-  const from = startOfMonth(month).slice(0, 10);
-  const to = endOfMonth(month).slice(0, 10);
-
-  const staff = all(
-    `SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active'
-       AND role != 'client' ${onlyUser ? 'AND id = ?' : ''}`,
-    onlyUser ? [tenantId, onlyUser] : [tenantId],
-  );
-  let n = 0;
-
-  for (const u of staff) {
-    const items = get(
-      `SELECT COUNT(*) AS assigned, COUNT(CASE WHEN status='done' THEN 1 END) AS done,
-              COUNT(CASE WHEN status='done' AND completed_at <= due_date || 'T23:59:59Z' THEN 1 END) AS on_time
-         FROM action_items WHERE tenant_id = ? AND owner_id = ? AND deleted_at IS NULL
-           AND due_date BETWEEN ? AND ?`,
-      [tenantId, u.id, from, to],
-    ) || {};
-    const att = get(
-      `SELECT COUNT(*) AS n, COUNT(CASE WHEN status IN ('present','wfh') THEN 1 END) AS p
-         FROM attendance WHERE tenant_id = ? AND user_id = ? AND work_date BETWEEN ? AND ?`,
-      [tenantId, u.id, from, to],
-    ) || {};
-    const sop = get(
-      'SELECT AVG(adherence_pct) AS a FROM sop_runs WHERE tenant_id = ? AND user_id = ? AND started_at >= ?',
-      [tenantId, u.id, `${from}T00:00:00Z`],
-    ) || {};
-
-    const completion = pct(Number(items.done || 0), Number(items.assigned || 0));
-    const attendance = pct(Number(att.p || 0), Number(att.n || 0));
-    const kpiScore = round1(completion * 0.5 + attendance * 0.2 + Number(sop.a || 0) * 0.3);
-
-    const existing = get('SELECT * FROM performance_reviews WHERE tenant_id = ? AND user_id = ? AND period_month = ?',
-      [tenantId, u.id, month]);
-    const reviewId = existing?.id || uuid();
-
-    if (existing) {
-      run(
-        `UPDATE performance_reviews SET items_assigned = ?, items_completed = ?, items_on_time = ?,
-           completion_pct = ?, attendance_pct = ?, kpi_score = ?, updated_at = ? WHERE id = ?`,
-        [Number(items.assigned || 0), Number(items.done || 0), Number(items.on_time || 0),
-          completion, attendance, kpiScore, nowIso(), reviewId],
-      );
-    } else {
-      run(
-        `INSERT INTO performance_reviews (id, tenant_id, user_id, period_month, items_assigned,
-           items_completed, items_on_time, completion_pct, attendance_pct, kpi_score, status,
-           reviewer_id, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?)`,
-        [reviewId, tenantId, u.id, month, Number(items.assigned || 0), Number(items.done || 0),
-          Number(items.on_time || 0), completion, attendance, kpiScore, u.manager_id, nowIso(), nowIso()],
-      );
-    }
-
-    run('DELETE FROM performance_kpi_scores WHERE review_id = ?', [reviewId]);
-    const kpis = all(
-      `SELECT * FROM kpis WHERE tenant_id = ? AND deleted_at IS NULL AND active = 1
-         AND (applies_role IS NULL OR applies_role = ?)`,
-      [tenantId, u.role],
-    );
-    for (const k of kpis) {
-      const actual = {
-        'action_items.completion': completion,
-        'action_items.on_time': pct(Number(items.on_time || 0), Number(items.done || 0)),
-        'attendance.pct': attendance,
-        'sop.adherence': round1(Number(sop.a || 0)),
-      }[k.source] ?? null;
-      run(
-        `INSERT INTO performance_kpi_scores (id, tenant_id, review_id, kpi_id, kpi_name, target_value,
-           actual_value, achievement_pct, weight, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [uuid(), tenantId, reviewId, k.id, k.name, k.target_value, actual,
-          actual != null && k.target_value ? round1((actual / k.target_value) * 100) : null,
-          k.weight, nowIso()],
-      );
-    }
-    n++;
-  }
-
-  audit(req, { entity: 'performance_review', action: 'create', after: { generated: n, month } });
-  return ok(res, { generated: n, month });
+  const result = performance.generateReviews(req.auth.tenantId, month, onlyUser ? [onlyUser] : null);
+  audit(req, { entity: 'performance_review', action: 'create', after: { generated: result.generated, month } });
+  return ok(res, { generated: result.generated, month, period: result.period });
 });
 
 router.patch('/performance/:id', requires('hr_performance', 'edit'), (req, res) => {
   const body = validate(z.object({
-    manager_rating: z.number().min(1).max(5).optional(),
-    strengths: z.string().optional().nullable(),
-    improvements: z.string().optional().nullable(),
-    status: z.enum(['draft', 'submitted', 'acknowledged']).optional(),
+    manager_rating: z.number().int().min(1).max(5).optional(),
+    strengths: z.string().max(4000).optional().nullable(),
+    improvements: z.string().max(4000).optional().nullable(),
+    status: z.enum(['draft', 'submitted']).optional(),
   }), req.body);
 
   const r = repo('performance_reviews', req.auth.tenantId);
   const before = r.findById(req.params.id);
   if (!before) throw notFound('Performance review');
+  const subject = get('SELECT id, name, manager_id FROM users WHERE id = ?', [before.user_id]);
+  if (!canRate(req.auth, subject)) {
+    throw forbidden(subject.id === req.auth.userId
+      ? 'You cannot review yourself - your own card is rated by your manager or the Owner'
+      : 'Only their reporting manager, the Owner or HR can review this person');
+  }
 
   const patch = { ...body, updated_at: nowIso() };
   if (body.manager_rating != null) {
-    // Overall blends the data-derived KPI score with the manager's judgement.
-    patch.overall_score = round1(before.kpi_score * 0.7 + (body.manager_rating / 5) * 100 * 0.3);
+    const { rating_share: share } = performance.weightsFor(req.auth.tenantId);
+    patch.overall_score = performance.overallFor(before.system_score ?? before.kpi_score, body.manager_rating, share);
+    patch.band = performance.bandFor(patch.overall_score, performance.parseDetail(before.pillars).coverage_pct ?? 100);
     patch.reviewed_at = nowIso();
     patch.reviewer_id = req.auth.userId;
   }
 
   const after = r.update(req.params.id, patch);
+  if (body.status === 'submitted' && before.status !== 'submitted') {
+    notifyMany({
+      tenantId: req.auth.tenantId,
+      userIds: [before.user_id],
+      eventKey: 'performance.reviewed',
+      vars: { period: before.period_month, reviewer: req.auth.name, score: after.overall_score ?? '—' },
+      link: '/hr?tab=performance',
+      channels: ['in_app'],
+      dedupeKey: `perf_reviewed:${after.id}`,
+    }).catch(() => {});
+  }
   audit(req, { entity: 'performance_review', entityId: after.id, action: 'update', before, after });
-  return ok(res, after);
+  return ok(res, shapeReview(after));
+});
+
+/** The person reviewed confirms they have read it. Only they can. */
+router.post('/performance/:id/acknowledge', requires('hr_performance', 'view'), (req, res) => {
+  const r = repo('performance_reviews', req.auth.tenantId);
+  const before = r.findById(req.params.id);
+  if (!before) throw notFound('Performance review');
+  if (before.user_id !== req.auth.userId) throw forbidden('Only the person reviewed can acknowledge their review');
+  if (before.status !== 'submitted') throw badRequest('There is nothing to acknowledge until your manager submits the review');
+  const after = r.update(before.id, { status: 'acknowledged', acknowledged_at: nowIso(), updated_at: nowIso() });
+  audit(req, { entity: 'performance_review', entityId: after.id, action: 'update', before, after });
+  return ok(res, shapeReview(after));
 });
 
 router.get('/performance/history/:userId', requires('hr_performance', 'view'), (req, res) => {
-  if (req.params.userId !== req.auth.userId && !can(req.auth, 'hr_performance', 'approve')) throw forbidden();
+  if (!canSeePerformance(req.auth, req.params.userId)) throw forbidden();
   return ok(res, all(
-    `SELECT period_month, completion_pct, attendance_pct, kpi_score, manager_rating, overall_score, status
+    `SELECT period_month, completion_pct, attendance_pct, kpi_score, system_score, manager_rating,
+            overall_score, band, scorecard_kind, status
        FROM performance_reviews WHERE tenant_id = ? AND user_id = ? ORDER BY period_month DESC LIMIT 24`,
     [req.auth.tenantId, req.params.userId],
   ).reverse());

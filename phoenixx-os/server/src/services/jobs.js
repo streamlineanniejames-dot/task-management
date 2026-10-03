@@ -15,6 +15,7 @@ import { flushWebhooks } from './webhooks.js';
 import { notifyRole, notifyMany } from './notifications.js';
 import { createInvoiceFromTemplate } from './invoicing.js';
 import { filersFor, isWeekOff } from './projectOversight.js';
+import { generateReviews, previousMonth } from './performance.js';
 
 /**
  * In-process job runner.
@@ -422,6 +423,19 @@ export const projectOwnerDigest = record('projects.owner_digest', async () => {
   return sent;
 });
 
+// --------------------------------------------- C3: monthly performance close
+/**
+ * The 1st of the month: last month's scorecards are computed and stored for
+ * every workspace, ready for managers to rate. Re-running is safe - ratings,
+ * notes and status are kept.
+ */
+export const monthlyPerformance = record('performance.monthly', async () => {
+  const month = previousMonth();
+  let n = 0;
+  for (const tenantId of activeTenants()) n += generateReviews(tenantId, month).generated;
+  return n;
+});
+
 // -------------------------------------------------------- G1: scheduled reports
 export const scheduledReports = record('reports.scheduled', async () => {
   let n = 0;
@@ -602,6 +616,7 @@ const JOBS = [
   { key: 'reports.scheduled', atHourUtc: 3, fn: scheduledReports },
   { key: 'reports.weekly_escalation', atHourUtc: 4, onDayOfWeek: 1, fn: weeklyEscalationReport },
   { key: 'close.monthly', atHourUtc: 4, onDayOfMonth: 1, fn: monthlyClose },
+  { key: 'performance.monthly', atHourUtc: 4, onDayOfMonth: 1, fn: monthlyPerformance }, // 09:30 IST
 ];
 
 const lastRun = new Map();
@@ -662,5 +677,6 @@ export const JOB_REGISTRY = {
   'reports.scheduled': scheduledReports,
   'reports.weekly_escalation': weeklyEscalationReport,
   'close.monthly': monthlyClose,
+  'performance.monthly': monthlyPerformance,
   'webhooks.flush': () => flushWebhooks(),
 };

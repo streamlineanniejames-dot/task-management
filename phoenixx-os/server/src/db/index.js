@@ -269,6 +269,19 @@ const ADDED_COLUMNS = [
   // When the current session began, for a day with more than one: set on
   // checking in again after a check-out, NULL for an ordinary single session.
   ['attendance', 'session_started_at', 'TEXT'],
+  // Performance scorecards v2. `pillars` is the JSON breakdown - every pillar's
+  // score, weight, raw inputs and the records that pulled it down - so a score
+  // can be explained without recomputing it. `system_score` is the data half;
+  // `overall_score` blends in the manager's rating.
+  ['performance_reviews', 'scorecard_kind', 'TEXT'],
+  ['performance_reviews', 'system_score', 'REAL'],
+  ['performance_reviews', 'band', 'TEXT'],
+  ['performance_reviews', 'pillars', 'TEXT'],
+  ['performance_reviews', 'computed_at', 'TEXT'],
+  ['performance_reviews', 'period_end', 'TEXT'],
+  ['performance_reviews', 'acknowledged_at', 'TEXT'],
+  // Workspace overrides of the scorecard weights; NULL means the defaults.
+  ['tenants', 'performance_weights', 'TEXT'],
 ];
 
 function addColumns() {

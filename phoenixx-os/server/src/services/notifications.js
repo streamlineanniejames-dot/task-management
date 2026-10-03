@@ -126,6 +126,10 @@ export const DEFAULT_TEMPLATES = {
     subject: 'OVERDUE: {{title}}',
     body: '"{{title}}" was due {{due}} and is now {{overdue_for}} overdue.',
   },
+  'performance.reviewed': {
+    subject: 'Your {{period}} performance review is ready',
+    body: '{{reviewer}} has reviewed your {{period}} scorecard. Overall {{score}}. Open it to read the notes and acknowledge.',
+  },
   'project.update_filed': {
     subject: '{{project}}: {{status_label}} · {{progress}}%',
     body: '{{person}} ({{seat}}) filed today\'s update on {{project}}. Completed: {{completed}}. Next: {{next}}.',
