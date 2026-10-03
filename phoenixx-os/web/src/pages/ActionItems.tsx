@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Filter, Download, ArrowUpRight, X, MessageSquare, Paperclip, Repeat,
   CheckCircle2, ListChecks, LayoutGrid, List, AlertTriangle, Trash2, Users2, User,
-  ClipboardList, CircleAlert, PencilLine, Clock, ShieldCheck, Undo2, History, Mic, Square,
+  ClipboardList, CircleAlert, PencilLine, Clock, ShieldCheck, Undo2, History, Mic, Square, Volume2,
 } from 'lucide-react';
 import { api } from '../lib/api';
-import { parseVoiceTask, useSpeech, type VoiceParse } from '../lib/voiceTask';
+import { parseVoiceTask, useSpeech, voiceAssistantSupported, type VoiceParse } from '../lib/voiceTask';
+import { VoiceAssistant } from '../components/VoiceAssistant';
 import { useAuth } from '../lib/auth';
 import {
   date, relative, dateTime, clockTime, dueLabel, dueFull, isOverdue,
@@ -876,7 +877,7 @@ function VoiceTaskPanel({ onHeard, onPick, heard }: {
         </button>
         <div className="min-w-0 flex-1">
           <p className="text-[13.5px] font-medium text-ink">
-            {speech.listening ? 'Listening… tap to finish' : heard ? 'Speak again to redo' : 'Speak the task'}
+            {speech.listening ? 'Listening… tap to finish' : heard ? 'Speak again to redo' : 'Or say it all in one go'}
           </p>
           <p className="text-[12.5px] text-subtle truncate">
             {speech.listening
@@ -947,19 +948,21 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
   });
 
   const create = useMutation({
-    mutationFn: () => api.post('/action-items', {
-      title: form.title.trim(),
-      description: form.description || null,
-      owner_id: form.owner_id || null,
-      client_id: form.client_id || null,
-      category_id: form.category_id || null,
-      priority: form.priority,
-      due_date: form.due_date || null,
-      due_time: form.due_date ? (form.due_time || null) : null,
-      recurrence: form.recurrence === 'none' ? null : form.recurrence,
-      estimate_minutes: form.estimate_minutes ? Number(form.estimate_minutes) : null,
+    // The voice assistant passes the finished form in, since its last answers
+    // may not have rendered yet when it says "create".
+    mutationFn: (override?: typeof form) => { const f = override || form; return api.post('/action-items', {
+      title: f.title.trim(),
+      description: f.description || null,
+      owner_id: f.owner_id || null,
+      client_id: f.client_id || null,
+      category_id: f.category_id || null,
+      priority: f.priority,
+      due_date: f.due_date || null,
+      due_time: f.due_date ? (f.due_time || null) : null,
+      recurrence: f.recurrence === 'none' ? null : f.recurrence,
+      estimate_minutes: f.estimate_minutes ? Number(f.estimate_minutes) : null,
       ...(mode === 'team' && projectId ? { assign_from_project_id: projectId } : {}),
-    }),
+    }); },
     onSuccess: () => {
       toast.success('Action item created.');
       qc.invalidateQueries({ queryKey: ['action-items'] });
@@ -981,6 +984,13 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
 
   // Voice: one sentence fills every field it can name; the rest stays as typed.
   const [heard, setHeard] = useState<{ text: string; parsed: VoiceParse } | null>(null);
+  // Guided mode: the assistant asks each question aloud and fills the answer in.
+  const [interview, setInterview] = useState(false);
+  const formRef = useRef(form);
+  formRef.current = form;
+  const voicePeople = () => (mode === 'team'
+    ? (team || []).map((m: any) => ({ id: m.user_id, name: m.name }))
+    : meta?.directory || []);
   const applyVoice = (text: string) => {
     const people = mode === 'team'
       ? (team || []).map((m: any) => ({ id: m.user_id, name: m.name }))
@@ -1016,17 +1026,41 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
           <Button variant="primary" loading={create.isPending}
             disabled={form.title.trim().length < 2 || !!dueProblem || !form.owner_id
               || (mode === 'team' && !projectId)}
-            onClick={() => create.mutate()}>Create item</Button>
+            onClick={() => create.mutate(undefined)}>Create item</Button>
         </>
       }>
       <div className="space-y-4">
-        <VoiceTaskPanel onHeard={applyVoice} heard={heard}
+        {voiceAssistantSupported && !interview && (
+          <button type="button" onClick={() => { setHeard(null); setInterview(true); }}
+            className="flex w-full items-center gap-3 rounded-lg border border-[var(--brand)] bg-brand-soft p-3 text-left
+                       cursor-pointer transition-colors duration-150 hover:brightness-[0.98]">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--brand)] text-[var(--brand-contrast)]">
+              <Volume2 size={18} />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[13.5px] font-medium text-ink">Create by voice</span>
+              <span className="block text-[12.5px] text-subtle">
+                I’ll ask the title, who it’s for, priority and deadline — you just answer
+              </span>
+            </span>
+          </button>
+        )}
+        {interview && (
+          <VoiceAssistant
+            getPeople={voicePeople}
+            selfId={user?.id}
+            put={(patch) => { setForm((f) => ({ ...f, ...patch })); setErrors({}); }}
+            onCreate={(d) => create.mutate({ ...formRef.current, ...d })}
+            onEnd={() => setInterview(false)}
+          />
+        )}
+        {!interview && <VoiceTaskPanel onHeard={applyVoice} heard={heard}
           onPick={(id) => {
             const who = [...(meta?.directory || []), ...(team || []).map((m: any) => ({ id: m.user_id, name: m.name }))]
               .find((u: any) => u.id === id);
             set('owner_id', id);
             setHeard((h) => h && ({ ...h, parsed: { ...h.parsed, owner_id: id, owner_name: who?.name } }));
-          }} />
+          }} />}
         <Field label="Title" required error={errors.title}>
           <Input value={form.title} onChange={(e) => set('title', e.target.value)}
             placeholder="Send the August performance report to Cotton India" autoFocus />

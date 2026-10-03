@@ -13,6 +13,78 @@ const Recognition: any = typeof window !== 'undefined'
   : null;
 
 export const speechSupported = !!Recognition;
+export const voiceAssistantSupported = !!Recognition
+  && typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+/* ================================================= ONE QUESTION, ONE ANSWER */
+/**
+ * The pieces a spoken conversation is built from: say a line, hear one reply.
+ * Each returns a handle that can be stopped mid-flight, so the Stop button and
+ * closing the form both cut the assistant off at once.
+ */
+function pickVoice() {
+  const voices = window.speechSynthesis.getVoices();
+  return voices.find((v) => v.lang === 'en-IN')
+    || voices.find((v) => /^en[-_]GB/i.test(v.lang))
+    || voices.find((v) => /^en/i.test(v.lang));
+}
+
+export function speak(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const voice = pickVoice();
+    if (voice) u.voice = voice;
+    u.lang = voice?.lang || 'en-IN';
+    u.rate = 1.05;
+    let done = false;
+    const finish = () => { if (!done) { done = true; clearTimeout(guard); resolve(); } };
+    u.onend = finish;
+    u.onerror = finish;
+    // Chrome now and then never fires onend; never leave the assistant hanging.
+    const guard = setTimeout(finish, 2500 + text.length * 90);
+    synth.speak(u);
+  });
+}
+
+export function stopSpeaking() {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
+export type Listening = { result: Promise<string>; abort: () => void };
+
+/**
+ * Hear a single reply. Resolves with what was said ('' for silence); rejects
+ * only when the microphone is refused, since then asking again is pointless.
+ */
+export function listenOnce(onInterim: (text: string) => void, lang = 'en-IN'): Listening {
+  const r = new Recognition();
+  r.lang = lang;
+  r.continuous = false;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+  let text = '';
+  let failure: string | null = null;
+  const result = new Promise<string>((resolve, reject) => {
+    r.onresult = (e: any) => {
+      let finalPart = '';
+      let live = '';
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalPart += e.results[i][0].transcript;
+        else live += e.results[i][0].transcript;
+      }
+      text = finalPart || text;
+      onInterim((finalPart + live).trim());
+    };
+    r.onerror = (e: any) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') failure = 'mic-blocked';
+    };
+    r.onend = () => (failure ? reject(new Error(failure)) : resolve(text.trim()));
+  });
+  try { r.start(); } catch { /* already started */ }
+  return { result, abort: () => { try { r.abort(); } catch { /* gone */ } } };
+}
 
 export function useSpeech({ lang = 'en-IN', onFinal }: {
   lang?: string;
@@ -77,7 +149,7 @@ export function useSpeech({ lang = 'en-IN', onFinal }: {
  * it is instant, free, and when it guesses wrong the form is right there to fix.
  * Anything it cannot place stays in the title, so nothing said is lost.
  */
-type Named = { id: string; name: string };
+export type Named = { id: string; name: string };
 
 export type VoiceParse = {
   title: string;
@@ -160,13 +232,13 @@ const NOT_NAMES = new Set(('the and for with this that task item today tomorrow 
   + 'friday saturday sunday morning evening priority urgent high low medium every daily weekly monthly '
   + 'regarding about deadline deadlines review check email follow before after hours minutes').split(' '));
 
-type PersonHit = { item: Named; match: string; score: number };
+export type PersonHit = { item: Named; match: string; score: number };
 
 /**
  * Every person the sentence could mean, best first. Full name beats first name
  * beats a sounds-like match; a tie between two people is left for a human.
  */
-function matchPeople(text: string, list: Named[]): PersonHit[] {
+export function matchPeople(text: string, list: Named[]): PersonHit[] {
   const words = [...text.matchAll(/[A-Za-z]+/g)].map((m) => ({ w: m[0], i: m.index! }));
   const best = new Map<string, PersonHit>();
   const offer = (hit: PersonHit) => {
@@ -203,7 +275,7 @@ function matchPeople(text: string, list: Named[]): PersonHit[] {
 }
 
 /** For "Did you mean…" when nothing matched outright: the closest-sounding names. */
-function nearestPeople(word: string, list: Named[], n = 3) {
+export function nearestPeople(word: string, list: Named[], n = 3) {
   const sk = soundKey(word);
   return list
     .map((item) => ({
