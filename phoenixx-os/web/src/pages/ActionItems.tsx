@@ -4,9 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Filter, Download, ArrowUpRight, X, MessageSquare, Paperclip, Repeat,
   CheckCircle2, ListChecks, LayoutGrid, List, AlertTriangle, Trash2, Users2, User,
-  ClipboardList, CircleAlert, PencilLine, Clock, ShieldCheck, Undo2, History,
+  ClipboardList, CircleAlert, PencilLine, Clock, ShieldCheck, Undo2, History, Mic, Square,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { parseVoiceTask, useSpeech, type VoiceParse } from '../lib/voiceTask';
 import { useAuth } from '../lib/auth';
 import {
   date, relative, dateTime, clockTime, dueLabel, dueFull, isOverdue,
@@ -833,6 +834,80 @@ function ValidateModal({ item, onClose, onDone }: { item: any; onClose: () => vo
 }
 
 /* --------------------------------------------------------------- create */
+/**
+ * Say the whole task in one breath - who, what, by when - and the form fills
+ * itself. What was understood is shown back as chips so a wrong guess is caught
+ * before Create, not after.
+ */
+function VoiceTaskPanel({ onHeard, heard }: {
+  onHeard: (text: string) => void;
+  heard: { text: string; parsed: VoiceParse } | null;
+}) {
+  const speech = useSpeech({ onFinal: onHeard });
+  if (!speech.supported) return null;
+  const p = heard?.parsed;
+
+  const chips = p ? [
+    p.owner_name && `Assigned to ${p.owner_name}`,
+    p.client_name && `Client: ${p.client_name}`,
+    p.category_name && `Category: ${p.category_name}`,
+    p.priority && `Priority: ${p.priority}`,
+    p.due_date && `Due ${date(p.due_date)}${p.due_time ? ` · ${clockTime(p.due_time)}` : ''}`,
+    p.recurrence && `Repeats ${p.recurrence}`,
+    p.estimate_minutes && `Effort ${p.estimate_minutes} min`,
+  ].filter(Boolean) as string[] : [];
+
+  return (
+    <div className={cx('rounded-lg border p-3 transition-colors duration-150',
+      speech.listening ? 'border-[var(--negative)] bg-[color-mix(in_srgb,var(--negative)_6%,transparent)]'
+        : 'border-dashed border-line-strong bg-sunken')}>
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={speech.listening ? speech.stop : speech.start}
+          aria-label={speech.listening ? 'Stop listening' : 'Speak the task'}
+          className={cx('relative grid h-10 w-10 shrink-0 place-items-center rounded-full cursor-pointer',
+            'transition-colors duration-150',
+            speech.listening ? 'bg-[var(--negative)] text-[var(--negative-contrast)]'
+              : 'bg-[var(--brand)] text-[var(--brand-contrast)] hover:brightness-110')}>
+          {speech.listening && (
+            <span className="absolute inset-0 rounded-full bg-[var(--negative)] opacity-40 animate-ping" aria-hidden />
+          )}
+          {speech.listening ? <Square size={14} className="relative" /> : <Mic size={18} />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[13.5px] font-medium text-ink">
+            {speech.listening ? 'Listening… tap to finish' : heard ? 'Speak again to redo' : 'Speak the task'}
+          </p>
+          <p className="text-[12.5px] text-subtle truncate">
+            {speech.listening
+              ? (speech.interim || 'Say who, what and by when')
+              : '“Ask Adithya to send the August report to Cotton India by Friday 5 pm, high priority”'}
+          </p>
+        </div>
+      </div>
+
+      {speech.error && <p className="mt-2 text-[12.5px] text-[var(--negative)]">{speech.error}</p>}
+
+      {heard && !speech.listening && (
+        <div className="mt-2.5 border-t border-line pt-2.5">
+          <p className="text-[12.5px] text-muted"><span className="text-subtle">Heard:</span> “{heard.text}”</p>
+          {!!chips.length && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {chips.map((c) => <Badge key={c} tone="brand">{c}</Badge>)}
+            </div>
+          )}
+          {!p?.owner_id && (
+            <p className="mt-1.5 text-[12.5px] text-[var(--warning)]">
+              {p?.unmatchedPerson
+                ? `No one called “${p.unmatchedPerson}” in the directory — pick the person below.`
+                : 'No person named — pick who it goes to below.'}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -888,6 +963,34 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
   // way to learn it.
   const dueProblem = dueError(form.due_date, form.due_time);
 
+  // Voice: one sentence fills every field it can name; the rest stays as typed.
+  const [heard, setHeard] = useState<{ text: string; parsed: VoiceParse } | null>(null);
+  const applyVoice = (text: string) => {
+    const people = mode === 'team'
+      ? (team || []).map((m: any) => ({ id: m.user_id, name: m.name }))
+      : meta?.directory || [];
+    const p = parseVoiceTask(text, {
+      people, clients: meta?.clients || [], categories: meta?.categories || [], selfId: user?.id,
+    });
+    setForm((f) => ({
+      ...f,
+      title: p.title || f.title,
+      owner_id: p.owner_id ?? f.owner_id,
+      client_id: p.client_id ?? f.client_id,
+      category_id: p.category_id ?? f.category_id,
+      priority: p.priority ?? f.priority,
+      recurrence: p.recurrence ?? f.recurrence,
+      estimate_minutes: p.estimate_minutes ?? f.estimate_minutes,
+      due_date: p.due_date ?? f.due_date,
+      due_time: p.due_date ? (p.due_time ?? '') : f.due_time,
+    }));
+    setErrors({});
+    setHeard({ text, parsed: p });
+  };
+  const describe = useSpeech({
+    onFinal: (text) => setForm((f) => ({ ...f, description: f.description ? `${f.description.trimEnd()} ${text}` : text })),
+  });
+
   return (
     <Modal open onClose={onClose} title="New action item"
       subtitle="Who is responsible, by when — the assignee, due date and category drive reminders and escalation"
@@ -901,13 +1004,31 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
         </>
       }>
       <div className="space-y-4">
+        <VoiceTaskPanel onHeard={applyVoice} heard={heard} />
         <Field label="Title" required error={errors.title}>
           <Input value={form.title} onChange={(e) => set('title', e.target.value)}
             placeholder="Send the August performance report to Cotton India" autoFocus />
         </Field>
         <Field label="Description">
-          <Textarea value={form.description} onChange={(e) => set('description', e.target.value)}
-            placeholder="Context, links, what 'done' looks like…" />
+          <div className="relative">
+            <Textarea value={describe.listening && describe.interim
+              ? `${form.description ? `${form.description.trimEnd()} ` : ''}${describe.interim}` : form.description}
+              onChange={(e) => set('description', e.target.value)} readOnly={describe.listening}
+              placeholder="Context, links, what 'done' looks like…" />
+            {describe.supported && (
+              <button type="button"
+                onClick={describe.listening ? describe.stop : describe.start}
+                title={describe.listening ? 'Stop dictating' : 'Dictate the description'}
+                aria-label={describe.listening ? 'Stop dictating' : 'Dictate the description'}
+                className={cx('absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-md cursor-pointer',
+                  'transition-colors duration-150',
+                  describe.listening ? 'bg-[var(--negative)] text-[var(--negative-contrast)] animate-pulse'
+                    : 'text-subtle hover:bg-sunken hover:text-ink')}>
+                {describe.listening ? <Square size={12} /> : <Mic size={14} />}
+              </button>
+            )}
+          </div>
+          {describe.error && <p className="mt-1 text-[12.5px] text-[var(--negative)]">{describe.error}</p>}
         </Field>
         {/* ------------------------------------------------- assignment */}
         <div className="rounded-lg border border-line bg-sunken p-3">
