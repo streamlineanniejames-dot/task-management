@@ -839,8 +839,9 @@ function ValidateModal({ item, onClose, onDone }: { item: any; onClose: () => vo
  * itself. What was understood is shown back as chips so a wrong guess is caught
  * before Create, not after.
  */
-function VoiceTaskPanel({ onHeard, heard }: {
+function VoiceTaskPanel({ onHeard, onPick, heard }: {
   onHeard: (text: string) => void;
+  onPick: (userId: string) => void;
   heard: { text: string; parsed: VoiceParse } | null;
 }) {
   const speech = useSpeech({ onFinal: onHeard });
@@ -897,10 +898,25 @@ function VoiceTaskPanel({ onHeard, heard }: {
           )}
           {!p?.owner_id && (
             <p className="mt-1.5 text-[12.5px] text-[var(--warning)]">
-              {p?.unmatchedPerson
-                ? `No one called “${p.unmatchedPerson}” in the directory — pick the person below.`
-                : 'No person named — pick who it goes to below.'}
+              {p?.selfName
+                ? `“${p.selfName}” sounds like you — action items go to someone else (your own to-dos live on My Day).`
+                : p?.candidates?.length ? 'Who did you mean?'
+                  : p?.unmatchedPerson
+                    ? `No one called “${p.unmatchedPerson}” in the directory — pick the person below.`
+                    : 'No person named — pick who it goes to below.'}
             </p>
+          )}
+          {!p?.owner_id && !!p?.candidates?.length && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {p.candidates.map((c) => (
+                <button key={c.id} type="button" onClick={() => onPick(c.id)}
+                  className="flex items-center gap-1.5 rounded-full border border-line-strong bg-raised py-0.5 pl-0.5 pr-2.5
+                             text-[12.5px] text-ink cursor-pointer transition-colors duration-150 hover:border-[var(--brand)]
+                             hover:bg-brand-soft">
+                  <Avatar name={c.name} size={20} />{c.name}
+                </button>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -1004,7 +1020,13 @@ function CreateItemModal({ meta, onClose }: { meta: any; onClose: () => void }) 
         </>
       }>
       <div className="space-y-4">
-        <VoiceTaskPanel onHeard={applyVoice} heard={heard} />
+        <VoiceTaskPanel onHeard={applyVoice} heard={heard}
+          onPick={(id) => {
+            const who = [...(meta?.directory || []), ...(team || []).map((m: any) => ({ id: m.user_id, name: m.name }))]
+              .find((u: any) => u.id === id);
+            set('owner_id', id);
+            setHeard((h) => h && ({ ...h, parsed: { ...h.parsed, owner_id: id, owner_name: who?.name } }));
+          }} />
         <Field label="Title" required error={errors.title}>
           <Input value={form.title} onChange={(e) => set('title', e.target.value)}
             placeholder="Send the August performance report to Cotton India" autoFocus />

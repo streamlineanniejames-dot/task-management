@@ -90,6 +90,10 @@ export type VoiceParse = {
   recurrence?: string;
   estimate_minutes?: string;
   unmatchedPerson?: string;
+  /** People it might mean, when it could not be sure enough to pick one. */
+  candidates?: Named[];
+  /** The name heard was the speaker's own - action items go to somebody else. */
+  selfName?: string;
 };
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -124,6 +128,92 @@ function findNamed(text: string, list: Named[], { firstName = false } = {}) {
     if (firstName) consider(item, item.name.trim().split(/\s+/)[0]);
   }
   return best as { item: Named; match: string } | null;
+}
+
+/**
+ * Speech engines spell Indian names however they like - Ranjit / Ranjith,
+ * Aditya / Adithya, Sreeja / Sreja. Fold the usual variations away before
+ * comparing: aspirated consonants, doubled letters, long vowels.
+ */
+function soundKey(s: string) {
+  return s.toLowerCase().replace(/[^a-z]/g, '')
+    .replace(/([kgcjtdpbs])h/g, '$1').replace(/ee/g, 'i').replace(/oo/g, 'u')
+    .replace(/w/g, 'v').replace(/z/g, 's').replace(/(.)\1+/g, '$1').replace(/h$/, '');
+}
+
+function lev(a: string, b: string) {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
+}
+
+// Words a fuzzy match must never land on, however close they sound to a name.
+const NOT_NAMES = new Set(('the and for with this that task item today tomorrow report send call make '
+  + 'take have need should please update project client meeting monday tuesday wednesday thursday '
+  + 'friday saturday sunday morning evening priority urgent high low medium every daily weekly monthly '
+  + 'regarding about deadline deadlines review check email follow before after hours minutes').split(' '));
+
+type PersonHit = { item: Named; match: string; score: number };
+
+/**
+ * Every person the sentence could mean, best first. Full name beats first name
+ * beats a sounds-like match; a tie between two people is left for a human.
+ */
+function matchPeople(text: string, list: Named[]): PersonHit[] {
+  const words = [...text.matchAll(/[A-Za-z]+/g)].map((m) => ({ w: m[0], i: m.index! }));
+  const best = new Map<string, PersonHit>();
+  const offer = (hit: PersonHit) => {
+    const had = best.get(hit.item.id);
+    if (!had || hit.score > had.score) best.set(hit.item.id, hit);
+  };
+  for (const item of list) {
+    const parts = item.name.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) continue;
+    const keys = parts.map(soundKey);
+    for (let k = 0; k < words.length; k++) {
+      const span = (n: number) => text.slice(words[k].i, words[k + n - 1].i + words[k + n - 1].w.length);
+      // Full name, spelt as stored or near enough.
+      if (parts.length > 1 && k + parts.length <= words.length) {
+        const said = words.slice(k, k + parts.length).map((x) => soundKey(x.w));
+        if (said.every((s, j) => s === keys[j] || (s.length >= 4 && lev(s, keys[j]) <= 1))) {
+          offer({ item, match: span(parts.length), score: 4 });
+        }
+      }
+      const w = words[k].w;
+      if (w.length < 3 || NOT_NAMES.has(w.toLowerCase())) continue;
+      const sk = soundKey(w);
+      parts.forEach((part, j) => {
+        const isFirst = j === 0;
+        if (w.toLowerCase() === part.toLowerCase()) offer({ item, match: w, score: isFirst ? 3 : 2.5 });
+        else if (sk === keys[j] && sk.length >= 3) offer({ item, match: w, score: isFirst ? 2.5 : 2 });
+        else if (sk.length >= 4 && lev(sk, keys[j]) <= (sk.length >= 7 ? 2 : 1)) {
+          offer({ item, match: w, score: isFirst ? 1.5 : 1 });
+        }
+      });
+    }
+  }
+  return [...best.values()].sort((a, b) => b.score - a.score);
+}
+
+/** For "Did you mean…" when nothing matched outright: the closest-sounding names. */
+function nearestPeople(word: string, list: Named[], n = 3) {
+  const sk = soundKey(word);
+  return list
+    .map((item) => ({
+      item,
+      d: Math.min(...item.name.split(/\s+/).map((p) => lev(sk, soundKey(p)) / Math.max(sk.length, 1))),
+    }))
+    .filter((x) => x.d <= 0.5)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, n)
+    .map((x) => x.item);
 }
 
 function toTime(hRaw: string, mRaw: string | undefined, ampm: string | undefined) {
@@ -260,18 +350,37 @@ export function parseVoiceTask(raw: string, ctx: {
   if (out.due_time && !out.due_date) out.due_date = today;
 
   // -------------------------------------------------------------- assignee
-  const people = ctx.people.filter((p) => p.id !== ctx.selfId);
-  const who = findNamed(t, people, { firstName: true });
-  if (who) {
-    out.owner_id = who.item.id;
-    out.owner_name = who.item.name;
-    const n = esc(who.match);
-    // "assign to X", "ask X to", "tell X to", "X should", "for X" - drop the
+  const hits = matchPeople(t, ctx.people);
+  const others = hits.filter((h) => h.item.id !== ctx.selfId);
+  const selfHit = hits.find((h) => h.item.id === ctx.selfId);
+  const top = others[0];
+  // Sure enough to pick: a clear winner that beats any other person outright,
+  // and is at least as strong a match as the speaker's own name.
+  const clear = top && (!others[1] || others[1].score < top.score)
+    && (!selfHit || selfHit.score < top.score);
+  const dropName = (match: string) => {
+    // "assign to X", "ask X to", "task for X", "X should" - drop the
     // instruction around the name, keep the work itself.
-    cut(new RegExp(`\\b(?:(?:please\\s+)?(?:assign(?:ed)?|give|hand|allot)\\s+(?:this|it|the task)?\\s*to|ask|tell|remind|get|have|for|with|owner(?:\\s+is)?|assignee(?:\\s+is)?)?\\s*${n}\\b(?:\\s+(?:to|should|needs? to|has to|must|will|can you|please))?`, 'i'));
+    cut(new RegExp(`\\b(?:(?:an?\\s+)?task\\s+for|(?:please\\s+)?(?:assign(?:ed)?|give|hand|allot)\\s+(?:this|it|the task)?\\s*to|ask|tell|remind|get|have|for|with|owner(?:\\s+is)?|assignee(?:\\s+is)?)?\\s*${esc(match)}\\b(?:\\s+(?:to|should|needs? to|has to|must|will|can you|please))?`, 'i'));
+  };
+  if (clear) {
+    out.owner_id = top.item.id;
+    out.owner_name = top.item.name;
+    dropName(top.match);
   } else {
-    const loose = t.match(/\b(?:assign(?:ed)?\s+(?:this\s+|it\s+)?to|ask|tell|remind)\s+([A-Za-z]+)/i);
-    if (loose) out.unmatchedPerson = loose[1];
+    if (selfHit && (!top || selfHit.score >= top.score)) out.selfName = selfHit.match;
+    if (others.length) {
+      out.candidates = others.slice(0, 4).map((h) => h.item);
+      dropName((selfHit && out.selfName ? selfHit : others[0]).match);
+    } else {
+      const loose = t.match(/\b(?:(?:an?\s+)?task\s+for|assign(?:ed)?\s+(?:this\s+|it\s+)?to|ask|tell|remind|for)\s+([A-Za-z]{3,})/i);
+      if (loose && !NOT_NAMES.has(loose[1].toLowerCase())) {
+        if (!out.selfName) out.unmatchedPerson = loose[1];
+        const near = nearestPeople(loose[1], ctx.people.filter((p) => p.id !== ctx.selfId));
+        if (near.length) out.candidates = near;
+      }
+      if (selfHit) dropName(selfHit.match);
+    }
   }
 
   // -------------------------------------------------------- client, category
@@ -288,7 +397,8 @@ export function parseVoiceTask(raw: string, ctx: {
     .replace(/\s+([,.])/g, '$1')
     .replace(/\s{2,}/g, ' ')
     .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
-    .replace(/^(?:to|and|that|the task is)\s+/i, '')
+    .replace(/^(?:an?\s+)?task\b\s*(?:is\s+)?/i, '')
+    .replace(/^(?:to|and|that|regarding|about|on)\s+/i, '')
     .replace(/\s+(?:and|by|on|at|to|for|with|due)$/i, '');
   if (!title) title = raw.trim();
   out.title = title.charAt(0).toUpperCase() + title.slice(1);
