@@ -286,6 +286,8 @@ const ADDED_COLUMNS = [
   ['projects', 'kind', "TEXT NOT NULL DEFAULT 'delivery'"],
   // Marketing thresholds and report times; NULL means the defaults.
   ['tenants', 'marketing_settings', 'TEXT'],
+  // Tomorrow's To-Do schedule (times, working days, toggles); NULL means the defaults.
+  ['tenants', 'todo_settings', 'TEXT'],
   // A report about one project (the marketing reports) is only shown to the
   // people who can see that project.
   ['report_runs', 'project_id', 'TEXT'],

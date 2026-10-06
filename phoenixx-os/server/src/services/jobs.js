@@ -17,6 +17,7 @@ import { createInvoiceFromTemplate } from './invoicing.js';
 import { filersFor, isWeekOff } from './projectOversight.js';
 import { generateReviews, previousMonth } from './performance.js';
 import { marketingTick } from './marketing.js';
+import { todoTick } from './todoPlan.js';
 
 /**
  * In-process job runner.
@@ -445,6 +446,13 @@ export const monthlyPerformance = record('performance.monthly', async () => {
  */
 export const marketingClock = record('marketing.tick', () => marketingTick(activeTenants()));
 
+// ------------------------------------------------ Tomorrow's To-Do: the clock
+/**
+ * Every minute: each workspace's schedule in Settings -> To-Do decides whether
+ * the open, reminder, overdue or escalation rung is due. See services/todoPlan.js.
+ */
+export const todoClock = record('todo.tick', () => todoTick(activeTenants()));
+
 // -------------------------------------------------------- G1: scheduled reports
 export const scheduledReports = record('reports.scheduled', async () => {
   let n = 0;
@@ -615,6 +623,7 @@ const JOBS = [
   { key: 'crm.follow_ups', everyMin: 60, fn: syncFollowUps },
   { key: 'webhooks.flush', everyMin: 1, fn: () => flushWebhooks() },
   { key: 'marketing.tick', everyMin: 15, fn: marketingClock },
+  { key: 'todo.tick', everyMin: 1, fn: todoClock },
   { key: 'action_items.recurring', atHourUtc: 0, fn: rollRecurringActionItems },
   { key: 'invoices.recurring', atHourUtc: 1, fn: runRecurringInvoices },
   { key: 'crm.scores', atHourUtc: 2, fn: recomputeScores },
@@ -690,4 +699,5 @@ export const JOB_REGISTRY = {
   'performance.monthly': monthlyPerformance,
   'webhooks.flush': () => flushWebhooks(),
   'marketing.tick': marketingClock,
+  'todo.tick': todoClock,
 };

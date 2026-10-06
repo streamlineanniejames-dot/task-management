@@ -1809,3 +1809,31 @@ CREATE TABLE IF NOT EXISTS dead_leads (
   revive_note TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_dead_project ON dead_leads(tenant_id, project_id, marked_at DESC);
+
+-- ------------------------------------------------- TOMORROW'S TO-DO
+-- The plan each person files for their next working day. One row per person
+-- per target day (the unique key stops a second active plan). The schedule
+-- clock creates the row itself when it has to record OVERDUE, so "who missed"
+-- is a query over this table rather than an absence. `reporting_person_id` is
+-- copied in when the plan is filed: reassigning someone's manager routes their
+-- next plan to the new person without rewriting old ones.
+CREATE TABLE IF NOT EXISTS todo_submissions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  reporting_person_id TEXT REFERENCES users(id),
+  todo_date TEXT NOT NULL,                 -- YYYY-MM-DD, the working day the plan is for
+  plan_date TEXT NOT NULL,                 -- YYYY-MM-DD, the day it was due to be filed
+  status TEXT NOT NULL DEFAULT 'DRAFT',    -- DRAFT|SUBMITTED|UNDER_REVIEW|APPROVED|CHANGES_REQUESTED|LATE|OVERDUE|MISSED
+  deadline_at TEXT,                        -- UTC instant of the deadline it was held to
+  submitted_at TEXT,
+  minutes_late INTEGER,
+  reviewed_by TEXT REFERENCES users(id),
+  reviewed_at TEXT,
+  approved_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (tenant_id, user_id, todo_date)
+);
+CREATE INDEX IF NOT EXISTS ix_todo_sub_day ON todo_submissions(tenant_id, todo_date, status);
+CREATE INDEX IF NOT EXISTS ix_todo_sub_reviewer ON todo_submissions(tenant_id, reporting_person_id, todo_date);

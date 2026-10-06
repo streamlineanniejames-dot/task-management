@@ -18,6 +18,7 @@ import { proposalsRouter, publicProposalRouter } from './proposals.routes.js';
 import { invoicesRouter } from './invoices.routes.js';
 import { financeRouter } from './finance.routes.js';
 import { todosRouter } from './todos.routes.js';
+import { todoPlanRouter } from './todoPlan.routes.js';
 import { projectsRouter } from './projects.routes.js';
 import { projectUpdatesRouter } from './projectUpdates.routes.js';
 import { marketingRouter } from './marketing.routes.js';
@@ -64,6 +65,7 @@ api.use(rateLimit());
 api.use('/action-items', actionItemsRouter);
 // My Day's personal list. No RBAC module: every row is pinned to the caller.
 api.use('/todos', todosRouter);
+api.use('/todo-plan', todoPlanRouter);
 api.use('/meetings', meetingsRouter);
 api.use('/notifications', notificationsRouter);
 api.use('/chat', chatRouter);

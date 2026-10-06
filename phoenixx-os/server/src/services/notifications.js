@@ -205,6 +205,34 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Attendance not approved for {{work_date}}',
     body: '{{person}} did not approve your check-in on {{work_date}}: {{note}}',
   },
+  'todo.submission_open': {
+    subject: 'Tomorrow\'s To-Do is open',
+    body: 'Hi {{user.name}}, tomorrow\'s To-Do submission is now open. Please submit your planned tasks for {{todo_date}} before {{deadline}}.',
+  },
+  'todo.reminder': {
+    subject: 'Reminder: To-Do not submitted yet',
+    body: 'Reminder: your To-Do list for {{todo_date}} has not been submitted yet. Please complete it before {{deadline}}.',
+  },
+  'todo.overdue': {
+    subject: 'Overdue: To-Do for {{todo_date}}',
+    body: 'The {{deadline}} deadline has passed and your To-Do list for {{todo_date}} is overdue.{{late_note}}',
+  },
+  'todo.escalation': {
+    subject: 'To-Do not submitted: {{person}}',
+    body: '{{person}} has not submitted the To-Do list for {{todo_date}}. Deadline: {{deadline}}. Current status: {{status}}.',
+  },
+  'todo.submitted': {
+    subject: 'To-Do submitted: {{person}}',
+    body: '{{person}} submitted the To-Do list for {{todo_date}} ({{count}} task(s)). It is waiting for your review.',
+  },
+  'todo.approved': {
+    subject: 'To-Do approved for {{todo_date}}',
+    body: '{{reviewer}} approved your To-Do list for {{todo_date}}.',
+  },
+  'todo.changes_requested': {
+    subject: 'Changes needed on your To-Do',
+    body: 'Your To-Do list for {{todo_date}} requires changes from {{reviewer}}: {{note}}',
+  },
   'chat.broadcast': {
     subject: 'Announcement from {{author}}',
     body: '{{author}} posted to {{channel}}: {{preview}}',

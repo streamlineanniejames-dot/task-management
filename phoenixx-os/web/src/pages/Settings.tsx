@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Building2, Palette, Receipt, Workflow, Tags, ShieldCheck, Download, Plus, Trash2, Check,
-  History, Webhook, KeyRound, AlertTriangle,
+  History, Webhook, KeyRound, AlertTriangle, ClipboardList, BellRing, Play,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -28,6 +28,7 @@ export default function Settings() {
             { id: 'invoicing', label: 'Invoicing' },
             { id: 'pipeline', label: 'Pipeline & categories' },
             { id: 'reasons', label: 'Reason codes' },
+            { id: 'todo', label: 'To-Do schedule' },
             { id: 'roles', label: 'Roles' },
             { id: 'webhooks', label: 'Webhooks' },
             { id: 'audit', label: 'Audit log' },
@@ -38,6 +39,7 @@ export default function Settings() {
       {tab === 'invoicing' && <InvoicingTab />}
       {tab === 'pipeline' && <PipelineTab />}
       {tab === 'reasons' && <ReasonCodesTab />}
+      {tab === 'todo' && <TodoScheduleTab />}
       {tab === 'roles' && <RolesTab />}
       {tab === 'webhooks' && <WebhooksTab />}
       {tab === 'audit' && <AuditTab />}
@@ -223,6 +225,168 @@ function WorkspaceTab() {
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+
+/* ============================================================= TO-DO SCHEDULE */
+const WEEKDAYS = [
+  { n: 1, label: 'Mon' }, { n: 2, label: 'Tue' }, { n: 3, label: 'Wed' }, { n: 4, label: 'Thu' },
+  { n: 5, label: 'Fri' }, { n: 6, label: 'Sat' }, { n: 0, label: 'Sun' },
+];
+
+const PHASE_COPY: Record<string, string> = {
+  not_open: 'Not open yet today',
+  open: 'Open now',
+  past_deadline: 'Past today\'s deadline',
+  closed: 'No submission today',
+};
+
+const to12h = (hhmm?: string) => {
+  if (!hhmm) return '—';
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+function TodoScheduleTab() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [form, setForm] = useState<any>(null);
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['todo-schedule'],
+    queryFn: () => api.get('/todo-plan/schedule').then((r) => r.data),
+  });
+
+  useEffect(() => { if (data && !form) setForm(data.settings); }, [data]);
+
+  const save = useMutation({
+    mutationFn: (body: any) => api.put('/todo-plan/settings', body),
+    onSuccess: (r: any) => {
+      toast.success('To-Do schedule saved.');
+      setForm(r.data);
+      qc.invalidateQueries({ queryKey: ['todo-schedule'] });
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const runNow = useMutation({
+    mutationFn: () => api.post('/todo-plan/run'),
+    onSuccess: (r: any) => {
+      toast.success(r.data.sent ? `${r.data.sent} notification(s) sent.` : 'Nothing was due right now.');
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  if (error) return <Card><ErrorState error={error} retry={() => refetch()} /></Card>;
+  if (isLoading || !form) return <Card><TableSkeleton rows={6} cols={2} /></Card>;
+
+  const editable = !!data.can_edit_settings;
+  const win = data.window;
+  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  const toggleIn = (k: string, v: any) => set(k, form[k].includes(v) ? form[k].filter((x: any) => x !== v) : [...form[k], v]);
+
+  const Toggle = ({ k, title, hint }: { k: string; title: string; hint: string }) => (
+    <label className="flex items-start gap-2.5 text-[13px] text-muted cursor-pointer">
+      <input type="checkbox" checked={!!form[k]} disabled={!editable} onChange={(e) => set(k, e.target.checked)}
+        className="mt-0.5 h-4 w-4 rounded border-line-strong cursor-pointer accent-[var(--brand)]" />
+      <span><span className="block text-ink font-medium">{title}</span>{hint}</span>
+    </label>
+  );
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <div className="p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
+          <span className="flex items-center gap-2">
+            <Badge tone={win.phase === 'open' ? 'positive' : win.phase === 'past_deadline' ? 'warning' : 'neutral'} dot>
+              {PHASE_COPY[win.phase] || win.phase}
+            </Badge>
+          </span>
+          <span className="text-muted">Today <span className="text-ink font-medium">{date(win.today)}</span> · {win.tz}</span>
+          {win.todo_date && (
+            <span className="text-muted">Plans due today are for <span className="text-ink font-medium">{date(win.todo_date)}</span></span>
+          )}
+          {editable && (
+            <Button size="sm" icon={<Play size={14} />} loading={runNow.isPending} className="ml-auto"
+              onClick={() => runNow.mutate()}>Run the clock now</Button>
+          )}
+        </div>
+      </Card>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card>
+          <CardHeader title="Schedule" icon={<ClipboardList size={16} />}
+            subtitle="Workspace-local times. Each step must come after the one before." />
+          <div className="p-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                ['open_time', 'Submission opens', 'Everyone is told to file tomorrow\'s plan'],
+                ['reminder_time', 'Reminder', 'Only to people who have not submitted'],
+                ['deadline_time', 'Deadline', 'Unfiled plans become overdue'],
+                ['escalation_time', 'Escalation', 'Reporting person is told who is missing'],
+              ].map(([k, label, hint]) => (
+                <Field key={k} label={label} hint={`${hint} · ${to12h(form[k])}`}>
+                  <Input type="time" value={form[k]} disabled={!editable} onChange={(e) => set(k, e.target.value)} />
+                </Field>
+              ))}
+            </div>
+
+            <Field label="Working days" hint="Holidays from HR are skipped too. Friday's plan is for the next working day.">
+              <div className="flex flex-wrap gap-1.5">
+                {WEEKDAYS.map((d) => {
+                  const on = form.working_days.includes(d.n);
+                  return (
+                    <button key={d.n} type="button" disabled={!editable} onClick={() => toggleIn('working_days', d.n)}
+                      aria-pressed={on}
+                      className={cx('h-8 min-w-[3rem] rounded-md border px-2.5 text-[12.5px] font-medium transition-colors duration-150',
+                        on ? 'border-[var(--brand)] bg-brand-soft text-[var(--brand)]' : 'border-line-strong text-muted',
+                        editable ? 'cursor-pointer hover:border-[var(--brand)]' : 'cursor-default')}>
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Rules & notifications" icon={<BellRing size={16} />}
+            subtitle="Who hears about what. In-app (the bell) always goes." />
+          <div className="p-4 space-y-3.5">
+            <Toggle k="enabled" title="To-Do submission is on" hint="Turn off to pause every notification and status change." />
+            <Toggle k="allow_late" title="Allow late submission" hint="After the deadline a plan can still be filed; it is marked late with the minutes recorded." />
+            <div className="border-t border-line pt-3.5 space-y-3.5">
+              <Toggle k="notify_employees" title="Notify employees" hint="Opening, reminder and overdue messages." />
+              <Toggle k="notify_managers" title="Notify reporting persons" hint="Escalation when one of their people has not filed." />
+              <Toggle k="escalate_to_owner" title="Escalate to owners as well" hint="Owners also get every escalation, not only for people with no reporting person." />
+            </div>
+            <div className="border-t border-line pt-3.5">
+              <p className="text-[12.5px] font-medium text-ink mb-2">Extra channels</p>
+              <div className="flex flex-wrap gap-4">
+                {[['email', 'Email'], ['whatsapp', 'WhatsApp']].map(([c, label]) => (
+                  <label key={c} className="flex items-center gap-2 text-[13px] text-muted cursor-pointer">
+                    <input type="checkbox" checked={form.channels.includes(c)} disabled={!editable} onChange={() => toggleIn('channels', c)}
+                      className="h-4 w-4 rounded border-line-strong cursor-pointer accent-[var(--brand)]" />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <p className="text-[12px] text-subtle mt-2">Each person's own notification preferences still apply.</p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <p className="text-[12.5px] text-subtle">
+        Each person's reporting person is their manager, set by the owner on the Team page. Someone with no manager reports to the owners.
+      </p>
+
+      {editable && (
+        <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(form)}>Save To-Do schedule</Button>
+      )}
     </div>
   );
 }

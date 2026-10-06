@@ -5,7 +5,7 @@ import {
   LayoutDashboard, ListChecks, CalendarDays, Users2, FileText, Receipt, Wallet,
   BookOpenCheck, BarChart3, Settings, Bell, Menu, X, LogOut, Sun, Moon, Search,
   Building2, ShieldCheck, ChevronDown, CreditCard, Clock, AlertTriangle, Target, CheckCircle2,
-  FolderKanban, Megaphone, MessagesSquare, Contact, FileSpreadsheet, History, Send, Landmark,
+  FolderKanban, Megaphone, MessagesSquare, Contact, FileSpreadsheet, History, Send, Landmark, ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -514,6 +514,8 @@ function NotificationBell({ open, setOpen }: { open: boolean; setOpen: (v: boole
     if (key.includes('overdue') || key.includes('escalation')) return <AlertTriangle size={14} className="text-[var(--negative)]" />;
     if (key.includes('paid') || key.includes('accepted')) return <CheckCircle2 size={14} className="text-[var(--positive)]" />;
     if (key.includes('invoice')) return <Receipt size={14} className="text-[var(--brand)]" />;
+    if (key === 'todo.approved') return <CheckCircle2 size={14} className="text-[var(--positive)]" />;
+    if (key.startsWith('todo.')) return <ClipboardList size={14} className="text-[var(--brand)]" />;
     return <Bell size={14} className="text-subtle" />;
   };
 
