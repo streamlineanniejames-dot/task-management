@@ -216,3 +216,22 @@ describe('a new client is usable straight away', () => {
     assert.equal(record.name, 'New Trading Name Ltd');
   });
 });
+
+describe('the project client picker lists only the client register', () => {
+  test('a client on the Clients page is offered; a pipeline lead is not', async () => {
+    const account = (await create({ name: 'Register Only Pvt Ltd' })).body.data;
+    await api.post('/crm/clients', { name: 'Just A Lead Co' }, { token });
+
+    const res = await api.get('/crm/clients?on_register=true&limit=200', { token });
+    assert.equal(res.status, 200);
+    const names = res.body.data.map((c) => c.name);
+    assert.ok(names.includes('Register Only Pvt Ltd'), JSON.stringify(names));
+    assert.ok(!names.includes('Just A Lead Co'), 'a lead with no client account is left out');
+    assert.ok(res.body.data.every((c) => c.client_account_id), 'every row is linked to a client account');
+
+    // Archiving it on the Clients page takes it out of the picker too.
+    await api.patch(`/clients/${account.id}`, { status: 'archived' }, { token });
+    const after = (await api.get('/crm/clients?on_register=true&limit=200', { token })).body.data.map((c) => c.name);
+    assert.ok(!after.includes('Register Only Pvt Ltd'));
+  });
+});

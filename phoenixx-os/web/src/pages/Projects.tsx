@@ -330,7 +330,8 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
     queryKey: ['project-meta'],
     queryFn: async () => {
       const [clients, directory, serviceLines] = await Promise.all([
-        api.get('/crm/clients', { limit: 200 }).then((r) => r.data),
+        // Only clients on the Clients page; leads and old pipeline rows are not project clients.
+        api.get('/crm/clients', { limit: 200, on_register: 'true' }).then((r) => r.data),
         api.get('/users/directory').then((r) => r.data),
         api.get('/settings/service-lines').then((r) => r.data),
       ]);

@@ -95,6 +95,11 @@ router.get('/clients', requires('crm', 'view'), (req, res) => {
   if (q.status) { const s = String(q.status).split(','); filters.push(`c.status IN (${s.map(() => '?').join(',')})`); params.push(...s); }
   if (q.stage_id) { filters.push('c.stage_id = ?'); params.push(q.stage_id); }
   if (q.client_account_id) { filters.push('c.client_account_id = ?'); params.push(q.client_account_id); }
+  // Only companies on the Clients page (the client register), as the default Clients view shows them:
+  // not archived, not deleted. Leads and stray pipeline rows are left out.
+  if (q.on_register === 'true') {
+    filters.push("c.client_account_id IN (SELECT ca.id FROM client_accounts ca WHERE ca.tenant_id = c.tenant_id AND ca.deleted_at IS NULL AND ca.status != 'archived')");
+  }
   if (q.owner_id) { filters.push('c.owner_id = ?'); params.push(q.owner_id); }
   if (q.industry) { filters.push('c.industry = ?'); params.push(q.industry); }
   if (q.engagement_model) { filters.push('c.engagement_model = ?'); params.push(q.engagement_model); }
