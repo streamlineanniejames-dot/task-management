@@ -12,7 +12,7 @@ import {
 } from './ui';
 
 /**
- * Tomorrow's To-Do: the plan each person files for their next working day,
+ * Advance Planner: the plan each person files for their next working day,
  * and the reporting person's review of it. The server decides every rule
  * (who may edit, what is late, who reviews); these screens only show it.
  */
@@ -97,7 +97,7 @@ function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => voi
 
   let body;
   if (!win.todo_date && !plan) {
-    body = <EmptyState compact icon={<ClipboardList size={18} />} title="No To-Do to file today"
+    body = <EmptyState compact icon={<ClipboardList size={18} />} title="No plan to file today"
       message="Today is not a working day. Your next plan opens on the next working day." />;
   } else if (status === 'CHANGES_REQUESTED') {
     body = (
@@ -146,7 +146,7 @@ function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => voi
           <p className="text-[12.5px] text-[var(--negative)]">The deadline has passed and late plans are not accepted.</p>
         ) : (
           <Button variant="primary" icon={<Plus size={15} />} onClick={onCreate}>
-            {plan ? 'Continue my To-Do' : 'Create tomorrow\'s To-Do'}
+            {plan ? 'Continue my plan' : 'Create advance plan'}
           </Button>
         )}
       </div>
@@ -155,7 +155,7 @@ function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => voi
 
   return (
     <Card>
-      <CardHeader title="Tomorrow's To-Do" icon={<ClipboardList size={16} />}
+      <CardHeader title="Advance Planner" icon={<ClipboardList size={16} />}
         subtitle={(win.todo_date || plan?.todo_date)
           ? `For ${date(plan?.todo_date || win.todo_date, 'long')}${rp ? ` · goes to ${rp.name}` : ''}`
           : undefined} />
@@ -233,7 +233,7 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
   const lastNote = data?.plan?.comments?.filter((c: any) => c.kind === 'changes_requested').at(-1);
 
   return (
-    <Modal open onClose={onClose} size="lg" title="Tomorrow's To-Do"
+    <Modal open onClose={onClose} size="lg" title="Advance Planner"
       subtitle={data ? `${user?.name} · ${date(todoDate, 'long')} · reporting to ${data.reporting_person?.name || '—'}` : undefined}
       footer={(
         <>
@@ -241,7 +241,7 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
           <Button loading={save.isPending && save.variables === false} disabled={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button>
           <Button variant="primary" icon={<Send size={15} />} loading={save.isPending && save.variables === true}
             disabled={save.isPending} onClick={() => save.mutate(true)}>
-            {data?.plan?.status === 'CHANGES_REQUESTED' ? 'Resubmit' : 'Submit To-Do'}
+            {data?.plan?.status === 'CHANGES_REQUESTED' ? 'Resubmit' : 'Submit plan'}
           </Button>
         </>
       )}>
@@ -410,7 +410,7 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
 
   return (
     <Modal open onClose={onClose} size="xl"
-      title={plan ? `${own ? 'My' : `${plan.employee_name}'s`} To-Do · ${date(plan.todo_date, 'long')}` : 'To-Do'}
+      title={plan ? `${own ? 'My' : `${plan.employee_name}'s`} plan · ${date(plan.todo_date, 'long')}` : 'Advance Planner'}
       subtitle={plan ? `${plan.employee_name} → ${plan.reporting_person_name || 'Owner'}` : undefined}
       footer={plan && (
         <>
@@ -431,7 +431,7 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
         </>
       )}>
       {error ? (
-        <EmptyState compact icon={<AlertTriangle size={18} />} title="Not available" message="This To-Do does not exist or is not yours to see." />
+        <EmptyState compact icon={<AlertTriangle size={18} />} title="Not available" message="This plan does not exist or is not yours to see." />
       ) : isLoading || !plan ? <Skeleton className="h-64" /> : (
         <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_320px]">
           {/* ------------------------------------------------ the plan */}
@@ -620,7 +620,7 @@ function TodayStrip({ plan, onView }: { plan: any; onView: (id: string, add?: bo
         </div>
       )}
       <div className="flex flex-wrap gap-2 mt-2.5">
-        <Button size="sm" onClick={() => onView(plan.id)}>Open today's To-Do</Button>
+        <Button size="sm" onClick={() => onView(plan.id)}>Open today's plan</Button>
         {plan.can_add_task && <Button size="sm" variant="ghost" icon={<Plus size={14} />} onClick={() => onView(plan.id, true)}>Add task</Button>}
       </div>
     </div>
@@ -804,7 +804,7 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
 
   return (
     <Card className={className}>
-      <CardHeader title={data.scope === 'everyone' ? 'Team To-Do · everyone' : data.is_admin ? 'Team To-Do · reporting to you' : 'Team To-Do'}
+      <CardHeader title={data.scope === 'everyone' ? 'Team Advance Planner · everyone' : data.is_admin ? 'Team Advance Planner · reporting to you' : 'Team Advance Planner'}
         icon={<Users2 size={16} />}
         subtitle={`Plans for ${date(data.todo_date, 'long')} · deadline ${clockTime(data.deadline_time)}`}
         action={(

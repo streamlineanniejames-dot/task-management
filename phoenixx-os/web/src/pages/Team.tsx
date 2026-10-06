@@ -762,7 +762,7 @@ function MemberDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       <ConfirmDialog open={removeOpen} onClose={() => setRemoveOpen(false)}
         onConfirm={() => remove.mutate()} loading={remove.isPending}
         title={`Delete ${u.name}?`} danger confirmLabel="Delete employee"
-        message="They can no longer sign in and are signed out everywhere. Their open action items go to their manager. Their history (To-Dos, attendance, reports) stays for your records." />
+        message="They can no longer sign in and are signed out everywhere. Their open action items go to their manager. Their history (plans, attendance, reports) stays for your records." />
     </>
   );
 }

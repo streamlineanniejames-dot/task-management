@@ -561,7 +561,7 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       <ConfirmDialog open={deleting} onClose={() => setDeleting(false)} onConfirm={() => remove.mutate()}
         loading={remove.isPending} danger confirmLabel="Delete project"
         title={`Delete ${p.name}?`}
-        message={`It disappears from Projects for everyone and its ${p.team_size || 0} team seat(s) are released. Its chat room closes. Past daily updates, To-Do tasks and the audit log keep their history.`} />
+        message={`It disappears from Projects for everyone and its ${p.team_size || 0} team seat(s) are released. Its chat room closes. Past daily updates, Advance Planner tasks and the audit log keep their history.`} />
     </>
   );
 }

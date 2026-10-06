@@ -256,43 +256,43 @@ export const DEFAULT_TEMPLATES = {
     body: '{{person}} did not approve your check-in on {{work_date}}: {{note}}',
   },
   'todo.submission_open': {
-    subject: 'Tomorrow\'s To-Do is open',
-    body: 'Hi {{user.name}}, tomorrow\'s To-Do submission is now open. Please submit your planned tasks for {{todo_day}} before {{deadline}}.',
+    subject: 'Advance Planner is open',
+    body: 'Hi {{user.name}}, the Advance Planner is now open. Please submit your planned tasks for {{todo_day}} before {{deadline}}.',
   },
   'todo.reminder': {
-    subject: 'Reminder: To-Do not submitted yet',
-    body: 'Reminder: your To-Do list for {{todo_day}} has not been submitted yet. Please complete it before {{deadline}}.',
+    subject: 'Reminder: plan not submitted yet',
+    body: 'Reminder: your plan for {{todo_day}} has not been submitted yet. Please complete it before {{deadline}}.',
   },
   'todo.overdue': {
-    subject: 'Overdue: To-Do for {{todo_day}}',
-    body: 'The {{deadline}} deadline has passed and your To-Do list for {{todo_day}} is overdue.{{late_note}}',
+    subject: 'Overdue: plan for {{todo_day}}',
+    body: 'The {{deadline}} deadline has passed and your plan for {{todo_day}} is overdue.{{late_note}}',
   },
   'todo.escalation': {
-    subject: 'To-Do not submitted: {{person}}',
-    body: '{{person}} has not submitted the To-Do list for {{todo_day}}. Deadline: {{deadline}}. Current status: {{status}}.',
+    subject: 'Plan not submitted: {{person}}',
+    body: '{{person}} has not submitted the plan for {{todo_day}}. Deadline: {{deadline}}. Current status: {{status}}.',
   },
   'todo.submitted': {
-    subject: 'To-Do submitted: {{person}}',
-    body: '{{person}} submitted the To-Do list for {{todo_day}} ({{count}} task(s)). It is waiting for your review.',
+    subject: 'Plan submitted: {{person}}',
+    body: '{{person}} submitted the plan for {{todo_day}} ({{count}} task(s)). It is waiting for your review.',
   },
   'todo.approved': {
-    subject: 'To-Do approved for {{todo_day}}',
-    body: '{{reviewer}} approved your To-Do list for {{todo_day}}.',
+    subject: 'Plan approved for {{todo_day}}',
+    body: '{{reviewer}} approved your plan for {{todo_day}}.',
   },
   'todo.changes_requested': {
-    subject: 'Changes needed on your To-Do',
-    body: 'Your To-Do list for {{todo_day}} requires changes from {{reviewer}}: {{note}}',
+    subject: 'Changes needed on your plan',
+    body: 'Your plan for {{todo_day}} requires changes from {{reviewer}}: {{note}}',
   },
   'todo.task_added': {
     subject: '{{person}} added a task for {{todo_day}}',
-    body: '{{person}} added "{{note}}" to the To-Do for {{todo_day}}.',
+    body: '{{person}} added "{{note}}" to the plan for {{todo_day}}.',
   },
   'todo.carried_over': {
     subject: '{{count}} unfinished task(s) moved to {{todo_day}}',
-    body: 'Not completed, so now on your To-Do for {{todo_day}}: {{tasks}}.',
+    body: 'Not completed, so now on your plan for {{todo_day}}: {{tasks}}.',
   },
   'todo.comment': {
-    subject: '{{person}} commented on the To-Do for {{todo_day}}',
+    subject: '{{person}} commented on the plan for {{todo_day}}',
     body: '{{person}}: {{note}}',
   },
   'chat.broadcast': {

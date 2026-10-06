@@ -158,7 +158,7 @@ export default function Home() {
           onClick={() => navigate('/notifications')} />
       </div>
 
-      {/* Tomorrow's To-Do: the person's own plan, and their team's if they review any. */}
+      {/* Advance Planner: the person's own plan, and their team's if they review any. */}
       <TodoPlanSection />
 
       {/* Chat is the wide column: most of a working day here is talking to the

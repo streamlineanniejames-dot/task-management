@@ -65,7 +65,7 @@ describe('browser pop-ups', () => {
   test('every bell notification also pops up, with its title and link', async () => {
     await tell(kumar.id);
     assert.equal(sent.length, 1);
-    assert.equal(sent[0].title, 'To-Do approved for Wed, 7 Oct');
+    assert.equal(sent[0].title, 'Plan approved for Wed, 7 Oct');
     assert.match(sent[0].body, /Mani approved/);
     assert.equal(sent[0].link, '/?plan=abc');
     const row = db.get("SELECT * FROM notifications WHERE user_id = ? AND channel = 'push'", [kumar.id]);

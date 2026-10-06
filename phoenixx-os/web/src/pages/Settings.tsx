@@ -29,7 +29,7 @@ export default function Settings() {
             { id: 'invoicing', label: 'Invoicing' },
             { id: 'pipeline', label: 'Pipeline & categories' },
             { id: 'reasons', label: 'Reason codes' },
-            { id: 'todo', label: 'To-Do schedule' },
+            { id: 'todo', label: 'Advance Planner' },
             { id: 'roles', label: 'Roles' },
             { id: 'webhooks', label: 'Webhooks' },
             { id: 'audit', label: 'Audit log' },
@@ -266,7 +266,7 @@ function TodoScheduleTab() {
   const save = useMutation({
     mutationFn: (body: any) => api.put('/todo-plan/settings', body),
     onSuccess: (r: any) => {
-      toast.success('To-Do schedule saved.');
+      toast.success('Advance Planner settings saved.');
       setForm(r.data);
       qc.invalidateQueries({ queryKey: ['todo-schedule'] });
     },
@@ -306,7 +306,7 @@ function TodoScheduleTab() {
           <p className="min-w-0 flex-1 text-muted">
             <span className="text-ink font-medium">Only the owner can change these settings.</span>{' '}
             {user?.role === 'manager' && form.managers_can_assign
-              ? 'You are allowed to build your own team: go to Home → Team To-Do → Build your team.'
+              ? 'You are allowed to build your own team: go to Home → Team Advance Planner → Build your team.'
               : 'Ask the owner if something here should change.'}
           </p>
           {user?.role === 'manager' && form.managers_can_assign && (
@@ -373,7 +373,7 @@ function TodoScheduleTab() {
           <CardHeader title="Rules & notifications" icon={<BellRing size={16} />}
             subtitle="Who hears about what. In-app (the bell) always goes." />
           <div className="p-4 space-y-3.5">
-            <Toggle k="enabled" title="To-Do submission is on" hint="Turn off to pause every notification and status change." />
+            <Toggle k="enabled" title="Advance Planner is on" hint="Turn off to pause every notification and status change." />
             <Toggle k="allow_late" title="Allow late submission" hint="After the deadline a plan can still be filed; it is marked late with the minutes recorded." />
             <div className="border-t border-line pt-3.5 space-y-3.5">
               <Toggle k="notify_employees" title="Notify employees" hint="Opening, reminder and overdue messages." />
@@ -399,7 +399,7 @@ function TodoScheduleTab() {
 
       <Card>
         <CardHeader title="Reporting & access" icon={<ShieldCheck size={16} />}
-          subtitle="Who reports to whom is set on Home → Team To-Do. Employees never choose their own reporting person." />
+          subtitle="Who reports to whom is set on Home → Team Advance Planner. Employees never choose their own reporting person." />
         <div className="p-4 space-y-4">
           <Toggle k="managers_can_assign" title="Managers can build their own team"
             hint="A manager may add people who are not on anyone's team. Only the owner moves someone off a team or between managers." />
@@ -423,7 +423,7 @@ function TodoScheduleTab() {
       </Card>
 
       {editable && (
-        <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(form)}>Save To-Do schedule</Button>
+        <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(form)}>Save Advance Planner settings</Button>
       )}
     </div>
   );

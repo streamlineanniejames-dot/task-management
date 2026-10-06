@@ -7,7 +7,7 @@ import { can } from '../middleware/rbac.js';
 import { visibleProjectIds } from './projectOversight.js';
 
 /**
- * Tomorrow's To-Do - the plan each person files for their next working day.
+ * Advance Planner - the plan each person files for their next working day.
  *
  * This file owns both halves of the module. The clock: the workspace schedule
  * (open -> reminder -> deadline -> escalation), the working-day calendar the
@@ -355,7 +355,7 @@ const workable = (sub, today) => WORKABLE.includes(sub.status) && sub.todo_date 
  */
 export const isAdmin = (auth) => ['owner', 'super_admin'].includes(auth.role);
 
-/** Who may hold a team and see the Team To-Do: managers and owners only. */
+/** Who may hold a team and see the Team Advance Planner: managers and owners only. */
 export const LEADS = ['owner', 'manager'];
 const isLead = (auth) => isAdmin(auth) || auth.role === 'manager';
 
@@ -380,7 +380,7 @@ export const canReview = (auth, sub) => !!sub && sub.user_id !== auth.userId
 function loadSubmission(auth, id) {
   const sub = get('SELECT * FROM todo_submissions WHERE id = ? AND tenant_id = ?', [id, auth.tenantId]);
   // Not-found rather than forbidden, so an id cannot be probed for existence.
-  if (!sub || !canView(auth, sub)) throw notFound('To-Do');
+  if (!sub || !canView(auth, sub)) throw notFound('Plan');
   return sub;
 }
 
@@ -555,7 +555,7 @@ function auditAs(auth, entityId, action, before, after) {
  * employee's record at the moment of submission.
  */
 export async function savePlan(auth, todoDate, { tasks = [], submit = false } = {}) {
-  if (!filesPlans(auth.role)) throw forbidden('This login does not file a To-Do');
+  if (!filesPlans(auth.role)) throw forbidden('This login does not use the Advance Planner');
   const win = windowFor(auth.tenantId);
   const s = win.settings;
   let sub = get('SELECT * FROM todo_submissions WHERE tenant_id = ? AND user_id = ? AND todo_date = ?',
@@ -563,7 +563,7 @@ export async function savePlan(auth, todoDate, { tasks = [], submit = false } = 
 
   if (!sub) {
     if (!win.todo_date || todoDate !== win.todo_date) {
-      throw badRequest(win.todo_date ? `Plans can only be filed for ${win.todo_date} today` : 'There is no To-Do to file today');
+      throw badRequest(win.todo_date ? `Plans can only be filed for ${win.todo_date} today` : 'There is no plan to file today');
     }
     if (Date.now() > Date.parse(win.deadline_at) && !s.allow_late) {
       throw forbidden('The deadline has passed and late plans are not accepted');
