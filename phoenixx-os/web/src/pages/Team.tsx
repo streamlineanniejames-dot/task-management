@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Users2, Download, Copy, KeyRound, Network, Trash2, Mail, ShieldCheck,
+  Plus, Users2, Download, Copy, KeyRound, Network, Trash2, Mail, ShieldCheck, PencilLine,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -400,6 +400,7 @@ function MemberDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const navigate = useNavigate();
   const [removeOpen, setRemoveOpen] = useState(false);
   const [tempPassword, setTempPassword] = useState('');
+  const [details, setDetails] = useState<any>(null); // the edit form, open when set
 
   const { data: u, isLoading } = useQuery({
     queryKey: ['team-member', id],
@@ -422,6 +423,17 @@ function MemberDrawer({ id, onClose }: { id: string; onClose: () => void }) {
     mutationFn: (patch: any) => api.patch(`/users/${id}`, patch),
     onSuccess: () => {
       toast.success('Updated.');
+      qc.invalidateQueries({ queryKey: ['team-member', id] });
+      qc.invalidateQueries({ queryKey: ['team'] });
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const saveDetails = useMutation({
+    mutationFn: (patch: any) => api.patch(`/users/${id}`, patch),
+    onSuccess: () => {
+      toast.success('Employee details updated.');
+      setDetails(null);
       qc.invalidateQueries({ queryKey: ['team-member', id] });
       qc.invalidateQueries({ queryKey: ['team'] });
     },
@@ -464,12 +476,18 @@ function MemberDrawer({ id, onClose }: { id: string; onClose: () => void }) {
         }
         footer={
           <>
+            {editable && !details && (
+              <Button icon={<PencilLine size={15} />} onClick={() => setDetails({
+                name: u.name || '', designation: u.designation || '', phone: u.phone || '', whatsapp: u.whatsapp || '',
+                employment_type: u.employment_type || 'full_time', date_of_joining: u.date_of_joining || '', status: u.status || 'active',
+              })}>Edit details</Button>
+            )}
             {can('users', 'edit') && (
               <Button icon={<KeyRound size={15} />} loading={resetPassword.isPending}
                 onClick={() => resetPassword.mutate()}>Reset password</Button>
             )}
             {can('users', 'delete') && u.id !== me?.id && (
-              <Button variant="ghost" icon={<Trash2 size={15} />} onClick={() => setRemoveOpen(true)}>Remove</Button>
+              <Button variant="danger" icon={<Trash2 size={15} />} onClick={() => setRemoveOpen(true)}>Delete employee</Button>
             )}
           </>
         }>
@@ -482,6 +500,57 @@ function MemberDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 Share this over a secure channel and ask them to change it after signing in.
                 All their other sessions have been signed out.
               </p>
+            </div>
+          )}
+
+          {details && (
+            <div className="space-y-3 rounded-lg border border-[var(--brand)]/40 p-4">
+              <p className="label-cap">Edit details</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Full name" required>
+                  <Input value={details.name} maxLength={120} onChange={(e) => setDetails({ ...details, name: e.target.value })} />
+                </Field>
+                <Field label="Designation">
+                  <Input value={details.designation} maxLength={120} onChange={(e) => setDetails({ ...details, designation: e.target.value })} />
+                </Field>
+                <Field label="Phone">
+                  <Input value={details.phone} maxLength={20} onChange={(e) => setDetails({ ...details, phone: e.target.value })} />
+                </Field>
+                <Field label="WhatsApp">
+                  <Input value={details.whatsapp} maxLength={20} onChange={(e) => setDetails({ ...details, whatsapp: e.target.value })} />
+                </Field>
+                <Field label="Employment">
+                  <Select value={details.employment_type} onChange={(e) => setDetails({ ...details, employment_type: e.target.value })}>
+                    {['full_time', 'part_time', 'contract', 'intern'].map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Date of joining">
+                  <Input type="date" value={details.date_of_joining} onChange={(e) => setDetails({ ...details, date_of_joining: e.target.value })} />
+                </Field>
+                <Field label="Account" hint="Disabled blocks sign-in but keeps them on the team">
+                  <Select value={details.status} onChange={(e) => setDetails({ ...details, status: e.target.value })}>
+                    <option value="active">Active</option>
+                    <option value="disabled">Disabled</option>
+                    {details.status === 'invited' && <option value="invited">Invited</option>}
+                  </Select>
+                </Field>
+                <Field label="Email" hint="Sign-in email cannot be changed here">
+                  <Input value={u.email} disabled />
+                </Field>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="primary" loading={saveDetails.isPending} disabled={details.name.trim().length < 2}
+                  onClick={() => saveDetails.mutate({
+                    name: details.name.trim(),
+                    designation: details.designation.trim() || null,
+                    phone: details.phone.trim() || null,
+                    whatsapp: details.whatsapp.trim() || null,
+                    employment_type: details.employment_type,
+                    date_of_joining: details.date_of_joining || null,
+                    status: details.status,
+                  })}>Update</Button>
+                <Button variant="ghost" onClick={() => setDetails(null)}>Cancel</Button>
+              </div>
             </div>
           )}
 
@@ -597,8 +666,8 @@ function MemberDrawer({ id, onClose }: { id: string; onClose: () => void }) {
 
       <ConfirmDialog open={removeOpen} onClose={() => setRemoveOpen(false)}
         onConfirm={() => remove.mutate()} loading={remove.isPending}
-        title={`Remove ${u.name}?`} danger confirmLabel="Remove"
-        message="Their account is disabled and sessions revoked. Open action items are reassigned to their manager. Their history stays intact." />
+        title={`Delete ${u.name}?`} danger confirmLabel="Delete employee"
+        message="They can no longer sign in and are signed out everywhere. Their open action items go to their manager. Their history (To-Dos, attendance, reports) stays for your records." />
     </>
   );
 }
