@@ -101,11 +101,14 @@ export function saveSettings(tenantId, body) {
   for (const k of ['enabled', 'allow_late', 'notify_employees', 'notify_managers', 'escalate_to_owner', 'managers_can_assign']) {
     if (typeof s[k] !== 'boolean') throw badRequest(`${k.replace(/_/g, ' ')} must be true or false`);
   }
-  const viewers = Array.isArray(s.full_view_user_ids) ? [...new Set(s.full_view_user_ids)] : null;
-  if (!viewers || viewers.some((id) => typeof id !== 'string'
-    || !get("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role NOT IN ('client')", [id, tenantId]))) {
-    throw badRequest('full view must list people in this workspace');
+  const isManager = (id) => typeof id === 'string'
+    && !!get("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role = 'manager'", [id, tenantId]);
+  if (body.full_view_user_ids !== undefined
+    && (!Array.isArray(body.full_view_user_ids) || !body.full_view_user_ids.every(isManager))) {
+    throw badRequest('Only managers in this workspace can be given a view of everyone');
   }
+  // A grant saved earlier for someone who is no longer a manager is dropped, not an error.
+  const viewers = [...new Set(Array.isArray(s.full_view_user_ids) ? s.full_view_user_ids : [])].filter(isManager);
   const clean = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((k) => [k, s[k]]));
   clean.working_days = days.sort();
   clean.channels = channels;
@@ -325,12 +328,20 @@ export const PRIORITIES = ['high', 'medium', 'low'];
 const LOCKED = ['UNDER_REVIEW', 'APPROVED', 'MISSED'];
 const AWAITING_REVIEW = ['SUBMITTED', 'LATE', 'UNDER_REVIEW'];
 
-/** Owner/admin: whoever may edit workspace settings sees and reviews every plan. */
-export const isAdmin = (auth) => can(auth, 'settings', 'edit');
+/**
+ * The owner sees and reviews every plan. Decided by the role itself, never by a
+ * permission: a custom role that happens to carry settings access must not turn
+ * an employee into someone who reads everyone's plans.
+ */
+export const isAdmin = (auth) => ['owner', 'super_admin'].includes(auth.role);
 
-/** The owner, or someone the owner has granted a view of every plan. */
+/** Who may hold a team and see the Team To-Do: managers and owners only. */
+export const LEADS = ['owner', 'manager'];
+const isLead = (auth) => isAdmin(auth) || auth.role === 'manager';
+
+/** The owner, or a manager the owner has granted a view of every plan. */
 export const seesEveryone = (auth) => isAdmin(auth)
-  || settingsFor(auth.tenantId).full_view_user_ids.includes(auth.userId);
+  || (auth.role === 'manager' && settingsFor(auth.tenantId).full_view_user_ids.includes(auth.userId));
 
 const userName = (id) => (id ? get('SELECT name FROM users WHERE id = ?', [id])?.name : null) || null;
 const userRow = (id) => get('SELECT * FROM users WHERE id = ?', [id]);
@@ -681,6 +692,13 @@ export function team(auth, day) {
   const s = win.settings;
   const target = day || win.todo_date || nextWorkingDay(auth.tenantId, win.today, s);
   const admin = isAdmin(auth);
+  if (!isLead(auth)) {
+    // Employees (and finance, HR...) only ever see their own plan.
+    return {
+      todo_date: target, deadline_time: s.deadline_time, is_reviewer: false, is_admin: false, scope: 'none',
+      counts: { total: 0, not_submitted: 0 }, rows: [], pending: [], reporting_options: [], assignable: [], can_assign: false,
+    };
+  }
   const everyone = seesEveryone(auth);
   const managerAssigns = !admin && s.managers_can_assign;
 
@@ -756,7 +774,7 @@ export function team(auth, day) {
 /** Anyone who can hold a team: active staff, owners included. */
 export const reportingCandidates = (tenantId) => all(
   `SELECT id, name, role FROM users WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active'
-      AND role NOT IN ('client','super_admin') ORDER BY name`,
+      AND role IN ('owner','manager') ORDER BY name`,
   [tenantId],
 );
 
@@ -788,13 +806,8 @@ export function setReporting(auth, userId, managerId) {
   if (!target || ['client', 'super_admin'].includes(target.role)) throw notFound('Person');
   if (userId === auth.userId) throw forbidden('You cannot change your own reporting person');
   const next = managerId || null;
-  if (next) {
-    const m = get("SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'", [next, auth.tenantId]);
-    if (!m || ['client', 'super_admin'].includes(m.role)) throw badRequest('That reporting person is not in this workspace');
-    if (next === userId) throw badRequest('Someone cannot report to themselves');
-    if (wouldLoop(auth.tenantId, userId, next)) throw badRequest('That would make a reporting loop');
-  }
 
+  // Who may ask comes before whether the request is well-formed.
   if (!isAdmin(auth)) {
     const s = settingsFor(auth.tenantId);
     if (!s.managers_can_assign || auth.role !== 'manager') throw forbidden('Only the owner can change reporting persons');
@@ -803,6 +816,13 @@ export function setReporting(auth, userId, managerId) {
     if (!takingIn && !handingBack) {
       throw forbidden('You can add people nobody else manages, or release your own - nothing else');
     }
+  }
+
+  if (next) {
+    const m = get("SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'", [next, auth.tenantId]);
+    if (!m || !LEADS.includes(m.role)) throw badRequest('A reporting person must be a manager or the owner');
+    if (next === userId) throw badRequest('Someone cannot report to themselves');
+    if (wouldLoop(auth.tenantId, userId, next)) throw badRequest('That would make a reporting loop');
   }
 
   run('UPDATE users SET manager_id = ?, updated_at = ? WHERE id = ?', [next, nowIso(), userId]);

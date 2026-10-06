@@ -387,12 +387,12 @@ function TodoScheduleTab() {
           <Toggle k="managers_can_assign" title="Managers can build their own team"
             hint="A manager may add people who are not on anyone's team, and release their own. They can never take someone from another manager." />
           <div className="border-t border-line pt-3.5">
-            <p className="text-[13px] text-ink font-medium">Can see everyone's plans</p>
+            <p className="text-[13px] text-ink font-medium">Managers who can see everyone's plans</p>
             <p className="text-[12.5px] text-muted mb-2.5">
               View only. Approving and requesting changes stays with each person's reporting person.
             </p>
             <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
-              {(data.people || []).filter((p: any) => p.role !== 'owner').map((p: any) => (
+              {(data.people || []).filter((p: any) => p.role === 'manager').map((p: any) => (
                 <label key={p.id} className="flex items-center gap-2 text-[13px] text-muted cursor-pointer">
                   <input type="checkbox" disabled={!editable} checked={form.full_view_user_ids.includes(p.id)}
                     onChange={() => toggleIn('full_view_user_ids', p.id)}

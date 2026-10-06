@@ -422,3 +422,47 @@ describe('checklists under a task', () => {
     assert.match(JSON.stringify(res.body), /at most 20 items/);
   });
 });
+
+describe('employees never see the team view', () => {
+  test('not even with a custom role that can edit settings', async () => {
+    const esha = await join('Esha');
+    const roleId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    db.run(`INSERT INTO custom_roles (id, tenant_id, name, base_role, permissions, created_at, updated_at)
+            VALUES (?,?, 'Employee+settings', 'employee', ?, ?, ?)`,
+      [roleId, tenantId, JSON.stringify({ settings: ['view', 'edit'] }), now, now]);
+    db.run('UPDATE users SET custom_role_id = ? WHERE id = ?', [roleId, esha.id]);
+
+    const team = await api.get('/todo-plan/team', { token: esha.token });
+    assert.equal(team.status, 200);
+    assert.equal(team.body.data.is_reviewer, false);
+    assert.deepEqual(team.body.data.rows, []);
+    assert.equal((await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: esha.token })).status, 404);
+  });
+
+  test('not even if a stale grant names them, and that grant does not block saving settings', async () => {
+    const esha = db.get("SELECT id FROM users WHERE email = 'esha@review.test'");
+    const row = db.get('SELECT todo_settings FROM tenants WHERE id = ?', [tenantId]);
+    const saved = JSON.parse(row.todo_settings);
+    db.run('UPDATE tenants SET todo_settings = ? WHERE id = ?', [JSON.stringify({ ...saved, full_view_user_ids: [esha.id, ravi.id] }), tenantId]);
+
+    const login = await api.post('/auth/login', { email: 'esha@review.test', password: 'Password@123' });
+    const team = await api.get('/todo-plan/team', { token: login.body.data.access_token });
+    assert.equal(team.body.data.is_reviewer, false);
+
+    const res = await api.put('/todo-plan/settings', { allow_late: true }, { token: ownerToken });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.data.full_view_user_ids, [ravi.id], 'the employee is dropped, the manager kept');
+  });
+
+  test('the owner cannot grant an employee the view of everyone', async () => {
+    const res = await api.put('/todo-plan/settings', { full_view_user_ids: [kumar.id] }, { token: ownerToken });
+    assert.equal(res.status, 400);
+  });
+
+  test('an employee cannot be made someone\'s reporting person', async () => {
+    const res = await api.put(`/todo-plan/reporting/${arun.id}`, { manager_id: kumar.id }, { token: ownerToken });
+    assert.equal(res.status, 400);
+    assert.match(JSON.stringify(res.body), /manager or the owner/);
+  });
+});
