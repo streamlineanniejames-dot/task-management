@@ -291,6 +291,8 @@ const ADDED_COLUMNS = [
   // A planned task ticked off on the day, like a card marked complete.
   ['todo_tasks', 'done_at', 'TEXT'],
   ['todo_tasks', 'done_by', 'TEXT'],
+  // The sub-steps under a task: JSON [{ text, done }], ticked off one by one.
+  ['todo_tasks', 'checklist', "TEXT NOT NULL DEFAULT '[]'"],
   // A report about one project (the marketing reports) is only shown to the
   // people who can see that project.
   ['report_runs', 'project_id', 'TEXT'],

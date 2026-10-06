@@ -377,7 +377,9 @@ function editState(auth, sub, win) {
   if (sub.todo_date < win.today || (sub.todo_date === win.today && sub.status !== 'CHANGES_REQUESTED')) {
     return { can_edit: false, reason: 'The planned day has arrived.' };
   }
-  if (get('SELECT 1 FROM todo_tasks WHERE submission_id = ? AND done_at IS NOT NULL LIMIT 1', [sub.id])) {
+  const ticked = all('SELECT done_at, checklist FROM todo_tasks WHERE submission_id = ?', [sub.id])
+    .some((t) => t.done_at || parseJson(t.checklist, []).some((c) => c.done));
+  if (ticked) {
     return { can_edit: false, reason: 'Work has started on this plan.' };
   }
   if (sub.status === 'CHANGES_REQUESTED') return { can_edit: true, reason: null };
@@ -390,13 +392,13 @@ function editState(auth, sub, win) {
 export function detail(auth, sub, win = windowFor(auth.tenantId)) {
   const tasks = all(
     `SELECT t.id, t.task, t.project_id, p.name AS project_name, t.client_id, c.name AS client_name,
-            t.priority, t.expected_time, t.notes, t.done_at
+            t.priority, t.expected_time, t.notes, t.done_at, t.checklist
        FROM todo_tasks t
        LEFT JOIN projects p ON p.id = t.project_id
        LEFT JOIN client_accounts c ON c.id = t.client_id
       WHERE t.submission_id = ? ORDER BY t.sort`,
     [sub.id],
-  );
+  ).map((t) => ({ ...t, checklist: parseJson(t.checklist, []) }));
   const comments = all(
     `SELECT tc.id, tc.kind, tc.body, tc.created_at, tc.user_id, u.name AS user_name
        FROM todo_comments tc LEFT JOIN users u ON u.id = tc.user_id
@@ -463,14 +465,19 @@ function cleanTasks(auth, tasks, submitting) {
       priority: t?.priority || 'medium',
       expected_time: t?.expected_time || null,
       notes: String(t?.notes ?? '').trim() || null,
+      checklist: Array.isArray(t?.checklist)
+        ? t.checklist.map((c) => ({ text: String(c?.text ?? '').trim(), done: c?.done === true })).filter((c) => c.text)
+        : [],
     }))
     // A row the person added and never touched is not a task.
-    .filter((t) => t.task || t.notes || t.project_id || t.client_id);
+    .filter((t) => t.task || t.notes || t.project_id || t.client_id || t.checklist.length);
   out.forEach((t, i) => {
     const n = `Task ${i + 1}`;
     if (!t.task) throw badRequest(`${n}: describe the task`);
     if (t.task.length > 300) throw badRequest(`${n}: keep the task under 300 characters`);
     if (t.notes && t.notes.length > 1000) throw badRequest(`${n}: keep notes under 1000 characters`);
+    if (t.checklist.length > 20) throw badRequest(`${n}: a checklist can hold at most 20 items`);
+    if (t.checklist.some((c) => c.text.length > 200)) throw badRequest(`${n}: keep checklist items under 200 characters`);
     if (!PRIORITIES.includes(t.priority)) throw badRequest(`${n}: priority must be high, medium or low`);
     if (t.expected_time && !HHMM_OPT.test(t.expected_time)) throw badRequest(`${n}: expected time must be HH:MM`);
     if (t.project_id && !projectIds.has(t.project_id)) throw badRequest(`${n}: that project is not available to you`);
@@ -539,8 +546,9 @@ export async function savePlan(auth, todoDate, { tasks = [], submit = false } = 
     run('DELETE FROM todo_tasks WHERE submission_id = ?', [sub.id]);
     clean.forEach((t, i) => run(
       `INSERT INTO todo_tasks (id, tenant_id, submission_id, task, project_id, client_id, priority, expected_time, notes,
-         sort, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [uuid(), auth.tenantId, sub.id, t.task, t.project_id, t.client_id, t.priority, t.expected_time, t.notes, i, now, now],
+         checklist, sort, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid(), auth.tenantId, sub.id, t.task, t.project_id, t.client_id, t.priority, t.expected_time, t.notes,
+        JSON.stringify(t.checklist), i, now, now],
     ));
 
     if (submit) {
@@ -806,4 +814,26 @@ export function setReporting(auth, userId, managerId) {
       JSON.stringify({ manager_id: next, manager: userName(next) }), null, nowIso()],
   );
   return { user_id: userId, manager_id: next, manager_name: userName(next) };
+}
+
+/** The employee ticks one checklist item under a task, on their own filed plan. */
+export function setChecklistItem(auth, id, taskId, index, done) {
+  const sub = loadSubmission(auth, id);
+  if (sub.user_id !== auth.userId) throw forbidden('Only the person who planned it can tick a checklist item');
+  if (!TICKABLE.includes(sub.status)) throw badRequest('Submit the plan before ticking items off');
+  const task = get('SELECT * FROM todo_tasks WHERE id = ? AND submission_id = ?', [taskId, sub.id]);
+  if (!task) throw notFound('Task');
+  const list = parseJson(task.checklist, []);
+  const item = list[index];
+  if (!item) throw notFound('Checklist item');
+  if (!!item.done === !!done) return detail(auth, sub);
+
+  item.done = !!done;
+  const now = nowIso();
+  tx(() => {
+    run('UPDATE todo_tasks SET checklist = ?, updated_at = ? WHERE id = ?', [JSON.stringify(list), now, task.id]);
+    addThread(auth.tenantId, sub.id, auth.userId, done ? 'check_done' : 'check_reopened', item.text);
+  });
+  auditAs(auth, sub.id, done ? 'check_done' : 'check_reopened', null, { task: task.task, item: item.text });
+  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
 }

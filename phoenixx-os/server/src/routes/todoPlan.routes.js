@@ -78,6 +78,12 @@ router.post('/submissions/:id/request-changes', async (req, res) =>
 router.post('/submissions/:id/tasks/:taskId', (req, res) =>
   ok(res, P.setTaskDone(req.auth, req.params.id, req.params.taskId, req.body?.done === true)));
 
+router.post('/submissions/:id/tasks/:taskId/checklist/:index', (req, res) => {
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) throw badRequest('index must be a whole number');
+  return ok(res, P.setChecklistItem(req.auth, req.params.id, req.params.taskId, index, req.body?.done === true));
+});
+
 router.post('/submissions/:id/comments', async (req, res) =>
   ok(res, await P.addComment(req.auth, req.params.id, req.body?.body)));
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ClipboardList, Plus, Trash2, Check, CheckCircle2, MessageSquare, Send, Undo2, Users2, Clock, AlertTriangle,
+  ClipboardList, ListChecks, Plus, Trash2, Check, CheckCircle2, MessageSquare, Send, Undo2, Users2, Clock, AlertTriangle,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -177,8 +177,13 @@ function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => voi
 }
 
 /* ================================================================ editor */
-type TaskRow = { key: string; task: string; project_id: string; client_id: string; priority: string; expected_time: string; notes: string };
-const blank = (): TaskRow => ({ key: Math.random().toString(36).slice(2), task: '', project_id: '', client_id: '', priority: 'medium', expected_time: '', notes: '' });
+type CheckItem = { key: string; text: string; done: boolean };
+type TaskRow = {
+  key: string; task: string; project_id: string; client_id: string; priority: string; expected_time: string; notes: string;
+  checklist: CheckItem[];
+};
+const newKey = () => Math.random().toString(36).slice(2);
+const blank = (): TaskRow => ({ key: newKey(), task: '', project_id: '', client_id: '', priority: 'medium', expected_time: '', notes: '', checklist: [] });
 
 function PlanEditor({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
@@ -191,7 +196,8 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
     if (!data || rows) return;
     const existing = data.plan?.tasks || [];
     setRows(existing.length
-      ? existing.map((t: any) => ({ ...blank(), ...t, project_id: t.project_id || '', client_id: t.client_id || '', expected_time: t.expected_time || '', notes: t.notes || '' }))
+      ? existing.map((t: any) => ({ ...blank(), ...t, project_id: t.project_id || '', client_id: t.client_id || '', expected_time: t.expected_time || '', notes: t.notes || '',
+        checklist: (t.checklist || []).map((c: any) => ({ key: newKey(), text: c.text, done: !!c.done })) }))
       : [blank()]);
   }, [data]);
 
@@ -199,7 +205,10 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
   const save = useMutation({
     mutationFn: (submit: boolean) => api.put(`/todo-plan/mine/${todoDate}`, {
       submit,
-      tasks: (rows || []).map(({ key, ...t }) => ({ ...t, project_id: t.project_id || null, client_id: t.client_id || null, expected_time: t.expected_time || null })),
+      tasks: (rows || []).map(({ key, ...t }) => ({
+        ...t, project_id: t.project_id || null, client_id: t.client_id || null, expected_time: t.expected_time || null,
+        checklist: t.checklist.map(({ key: _k, ...c }) => c),
+      })),
     }),
     onSuccess: (r: any, submit) => {
       qc.invalidateQueries({ queryKey: ['todo-plan'] });
@@ -213,6 +222,8 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
 
   const set = (key: string, k: keyof TaskRow, v: string) =>
     setRows((rs) => (rs || []).map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+  const setChecklist = (key: string, fn: (list: CheckItem[]) => CheckItem[]) =>
+    setRows((rs) => (rs || []).map((r) => (r.key === key ? { ...r, checklist: fn(r.checklist) } : r)));
   const opts = data?.options || { projects: [], clients: [] };
   const lastNote = data?.plan?.comments?.filter((c: any) => c.kind === 'changes_requested').at(-1);
 
@@ -285,6 +296,7 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
               <Field label="Notes">
                 <Textarea rows={2} value={r.notes} maxLength={1000} onChange={(e) => set(r.key, 'notes', e.target.value)} />
               </Field>
+              <ChecklistEditor items={r.checklist} onChange={(fn) => setChecklist(r.key, fn)} />
             </fieldset>
           ))}
           {rows.length < 30 && (
@@ -308,6 +320,8 @@ function activityText(c: any) {
     case 'changes_requested': return 'asked for changes';
     case 'task_done': return <>marked <span className="text-ink font-medium">“{c.body}”</span> as complete</>;
     case 'task_reopened': return <>reopened <span className="text-ink font-medium">“{c.body}”</span></>;
+    case 'check_done': return <>checked off <span className="text-ink font-medium">“{c.body}”</span></>;
+    case 'check_reopened': return <>unchecked <span className="text-ink font-medium">“{c.body}”</span></>;
     default: return null;
   }
 }
@@ -364,6 +378,13 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
   const tick = useMutation({
     mutationFn: ({ taskId, value }: { taskId: string; value: boolean }) =>
       api.post(`/todo-plan/submissions/${id}/tasks/${taskId}`, { done: value }),
+    onSuccess: (r) => done(r),
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const check = useMutation({
+    mutationFn: ({ taskId, index, value }: { taskId: string; index: number; value: boolean }) =>
+      api.post(`/todo-plan/submissions/${id}/tasks/${taskId}/checklist/${index}`, { done: value }),
     onSuccess: (r) => done(r),
     onError: (e: any) => toast.error(e.message),
   });
@@ -455,6 +476,10 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
                             {[PRIORITY[t.priority]?.label, t.project_name, t.client_name, t.expected_time && `by ${clockTime(t.expected_time)}`].filter(Boolean).join(' · ')}
                           </p>
                           {t.notes && <p className="text-[13px] text-muted mt-1.5 whitespace-pre-line">{t.notes}</p>}
+                          {t.checklist?.length > 0 && (
+                            <ChecklistView items={t.checklist} canTick={!!canTick} busy={check.isPending}
+                              onTick={(index, value) => check.mutate({ taskId: t.id, index, value })} />
+                          )}
                         </div>
                       </li>
                     );
@@ -529,6 +554,81 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
         </div>
       )}
     </Modal>
+  );
+}
+
+/* ================================================================ checklists */
+/** The checklist under a task in the form: type a step, Enter adds the next one. */
+function ChecklistEditor({ items, onChange }: { items: CheckItem[]; onChange: (fn: (list: CheckItem[]) => CheckItem[]) => void }) {
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const text = draft.trim();
+    if (!text || items.length >= 20) return;
+    onChange((list) => [...list, { key: newKey(), text, done: false }]);
+    setDraft('');
+  };
+  return (
+    <div>
+      <p className="flex items-center justify-between text-[12.5px] font-medium text-ink mb-1.5">
+        <span className="flex items-center gap-1.5"><ListChecks size={14} /> Checklist</span>
+        {items.length > 0 && <span className="text-subtle font-normal tabular">{items.length}/20</span>}
+      </p>
+      {items.length > 0 && (
+        <ul className="space-y-1.5 mb-2">
+          {items.map((c) => (
+            <li key={c.key} className="flex items-center gap-2">
+              <span className={cx('grid h-4 w-4 shrink-0 place-items-center rounded border',
+                c.done ? 'border-[var(--positive)] bg-[var(--positive)] text-white' : 'border-line-strong')} aria-hidden>
+                {c.done && <Check size={11} strokeWidth={3.5} />}
+              </span>
+              <Input value={c.text} maxLength={200} aria-label="Checklist item" className="h-8 text-[13px]"
+                onChange={(e) => onChange((list) => list.map((x) => (x.key === c.key ? { ...x, text: e.target.value } : x)))} />
+              <button type="button" onClick={() => onChange((list) => list.filter((x) => x.key !== c.key))}
+                className="text-subtle hover:text-[var(--negative)] cursor-pointer shrink-0" aria-label={`Remove “${c.text}”`}>
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {items.length < 20 && (
+        <div className="flex gap-2">
+          <Input value={draft} maxLength={200} placeholder="Add a checklist item…" className="h-8 text-[13px]"
+            aria-label="New checklist item"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
+          <Button size="sm" icon={<Plus size={14} />} disabled={!draft.trim()} onClick={add}>Add</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The checklist under a task in the card view; the person who planned it ticks items off. */
+function ChecklistView({ items, canTick, busy, onTick }: {
+  items: { text: string; done: boolean }[]; canTick: boolean; busy: boolean; onTick: (index: number, value: boolean) => void;
+}) {
+  const doneCount = items.filter((c) => c.done).length;
+  return (
+    <div className="mt-2.5">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[12px] text-subtle tabular">{doneCount}/{items.length}</span>
+        <div className="h-1 flex-1 rounded-full bg-sunken overflow-hidden" aria-hidden>
+          <div className="h-full bg-[var(--positive)] transition-all duration-300" style={{ width: `${Math.round((doneCount / items.length) * 100)}%` }} />
+        </div>
+      </div>
+      <ul className="space-y-1">
+        {items.map((c, i) => (
+          <li key={i}>
+            <label className={cx('flex items-start gap-2 text-[13px]', canTick ? 'cursor-pointer' : 'cursor-default')}>
+              <input type="checkbox" checked={c.done} disabled={!canTick || busy} onChange={(e) => onTick(i, e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-line-strong accent-[var(--positive)] cursor-pointer disabled:cursor-default" />
+              <span className={c.done ? 'text-subtle line-through' : 'text-ink'}>{c.text}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

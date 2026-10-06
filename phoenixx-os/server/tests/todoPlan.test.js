@@ -388,3 +388,37 @@ describe('ticking tasks off', () => {
     assert.equal(res.status, 403, 'not the owner\'s plan');
   });
 });
+
+describe('checklists under a task', () => {
+  let charu; let planId; let taskId;
+
+  test('checklist items are saved with the task, blank ones dropped', async () => {
+    await schedule('open', { allow_late: true });
+    charu = await join('Charu');
+    const res = await api.put(`/todo-plan/mine/${target}`, {
+      submit: true,
+      tasks: [{ task: 'Lead outreach', priority: 'high', checklist: [{ text: 'Call 10 leads' }, { text: 'Email 10 leads' }, { text: '  ' }] }],
+    }, { token: charu.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.data.tasks[0].checklist, [{ text: 'Call 10 leads', done: false }, { text: 'Email 10 leads', done: false }]);
+    planId = res.body.data.id;
+    taskId = res.body.data.tasks[0].id;
+  });
+
+  test('ticking an item records it on the feed and freezes the plan', async () => {
+    const res = await api.post(`/todo-plan/submissions/${planId}/tasks/${taskId}/checklist/1`, { done: true }, { token: charu.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.data.tasks[0].checklist[1].done, true);
+    assert.equal(res.body.data.comments.at(-1).kind, 'check_done');
+    assert.equal(res.body.data.comments.at(-1).body, 'Email 10 leads');
+    assert.equal(res.body.data.can_edit, false);
+  });
+
+  test('a missing item is not found, and too many items are refused', async () => {
+    assert.equal((await api.post(`/todo-plan/submissions/${planId}/tasks/${taskId}/checklist/9`, { done: true }, { token: charu.token })).status, 404);
+    const many = Array.from({ length: 21 }, (_, i) => ({ text: `step ${i}` }));
+    const res = await api.put(`/todo-plan/mine/${target}`, { tasks: [{ task: 'x', checklist: many }] }, { token: (await join('Dev')).token });
+    assert.equal(res.status, 400);
+    assert.match(JSON.stringify(res.body), /at most 20 items/);
+  });
+});
