@@ -439,6 +439,22 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
     queryFn: () => api.get('/todo-plan/team', { date: day }).then((r) => r.data),
     initialData: day === initial.todo_date ? initial : undefined,
   });
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { user } = useAuth();
+  const reporting = useMutation({
+    mutationFn: ({ userId, managerId }: { userId: string; managerId: string | null }) =>
+      api.put(`/todo-plan/reporting/${userId}`, { manager_id: managerId }),
+    onSuccess: (r: any) => {
+      qc.invalidateQueries({ queryKey: ['todo-plan', 'team'] });
+      toast.success(r.data.manager_name ? `Now reports to ${r.data.manager_name}.` : 'Now reports to the owner.');
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  // Reporting to an owner and reporting to nobody route the same way, so both read "Owner (direct)".
+  const ownerIds = new Set<string>((data.reporting_options || []).filter((o: any) => o.role === 'owner').map((o: any) => o.id));
+
   const c = data.counts;
   const submitted = c.SUBMITTED + c.LATE + c.UNDER_REVIEW + c.APPROVED + c.CHANGES_REQUESTED;
   // Lateness outlives the LATE status: a late plan that has since been reviewed still counts.
@@ -447,7 +463,7 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
 
   return (
     <Card className={className}>
-      <CardHeader title={data.is_admin ? 'Team To-Do · everyone' : 'Team To-Do'} icon={<Users2 size={16} />}
+      <CardHeader title={data.scope === 'everyone' ? 'Team To-Do · everyone' : 'Team To-Do'} icon={<Users2 size={16} />}
         subtitle={`Plans for ${date(data.todo_date, 'long')} · deadline ${clockTime(data.deadline_time)}`}
         action={<Input type="date" value={day} onChange={(e) => setDay(e.target.value || initial.todo_date)}
           aria-label="Planned day" className="h-8 w-[150px] text-[13px]" />} />
@@ -485,21 +501,49 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
         </div>
       )}
 
+      {data.can_assign && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-line">
+          <span className="text-[12.5px] text-subtle">Add to my team</span>
+          <Select value="" disabled={reporting.isPending || !data.assignable.length} aria-label="Add someone to my team"
+            onChange={(e) => e.target.value && reporting.mutate({ userId: e.target.value, managerId: user!.id })}
+            className="h-8 w-auto min-w-[200px] text-[13px]">
+            <option value="">{data.assignable.length ? 'Choose a person…' : 'Nobody unassigned'}</option>
+            {data.assignable.map((u: any) => <option key={u.id} value={u.id}>{u.name}{u.designation ? ` · ${u.designation}` : ''}</option>)}
+          </Select>
+        </div>
+      )}
+
       {data.rows.length === 0 ? (
-        <EmptyState compact title="Nobody reports to you" message="The owner sets reporting persons on the Team page." />
+        <EmptyState compact title="Nobody reports to you"
+          message={data.can_assign ? 'Add people who are not on anyone\'s team yet.' : 'The owner decides who reports to whom.'} />
       ) : (
-        <ul className="divide-y divide-[var(--border)] max-h-[320px] overflow-y-auto">
+        <ul className="divide-y divide-[var(--border)] max-h-[360px] overflow-y-auto">
           {data.rows.map((r: any) => (
-            <li key={r.user.id}>
+            <li key={r.user.id} className={cx('flex items-center gap-3 px-4 py-2', r.plan && 'row-hover')}>
               <button disabled={!r.plan} onClick={() => r.plan && onView(r.plan.id)}
-                className={cx('w-full flex items-center gap-3 px-4 py-2 text-left', r.plan && 'row-hover cursor-pointer')}>
+                className={cx('min-w-0 flex-1 flex items-center gap-3 text-left', r.plan ? 'cursor-pointer' : 'cursor-default')}>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13.5px] text-ink truncate">{r.user.name}</span>
-                  {data.is_admin && <span className="block text-[11.5px] text-subtle truncate">reports to {r.reporting_person_name || '—'}</span>}
+                  {!data.is_admin && data.scope === 'everyone' && (
+                    <span className="block text-[11.5px] text-subtle truncate">reports to {r.reporting_person_name || '—'}</span>
+                  )}
                 </span>
-                {r.plan?.submitted_at && <span className="text-[12px] text-subtle">{time(r.plan.submitted_at)} · {r.plan.task_count} task(s)</span>}
-                <PlanStatus status={r.plan?.status === 'DRAFT' ? null : r.plan?.status} />
+                {r.plan?.submitted_at && <span className="hidden sm:inline text-[12px] text-subtle">{time(r.plan.submitted_at)} · {r.plan.task_count} task(s)</span>}
               </button>
+              {data.is_admin && (
+                <Select value={r.manager_id && !ownerIds.has(r.manager_id) ? r.manager_id : ''} disabled={reporting.isPending} aria-label={`${r.user.name} reports to`}
+                  onChange={(e) => reporting.mutate({ userId: r.user.id, managerId: e.target.value || null })}
+                  className="h-8 w-[170px] shrink-0 text-[12.5px]">
+                  <option value="">Owner (direct)</option>
+                  {data.reporting_options.filter((o: any) => o.id !== r.user.id && o.role !== 'owner')
+                    .map((o: any) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </Select>
+              )}
+              {r.can_release && (
+                <button onClick={() => reporting.mutate({ userId: r.user.id, managerId: null })} disabled={reporting.isPending}
+                  className="text-[12px] text-subtle hover:text-[var(--negative)] cursor-pointer shrink-0">Remove</button>
+              )}
+              <PlanStatus status={r.plan?.status === 'DRAFT' ? null : r.plan?.status} />
             </li>
           ))}
         </ul>

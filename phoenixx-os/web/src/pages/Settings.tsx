@@ -380,9 +380,30 @@ function TodoScheduleTab() {
         </Card>
       </div>
 
-      <p className="text-[12.5px] text-subtle">
-        Each person's reporting person is their manager, set by the owner on the Team page. Someone with no manager reports to the owners.
-      </p>
+      <Card>
+        <CardHeader title="Reporting & access" icon={<ShieldCheck size={16} />}
+          subtitle="Who reports to whom is set on Home → Team To-Do. Employees never choose their own reporting person." />
+        <div className="p-4 space-y-4">
+          <Toggle k="managers_can_assign" title="Managers can build their own team"
+            hint="A manager may add people who are not on anyone's team, and release their own. They can never take someone from another manager." />
+          <div className="border-t border-line pt-3.5">
+            <p className="text-[13px] text-ink font-medium">Can see everyone's plans</p>
+            <p className="text-[12.5px] text-muted mb-2.5">
+              View only. Approving and requesting changes stays with each person's reporting person.
+            </p>
+            <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+              {(data.people || []).filter((p: any) => p.role !== 'owner').map((p: any) => (
+                <label key={p.id} className="flex items-center gap-2 text-[13px] text-muted cursor-pointer">
+                  <input type="checkbox" disabled={!editable} checked={form.full_view_user_ids.includes(p.id)}
+                    onChange={() => toggleIn('full_view_user_ids', p.id)}
+                    className="h-4 w-4 rounded border-line-strong cursor-pointer accent-[var(--brand)]" />
+                  <span className="text-ink">{p.name}</span> <span className="text-subtle">· {titleCase(p.role)}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Card>
 
       {editable && (
         <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(form)}>Save To-Do schedule</Button>

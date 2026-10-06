@@ -279,3 +279,74 @@ describe('late submission', () => {
     assert.match(JSON.stringify(res.body), /late plans are not accepted/);
   });
 });
+
+describe('reporting structure', () => {
+  const setLine = (who, managerId, token) => api.put(`/todo-plan/reporting/${who.id}`, { manager_id: managerId }, { token });
+
+  test('an employee cannot change anyone\'s reporting person, their own included', async () => {
+    assert.equal((await setLine(kumar, ravi.id, kumar.token)).status, 403);
+    assert.equal((await setLine(arun, kumar.id, kumar.token)).status, 403);
+  });
+
+  test('a manager cannot build a team until the owner allows it', async () => {
+    const usha = await join('Usha');
+    const res = await setLine(usha, mani.id, mani.token);
+    assert.equal(res.status, 403);
+    const team = await api.get('/todo-plan/team', { token: mani.token });
+    assert.equal(team.body.data.can_assign, false);
+    assert.deepEqual(team.body.data.assignable, []);
+  });
+
+  test('once allowed, a manager can take in someone unassigned and release their own', async () => {
+    assert.equal((await api.put('/todo-plan/settings', { managers_can_assign: true }, { token: ownerToken })).status, 200);
+    const usha = db.get("SELECT id FROM users WHERE email = 'usha@review.test'");
+    const team = await api.get('/todo-plan/team', { token: mani.token });
+    assert.ok(team.body.data.assignable.some((u) => u.id === usha.id));
+    assert.ok(!team.body.data.assignable.some((u) => u.id === sita.id), 'someone else\'s person is not offered');
+
+    assert.equal((await setLine(usha, mani.id, mani.token)).status, 200);
+    assert.equal(db.get('SELECT manager_id FROM users WHERE id = ?', [usha.id]).manager_id, mani.id);
+    assert.equal((await setLine(usha, null, mani.token)).status, 200);
+    assert.equal(db.get('SELECT manager_id FROM users WHERE id = ?', [usha.id]).manager_id, null);
+  });
+
+  test('a manager can never take someone from another manager, or hand someone to another', async () => {
+    assert.equal((await setLine(sita, mani.id, mani.token)).status, 403);
+    assert.equal((await setLine(kumar, ravi.id, mani.token)).status, 403);
+  });
+
+  test('the owner can set anyone\'s line, but not into a loop', async () => {
+    const team = await api.get('/todo-plan/team', { token: ownerToken });
+    assert.ok(team.body.data.reporting_options.some((u) => u.id === mani.id));
+    assert.equal((await setLine(mani, kumar.id, ownerToken)).status, 400, 'Kumar reports to Mani');
+    const moved = await setLine(kumar, ravi.id, ownerToken);
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.data.manager_name, 'Ravi');
+    assert.ok(db.get("SELECT id FROM audit_logs WHERE entity = 'user' AND entity_id = ? AND action = 'reporting_change'", [kumar.id]));
+    await setLine(kumar, mani.id, ownerToken);
+  });
+});
+
+describe('owner-granted view of everyone', () => {
+  test('a manager sees only their own people until the owner grants more', async () => {
+    const before = await api.get('/todo-plan/team', { token: ravi.token });
+    assert.ok(!before.body.data.rows.some((r) => r.user.name === 'Kumar'));
+    assert.equal((await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: ravi.token })).status, 404);
+  });
+
+  test('with the grant they see everyone, but reviewing stays with the reporting person', async () => {
+    assert.equal((await api.put('/todo-plan/settings', { full_view_user_ids: [ravi.id] }, { token: ownerToken })).status, 200);
+    const team = await api.get('/todo-plan/team', { token: ravi.token });
+    assert.equal(team.body.data.scope, 'everyone');
+    assert.ok(team.body.data.rows.some((r) => r.user.name === 'Kumar'));
+    const plan = await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: ravi.token });
+    assert.equal(plan.status, 200);
+    assert.equal(plan.body.data.can_review, false);
+    assert.equal((await api.post(`/todo-plan/submissions/${kumarPlan}/request-changes`, { note: 'x' }, { token: ravi.token })).status, 403);
+  });
+
+  test('the grant only accepts people in this workspace', async () => {
+    const res = await api.put('/todo-plan/settings', { full_view_user_ids: [crypto.randomUUID()] }, { token: ownerToken });
+    assert.equal(res.status, 400);
+  });
+});

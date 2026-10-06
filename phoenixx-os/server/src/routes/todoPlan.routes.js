@@ -25,6 +25,8 @@ router.get('/schedule', (req, res) => {
     channel_options: P.CHANNEL_OPTIONS,
     mine: mine || null,
     can_edit_settings: can(req.auth, 'settings', 'edit'),
+    // For the owner's access settings: who can be given a view of everyone.
+    people: can(req.auth, 'settings', 'edit') ? P.reportingCandidates(req.auth.tenantId) : [],
   });
 });
 
@@ -59,6 +61,9 @@ router.get('/team', (req, res) => {
   if (day && !DAY.test(day)) throw badRequest('date must be YYYY-MM-DD');
   return ok(res, P.team(req.auth, day));
 });
+
+/** Change who someone reports to. The rules (owner, or a manager the owner allows) live in the service. */
+router.put('/reporting/:userId', (req, res) => ok(res, P.setReporting(req.auth, req.params.userId, req.body?.manager_id ?? null)));
 
 router.get('/submissions/:id', (req, res) => ok(res, P.getPlan(req.auth, req.params.id)));
 

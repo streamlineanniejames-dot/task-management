@@ -62,6 +62,10 @@ export const DEFAULT_SETTINGS = {
   escalate_to_owner: false,
   /** In-app always goes; these are the extra channels, still subject to each person's preferences. */
   channels: ['in_app', 'email'],
+  /** Managers may take unassigned people (or the owner's direct reports) into their own team, and release their own. */
+  managers_can_assign: false,
+  /** People the owner has let see every plan in the workspace. View only: reviewing stays with the reporting person. */
+  full_view_user_ids: [],
 };
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -94,12 +98,18 @@ export function saveSettings(tenantId, body) {
   if (!channels || channels.some((c) => !CHANNEL_OPTIONS.includes(c))) {
     throw badRequest(`channels must be drawn from ${CHANNEL_OPTIONS.join(', ')}`);
   }
-  for (const k of ['enabled', 'allow_late', 'notify_employees', 'notify_managers', 'escalate_to_owner']) {
+  for (const k of ['enabled', 'allow_late', 'notify_employees', 'notify_managers', 'escalate_to_owner', 'managers_can_assign']) {
     if (typeof s[k] !== 'boolean') throw badRequest(`${k.replace(/_/g, ' ')} must be true or false`);
+  }
+  const viewers = Array.isArray(s.full_view_user_ids) ? [...new Set(s.full_view_user_ids)] : null;
+  if (!viewers || viewers.some((id) => typeof id !== 'string'
+    || !get("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role NOT IN ('client')", [id, tenantId]))) {
+    throw badRequest('full view must list people in this workspace');
   }
   const clean = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((k) => [k, s[k]]));
   clean.working_days = days.sort();
   clean.channels = channels;
+  clean.full_view_user_ids = viewers;
   run('UPDATE tenants SET todo_settings = ?, updated_at = ? WHERE id = ?', [JSON.stringify(clean), nowIso(), tenantId]);
   return clean;
 }
@@ -318,12 +328,16 @@ const AWAITING_REVIEW = ['SUBMITTED', 'LATE', 'UNDER_REVIEW'];
 /** Owner/admin: whoever may edit workspace settings sees and reviews every plan. */
 export const isAdmin = (auth) => can(auth, 'settings', 'edit');
 
+/** The owner, or someone the owner has granted a view of every plan. */
+export const seesEveryone = (auth) => isAdmin(auth)
+  || settingsFor(auth.tenantId).full_view_user_ids.includes(auth.userId);
+
 const userName = (id) => (id ? get('SELECT name FROM users WHERE id = ?', [id])?.name : null) || null;
 const userRow = (id) => get('SELECT * FROM users WHERE id = ?', [id]);
 
 export function canView(auth, sub) {
   if (!sub) return false;
-  if (sub.user_id === auth.userId || sub.reporting_person_id === auth.userId || isAdmin(auth)) return true;
+  if (sub.user_id === auth.userId || sub.reporting_person_id === auth.userId || seesEveryone(auth)) return true;
   // The employee's current reporting person may read their history too.
   return userRow(sub.user_id)?.manager_id === auth.userId;
 }
@@ -630,9 +644,11 @@ export function team(auth, day) {
   const s = win.settings;
   const target = day || win.todo_date || nextWorkingDay(auth.tenantId, win.today, s);
   const admin = isAdmin(auth);
+  const everyone = seesEveryone(auth);
+  const managerAssigns = !admin && s.managers_can_assign;
 
   const people = plannersOf(auth.tenantId)
-    .filter((u) => u.id !== auth.userId && (admin || u.manager_id === auth.userId));
+    .filter((u) => u.id !== auth.userId && (everyone || u.manager_id === auth.userId));
 
   const plans = all(
     `SELECT s.*, (SELECT COUNT(*) FROM todo_tasks t WHERE t.submission_id = s.id) AS task_count
@@ -649,6 +665,8 @@ export function team(auth, day) {
     const p = byUser.get(u.id);
     return {
       user: { id: u.id, name: u.name, designation: u.designation },
+      manager_id: u.manager_id || null,
+      can_release: managerAssigns && u.manager_id === auth.userId,
       reporting_person_name: userName(reportingPersonIds(auth.tenantId, u)[0]),
       plan: p ? {
         id: p.id, status: p.status, submitted_at: p.submitted_at, minutes_late: p.minutes_late,
@@ -674,13 +692,89 @@ export function team(auth, day) {
     admin ? [auth.tenantId, win.today, auth.userId] : [auth.tenantId, win.today, auth.userId, auth.userId],
   ).map((p) => ({ ...p, task_count: Number(p.task_count) }));
 
+  const manages = managerAssigns && auth.role === 'manager';
   return {
     todo_date: target,
     deadline_time: s.deadline_time,
-    is_reviewer: admin || rows.length > 0 || pending.length > 0,
+    is_reviewer: everyone || manages || rows.length > 0 || pending.length > 0,
     is_admin: admin,
+    scope: everyone ? 'everyone' : 'team',
     counts,
     rows,
     pending,
+    // The owner picks anyone's reporting person from this list.
+    reporting_options: admin ? reportingCandidates(auth.tenantId) : [],
+    // A manager the owner allows to build a team picks from people nobody else manages.
+    assignable: manages
+      ? plannersOf(auth.tenantId)
+        .filter((u) => u.id !== auth.userId && isUnclaimed(auth.tenantId, u))
+        .map((u) => ({ id: u.id, name: u.name, designation: u.designation }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      : [],
+    can_assign: manages,
   };
+}
+
+// ================================================================ reporting structure
+/** Anyone who can hold a team: active staff, owners included. */
+export const reportingCandidates = (tenantId) => all(
+  `SELECT id, name, role FROM users WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active'
+      AND role NOT IN ('client','super_admin') ORDER BY name`,
+  [tenantId],
+);
+
+/** Nobody's but the owner's: no manager on record, or one of the owners. */
+function isUnclaimed(tenantId, user) {
+  if (!user.manager_id) return true;
+  return get("SELECT role FROM users WHERE id = ? AND tenant_id = ?", [user.manager_id, tenantId])?.role === 'owner';
+}
+
+/** Would `managerId` end up reporting (directly or not) to `userId`? */
+function wouldLoop(tenantId, userId, managerId) {
+  let cur = managerId;
+  for (let i = 0; cur && i < 50; i++) {
+    if (cur === userId) return true;
+    cur = get('SELECT manager_id FROM users WHERE id = ? AND tenant_id = ?', [cur, tenantId])?.manager_id;
+  }
+  return false;
+}
+
+/**
+ * Change who someone reports to. The owner may set anyone's. A manager may,
+ * only when the owner has switched it on, take someone unclaimed into their
+ * own team or hand one of their own back to the owner - never take someone
+ * from another manager. Nobody sets their own. Plans already filed keep the
+ * person they went to; the next one follows the new line.
+ */
+export function setReporting(auth, userId, managerId) {
+  const target = get("SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL", [userId, auth.tenantId]);
+  if (!target || ['client', 'super_admin'].includes(target.role)) throw notFound('Person');
+  if (userId === auth.userId) throw forbidden('You cannot change your own reporting person');
+  const next = managerId || null;
+  if (next) {
+    const m = get("SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'", [next, auth.tenantId]);
+    if (!m || ['client', 'super_admin'].includes(m.role)) throw badRequest('That reporting person is not in this workspace');
+    if (next === userId) throw badRequest('Someone cannot report to themselves');
+    if (wouldLoop(auth.tenantId, userId, next)) throw badRequest('That would make a reporting loop');
+  }
+
+  if (!isAdmin(auth)) {
+    const s = settingsFor(auth.tenantId);
+    if (!s.managers_can_assign || auth.role !== 'manager') throw forbidden('Only the owner can change reporting persons');
+    const takingIn = next === auth.userId && isUnclaimed(auth.tenantId, target);
+    const handingBack = next === null && target.manager_id === auth.userId;
+    if (!takingIn && !handingBack) {
+      throw forbidden('You can add people nobody else manages, or release your own - nothing else');
+    }
+  }
+
+  run('UPDATE users SET manager_id = ?, updated_at = ? WHERE id = ?', [next, nowIso(), userId]);
+  run(
+    `INSERT INTO audit_logs (id, tenant_id, actor_id, actor_name, entity, entity_id, action, before_json, after_json, ip, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [uuid(), auth.tenantId, auth.userId, auth.name ?? userName(auth.userId), 'user', userId, 'reporting_change',
+      JSON.stringify({ manager_id: target.manager_id, manager: userName(target.manager_id) }),
+      JSON.stringify({ manager_id: next, manager: userName(next) }), null, nowIso()],
+  );
+  return { user_id: userId, manager_id: next, manager_name: userName(next) };
 }

@@ -78,6 +78,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { loadMe(); }, []);
 
+  // Tokens live in localStorage, which every tab shares, but each tab holds its
+  // own idea of who is signed in. Signing in as someone else in another tab
+  // swaps the token underneath this one, which would then show one person's
+  // name over another person's data. A silent token refresh for the same
+  // person also lands here, so only a different person (or a sign-out) acts.
+  const signedInId = session?.user?.id;
+  useEffect(() => {
+    const onStorage = async (e: StorageEvent) => {
+      if (e.key !== 'phoenixx.access' || !signedInId) return;
+      if (!e.newValue) { setSession(null); return; }
+      try {
+        const { data } = await api.get<Session>('/auth/me');
+        if (data?.user?.id !== signedInId) window.location.reload();
+      } catch { /* the api client handles a dead session itself */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [signedInId]);
+
   // The API client raises this when a refresh token is rejected.
   useEffect(() => {
     const onSignedOut = () => setSession(null);
