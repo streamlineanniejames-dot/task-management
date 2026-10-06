@@ -1837,3 +1837,34 @@ CREATE TABLE IF NOT EXISTS todo_submissions (
 );
 CREATE INDEX IF NOT EXISTS ix_todo_sub_day ON todo_submissions(tenant_id, todo_date, status);
 CREATE INDEX IF NOT EXISTS ix_todo_sub_reviewer ON todo_submissions(tenant_id, reporting_person_id, todo_date);
+
+-- The lines of a plan. Replaced as a set on every save: nothing else points at
+-- a task row, and "the plan as it was submitted" is what the reviewer reads.
+CREATE TABLE IF NOT EXISTS todo_tasks (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  submission_id TEXT NOT NULL REFERENCES todo_submissions(id),
+  task TEXT NOT NULL,
+  project_id TEXT REFERENCES projects(id),
+  client_id TEXT REFERENCES client_accounts(id),
+  priority TEXT NOT NULL DEFAULT 'medium', -- high|medium|low
+  expected_time TEXT,                      -- HH:MM, workspace-local, on the planned day
+  notes TEXT,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_todo_tasks_sub ON todo_tasks(submission_id, sort);
+
+-- The conversation on a plan: comments, plus one row per review decision so
+-- the employee sees why it was approved or sent back, in order.
+CREATE TABLE IF NOT EXISTS todo_comments (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  submission_id TEXT NOT NULL REFERENCES todo_submissions(id),
+  user_id TEXT REFERENCES users(id),
+  kind TEXT NOT NULL DEFAULT 'comment',    -- comment|submitted|approved|changes_requested
+  body TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_todo_comments_sub ON todo_comments(submission_id, created_at);

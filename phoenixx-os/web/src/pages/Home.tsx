@@ -16,6 +16,7 @@ import {
 } from '../components/ui';
 import MiniChat from '../components/MiniChat';
 import PersonalTodos from '../components/PersonalTodos';
+import { TodoPlanSection } from '../components/TomorrowTodo';
 import { announceCheckIn } from '../components/TodoReminders';
 import { DailyUpdateModal } from '../components/DailyUpdate';
 
@@ -155,6 +156,9 @@ export default function Home() {
         <Stat label="Unread" value={c.unread ?? 0} icon={<Bell size={15} />}
           onClick={() => navigate('/notifications')} />
       </div>
+
+      {/* Tomorrow's To-Do: the person's own plan, and their team's if they review any. */}
+      <TodoPlanSection />
 
       {/* Chat is the wide column: most of a working day here is talking to the
           team, and the queues on the left are short lists that read fine narrow. */}

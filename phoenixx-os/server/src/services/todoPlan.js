@@ -1,17 +1,21 @@
-import { get, all, run } from '../db/index.js';
+import { get, all, run, tx } from '../db/index.js';
 import { uuid, nowIso, parseJson } from '../lib/util.js';
-import { badRequest } from '../lib/http.js';
+import { badRequest, forbidden, notFound } from '../lib/http.js';
 import { DEFAULT_TZ, todayInTz, timeInTz, localToUtc, formatDueTime } from '../lib/dueTime.js';
 import { notify, channelsFor } from './notifications.js';
+import { can } from '../middleware/rbac.js';
+import { visibleProjectIds } from './projectOversight.js';
 
 /**
  * Tomorrow's To-Do - the plan each person files for their next working day.
  *
- * This file owns the clock half of the module: the workspace schedule
+ * This file owns both halves of the module. The clock: the workspace schedule
  * (open -> reminder -> deadline -> escalation), the working-day calendar the
  * schedule runs on, and the notifications each rung sends. Every time is
  * workspace-local wall clock read through the tenant's timezone, never the
- * server's and never the browser's.
+ * server's and never the browser's. The plan: saving, submitting and the
+ * reporting person's review, with every permission checked here rather than
+ * trusted from the client.
  *
  * The reporting person is `users.manager_id`, which only the owner edits.
  * Someone with no manager reports to the workspace owners.
@@ -33,9 +37,11 @@ export const EVENTS = {
   submitted: 'todo.submitted',
   approved: 'todo.approved',
   changes: 'todo.changes_requested',
+  comment: 'todo.comment',
 };
 
 const PLAN_LINK = '/';
+const planLink = (id) => `/?plan=${id}`;
 
 // ---------------------------------------------------------------- settings
 export const CHANNEL_OPTIONS = ['in_app', 'email', 'whatsapp'];
@@ -102,6 +108,10 @@ export function saveSettings(tenantId, body) {
 const tzOf = (tenantId) => get('SELECT timezone FROM tenants WHERE id = ?', [tenantId])?.timezone || DEFAULT_TZ;
 const addDay = (d, n = 1) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const weekday = (d) => new Date(`${d}T12:00:00Z`).getUTCDay();
+/** '2026-10-07' -> 'Wed, 7 Oct', for notification copy. */
+export const dayLabel = (d) => (d
+  ? new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${d}T12:00:00Z`))
+  : '');
 
 /** Restricted holidays are optional for the person, so they do not stop the plan. */
 const isHoliday = (tenantId, day) => !!get(
@@ -249,7 +259,7 @@ export async function todoTick(tenantIds, now = new Date()) {
     const target = win.todo_date;
     const pending = pendingFor(tenantId, target);
     const deadline = formatDueTime(s.deadline_time);
-    const base = { todo_date: target, deadline, late_note: s.allow_late ? ' Late plans are still accepted but marked late.' : ' Late plans are not accepted.' };
+    const base = { todo_date: target, todo_day: dayLabel(target), deadline, late_note: s.allow_late ? ' Late plans are still accepted but marked late.' : ' Late plans are not accepted.' };
 
     const rung = async (stage, eventKey, users, varsFor = () => base, dedupe = () => `todo_${stage}:${target}`) => {
       const reached = [];
@@ -297,4 +307,380 @@ export async function todoTick(tenantIds, now = new Date()) {
     }
   }
   return n;
+}
+
+// ================================================================ the plan
+export const PRIORITIES = ['high', 'medium', 'low'];
+/** The reporting person is working on it or has decided: the employee's copy is frozen. */
+const LOCKED = ['UNDER_REVIEW', 'APPROVED', 'MISSED'];
+const AWAITING_REVIEW = ['SUBMITTED', 'LATE', 'UNDER_REVIEW'];
+
+/** Owner/admin: whoever may edit workspace settings sees and reviews every plan. */
+export const isAdmin = (auth) => can(auth, 'settings', 'edit');
+
+const userName = (id) => (id ? get('SELECT name FROM users WHERE id = ?', [id])?.name : null) || null;
+const userRow = (id) => get('SELECT * FROM users WHERE id = ?', [id]);
+
+export function canView(auth, sub) {
+  if (!sub) return false;
+  if (sub.user_id === auth.userId || sub.reporting_person_id === auth.userId || isAdmin(auth)) return true;
+  // The employee's current reporting person may read their history too.
+  return userRow(sub.user_id)?.manager_id === auth.userId;
+}
+
+export const canReview = (auth, sub) => !!sub && sub.user_id !== auth.userId
+  && (sub.reporting_person_id === auth.userId || isAdmin(auth));
+
+function loadSubmission(auth, id) {
+  const sub = get('SELECT * FROM todo_submissions WHERE id = ? AND tenant_id = ?', [id, auth.tenantId]);
+  // Not-found rather than forbidden, so an id cannot be probed for existence.
+  if (!sub || !canView(auth, sub)) throw notFound('To-Do');
+  return sub;
+}
+
+/** What the person may pick from: projects they can see, and clients if they can see the CRM. */
+export function optionsFor(auth) {
+  const pids = visibleProjectIds(auth);
+  const projects = pids.length
+    ? all(
+      `SELECT id, name FROM projects WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active'
+          AND id IN (${pids.map(() => '?').join(',')}) ORDER BY name`,
+      [auth.tenantId, ...pids],
+    )
+    : [];
+  const clients = can(auth, 'crm', 'view')
+    ? all("SELECT id, name FROM client_accounts WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active' ORDER BY name",
+      [auth.tenantId])
+    : [];
+  return { projects, clients };
+}
+
+/** Whether the employee may still change this plan, and if not, why. */
+function editState(auth, sub, win) {
+  if (sub.user_id !== auth.userId) return { can_edit: false, reason: null };
+  if (sub.status === 'MISSED') return { can_edit: false, reason: 'The planned day has arrived.' };
+  if (LOCKED.includes(sub.status)) return { can_edit: false, reason: 'Your reporting person has this plan now.' };
+  if (sub.todo_date < win.today || (sub.todo_date === win.today && sub.status !== 'CHANGES_REQUESTED')) {
+    return { can_edit: false, reason: 'The planned day has arrived.' };
+  }
+  if (sub.status === 'CHANGES_REQUESTED') return { can_edit: true, reason: null };
+  const past = sub.deadline_at && Date.now() > Date.parse(sub.deadline_at);
+  if (past && ['SUBMITTED', 'LATE'].includes(sub.status)) return { can_edit: false, reason: 'Submitted plans can be edited until the deadline.' };
+  if (past && !win.settings.allow_late) return { can_edit: false, reason: 'The deadline has passed and late plans are not accepted.' };
+  return { can_edit: true, reason: null };
+}
+
+export function detail(auth, sub, win = windowFor(auth.tenantId)) {
+  const tasks = all(
+    `SELECT t.id, t.task, t.project_id, p.name AS project_name, t.client_id, c.name AS client_name,
+            t.priority, t.expected_time, t.notes
+       FROM todo_tasks t
+       LEFT JOIN projects p ON p.id = t.project_id
+       LEFT JOIN client_accounts c ON c.id = t.client_id
+      WHERE t.submission_id = ? ORDER BY t.sort`,
+    [sub.id],
+  );
+  const comments = all(
+    `SELECT tc.id, tc.kind, tc.body, tc.created_at, tc.user_id, u.name AS user_name
+       FROM todo_comments tc LEFT JOIN users u ON u.id = tc.user_id
+      WHERE tc.submission_id = ? ORDER BY tc.created_at`,
+    [sub.id],
+  );
+  return {
+    ...sub,
+    employee_name: userName(sub.user_id),
+    reporting_person_name: userName(sub.reporting_person_id),
+    reviewed_by_name: userName(sub.reviewed_by),
+    tasks,
+    comments,
+    ...editState(auth, sub, win),
+    can_review: canReview(auth, sub),
+  };
+}
+
+export function mine(auth) {
+  const win = windowFor(auth.tenantId);
+  const me = userRow(auth.userId);
+  // A plan sent back for changes stays the one in front of the person until it is fixed.
+  const sub = get(
+    `SELECT * FROM todo_submissions WHERE tenant_id = ? AND user_id = ? AND todo_date >= ?
+        AND (todo_date = ? OR status = 'CHANGES_REQUESTED')
+      ORDER BY CASE status WHEN 'CHANGES_REQUESTED' THEN 0 ELSE 1 END, todo_date LIMIT 1`,
+    [auth.tenantId, auth.userId, win.today, win.todo_date ?? ''],
+  );
+  const reporting = reportingPersonIds(auth.tenantId, me)[0] ?? null;
+  const { settings, ...window } = win;
+  return {
+    window,
+    settings: {
+      enabled: settings.enabled, open_time: settings.open_time, deadline_time: settings.deadline_time,
+      allow_late: settings.allow_late,
+    },
+    expected: !['owner', 'client', 'super_admin'].includes(me.role),
+    plan: sub ? detail(auth, sub, win) : null,
+    reporting_person: reporting ? { id: reporting, name: userName(reporting) } : null,
+    options: optionsFor(auth),
+    history: all(
+      `SELECT s.id, s.todo_date, s.status, s.submitted_at, s.minutes_late,
+              (SELECT COUNT(*) FROM todo_tasks t WHERE t.submission_id = s.id) AS task_count
+         FROM todo_submissions s WHERE s.tenant_id = ? AND s.user_id = ?
+        ORDER BY s.todo_date DESC LIMIT 14`,
+      [auth.tenantId, auth.userId],
+    ).map((h) => ({ ...h, task_count: Number(h.task_count) })),
+  };
+}
+
+const HHMM_OPT = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function cleanTasks(auth, tasks, submitting) {
+  if (!Array.isArray(tasks)) throw badRequest('tasks must be a list');
+  if (tasks.length > 30) throw badRequest('A plan can hold at most 30 tasks');
+  const opts = optionsFor(auth);
+  const projectIds = new Set(opts.projects.map((p) => p.id));
+  const clientIds = new Set(opts.clients.map((c) => c.id));
+  const out = tasks
+    .map((t) => ({
+      task: String(t?.task ?? '').trim(),
+      project_id: t?.project_id || null,
+      client_id: t?.client_id || null,
+      priority: t?.priority || 'medium',
+      expected_time: t?.expected_time || null,
+      notes: String(t?.notes ?? '').trim() || null,
+    }))
+    // A row the person added and never touched is not a task.
+    .filter((t) => t.task || t.notes || t.project_id || t.client_id);
+  out.forEach((t, i) => {
+    const n = `Task ${i + 1}`;
+    if (!t.task) throw badRequest(`${n}: describe the task`);
+    if (t.task.length > 300) throw badRequest(`${n}: keep the task under 300 characters`);
+    if (t.notes && t.notes.length > 1000) throw badRequest(`${n}: keep notes under 1000 characters`);
+    if (!PRIORITIES.includes(t.priority)) throw badRequest(`${n}: priority must be high, medium or low`);
+    if (t.expected_time && !HHMM_OPT.test(t.expected_time)) throw badRequest(`${n}: expected time must be HH:MM`);
+    if (t.project_id && !projectIds.has(t.project_id)) throw badRequest(`${n}: that project is not available to you`);
+    if (t.client_id && !clientIds.has(t.client_id)) throw badRequest(`${n}: that client is not available to you`);
+  });
+  if (submitting && !out.length) throw badRequest('Add at least one task before submitting');
+  return out;
+}
+
+function addThread(tenantId, submissionId, userId, kind, body) {
+  run('INSERT INTO todo_comments (id, tenant_id, submission_id, user_id, kind, body, created_at) VALUES (?,?,?,?,?,?,?)',
+    [uuid(), tenantId, submissionId, userId, kind, body || null, nowIso()]);
+}
+
+function auditAs(auth, entityId, action, before, after) {
+  run(
+    `INSERT INTO audit_logs (id, tenant_id, actor_id, actor_name, entity, entity_id, action, before_json, after_json, ip, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [uuid(), auth.tenantId, auth.userId, auth.name ?? userName(auth.userId), 'todo_submission', entityId, action,
+      before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null, null, nowIso()],
+  );
+}
+
+/**
+ * Save (and optionally submit) the caller's own plan for `todoDate`. The
+ * reporting person is never taken from the request: it is read from the
+ * employee's record at the moment of submission.
+ */
+export async function savePlan(auth, todoDate, { tasks = [], submit = false } = {}) {
+  const win = windowFor(auth.tenantId);
+  const s = win.settings;
+  let sub = get('SELECT * FROM todo_submissions WHERE tenant_id = ? AND user_id = ? AND todo_date = ?',
+    [auth.tenantId, auth.userId, todoDate]);
+
+  if (!sub) {
+    if (!win.todo_date || todoDate !== win.todo_date) {
+      throw badRequest(win.todo_date ? `Plans can only be filed for ${win.todo_date} today` : 'There is no To-Do to file today');
+    }
+    if (Date.now() > Date.parse(win.deadline_at) && !s.allow_late) {
+      throw forbidden('The deadline has passed and late plans are not accepted');
+    }
+  } else {
+    const state = editState(auth, sub, win);
+    if (!state.can_edit) throw forbidden(state.reason || 'This plan can no longer be edited');
+  }
+
+  const clean = cleanTasks(auth, tasks, submit);
+  const me = userRow(auth.userId);
+  const now = nowIso();
+  const before = sub
+    ? { status: sub.status, tasks: all('SELECT task, priority FROM todo_tasks WHERE submission_id = ? ORDER BY sort', [sub.id]) }
+    : null;
+  const resubmission = sub?.status === 'CHANGES_REQUESTED';
+
+  const id = tx(() => {
+    if (!sub) {
+      const newId = uuid();
+      run(
+        `INSERT INTO todo_submissions (id, tenant_id, user_id, reporting_person_id, todo_date, plan_date, status,
+           deadline_at, created_at, updated_at) VALUES (?,?,?,?,?,?, 'DRAFT', ?,?,?)`,
+        [newId, auth.tenantId, auth.userId, reportingPersonIds(auth.tenantId, me)[0] ?? null, todoDate, win.today,
+          win.deadline_at, now, now],
+      );
+      sub = get('SELECT * FROM todo_submissions WHERE id = ?', [newId]);
+    }
+    run('DELETE FROM todo_tasks WHERE submission_id = ?', [sub.id]);
+    clean.forEach((t, i) => run(
+      `INSERT INTO todo_tasks (id, tenant_id, submission_id, task, project_id, client_id, priority, expected_time, notes,
+         sort, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid(), auth.tenantId, sub.id, t.task, t.project_id, t.client_id, t.priority, t.expected_time, t.notes, i, now, now],
+    ));
+
+    if (submit) {
+      // A resubmission answers the reviewer; it is not late against the original deadline.
+      const late = !resubmission && sub.deadline_at && Date.now() > Date.parse(sub.deadline_at);
+      const minutesLate = late ? Math.ceil((Date.now() - Date.parse(sub.deadline_at)) / 60_000) : sub.minutes_late;
+      run(
+        `UPDATE todo_submissions SET status = ?, submitted_at = ?, minutes_late = ?, reporting_person_id = ?, updated_at = ?
+          WHERE id = ?`,
+        [late ? 'LATE' : 'SUBMITTED', now, minutesLate ?? null, reportingPersonIds(auth.tenantId, me)[0] ?? null, now, sub.id],
+      );
+      addThread(auth.tenantId, sub.id, auth.userId, 'submitted', resubmission ? 'Resubmitted with changes' : null);
+    } else {
+      // A plain save never changes the status: a draft stays a draft, an overdue plan stays overdue.
+      run('UPDATE todo_submissions SET updated_at = ? WHERE id = ?', [now, sub.id]);
+    }
+    return sub.id;
+  });
+
+  const saved = get('SELECT * FROM todo_submissions WHERE id = ?', [id]);
+  const action = submit
+    ? (resubmission ? 'resubmit' : saved.status === 'LATE' ? 'submit_late' : 'submit')
+    : (before ? 'edit' : 'create');
+  auditAs(auth, id, action, before, { status: saved.status, tasks: clean.map((t) => ({ task: t.task, priority: t.priority })) });
+
+  if (submit) {
+    const late = saved.status === 'LATE' ? ` (${saved.minutes_late} min late)` : '';
+    for (const rid of reportingPersonIds(auth.tenantId, me)) {
+      const recipient = userRow(rid);
+      if (recipient) {
+        await tell(auth.tenantId, recipient, EVENTS.submitted,
+          { person: `${me.name}${late}`, todo_date: saved.todo_date, todo_day: dayLabel(saved.todo_date), count: clean.length }, null, s, planLink(id));
+      }
+    }
+  }
+  return detail(auth, saved, win);
+}
+
+/** The reporting person opening a plan moves it to UNDER_REVIEW, so it cannot change underneath them. */
+export function startReview(auth, id) {
+  const sub = loadSubmission(auth, id);
+  if (canReview(auth, sub) && ['SUBMITTED', 'LATE'].includes(sub.status)) {
+    run("UPDATE todo_submissions SET status = 'UNDER_REVIEW', updated_at = ? WHERE id = ?", [nowIso(), sub.id]);
+    auditAs(auth, sub.id, 'review_start', { status: sub.status }, { status: 'UNDER_REVIEW' });
+  }
+  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
+}
+
+export async function decide(auth, id, { approve, note }) {
+  const sub = loadSubmission(auth, id);
+  if (!canReview(auth, sub)) throw forbidden('Only the reporting person or an owner can review this plan');
+  if (!AWAITING_REVIEW.includes(sub.status)) {
+    throw badRequest(`This plan is ${sub.status.toLowerCase().replace(/_/g, ' ')}, not awaiting review`);
+  }
+  const text = String(note ?? '').trim();
+  if (!approve && !text) throw badRequest('Say what needs to change');
+  if (text.length > 2000) throw badRequest('Keep the note under 2000 characters');
+
+  const now = nowIso();
+  const status = approve ? 'APPROVED' : 'CHANGES_REQUESTED';
+  tx(() => {
+    run(
+      'UPDATE todo_submissions SET status = ?, reviewed_by = ?, reviewed_at = ?, approved_at = ?, updated_at = ? WHERE id = ?',
+      [status, auth.userId, now, approve ? now : null, now, sub.id],
+    );
+    addThread(auth.tenantId, sub.id, auth.userId, approve ? 'approved' : 'changes_requested', text || null);
+  });
+  auditAs(auth, sub.id, approve ? 'approve' : 'request_changes', { status: sub.status }, { status, note: text || null });
+
+  await tell(auth.tenantId, userRow(sub.user_id), approve ? EVENTS.approved : EVENTS.changes,
+    { reviewer: userName(auth.userId), todo_date: sub.todo_date, todo_day: dayLabel(sub.todo_date), note: text }, null, settingsFor(auth.tenantId), planLink(sub.id));
+  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
+}
+
+export async function addComment(auth, id, body) {
+  const sub = loadSubmission(auth, id);
+  const text = String(body ?? '').trim();
+  if (!text) throw badRequest('Write a comment');
+  if (text.length > 2000) throw badRequest('Keep the comment under 2000 characters');
+  addThread(auth.tenantId, sub.id, auth.userId, 'comment', text);
+  auditAs(auth, sub.id, 'comment', null, { body: text });
+
+  // The other side of the conversation hears about it.
+  const to = sub.user_id === auth.userId ? [sub.reporting_person_id].filter(Boolean) : [sub.user_id];
+  for (const rid of to.filter((x) => x !== auth.userId)) {
+    const recipient = userRow(rid);
+    if (recipient) {
+      await tell(auth.tenantId, recipient, EVENTS.comment,
+        { person: userName(auth.userId), todo_date: sub.todo_date, todo_day: dayLabel(sub.todo_date), note: text.slice(0, 300) }, null, settingsFor(auth.tenantId), planLink(sub.id));
+    }
+  }
+  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
+}
+
+export const getPlan = (auth, id) => detail(auth, loadSubmission(auth, id));
+
+/**
+ * The reviewer's view of one planned day: each of their people and where their
+ * plan stands, plus every plan still waiting on them. An owner sees everyone.
+ * Someone with nobody reporting to them gets `is_reviewer: false`.
+ */
+export function team(auth, day) {
+  const win = windowFor(auth.tenantId);
+  const s = win.settings;
+  const target = day || win.todo_date || nextWorkingDay(auth.tenantId, win.today, s);
+  const admin = isAdmin(auth);
+
+  const people = plannersOf(auth.tenantId)
+    .filter((u) => u.id !== auth.userId && (admin || u.manager_id === auth.userId));
+
+  const plans = all(
+    `SELECT s.*, (SELECT COUNT(*) FROM todo_tasks t WHERE t.submission_id = s.id) AS task_count
+       FROM todo_submissions s WHERE s.tenant_id = ? AND s.todo_date = ?`,
+    [auth.tenantId, target],
+  );
+  const byUser = new Map(plans.map((p) => [p.user_id, p]));
+  // Someone reassigned away since filing still shows to the person their plan went to.
+  const extra = plans
+    .filter((p) => p.reporting_person_id === auth.userId && !people.some((u) => u.id === p.user_id))
+    .map((p) => userRow(p.user_id)).filter(Boolean);
+
+  const rows = [...people, ...extra].map((u) => {
+    const p = byUser.get(u.id);
+    return {
+      user: { id: u.id, name: u.name, designation: u.designation },
+      reporting_person_name: userName(reportingPersonIds(auth.tenantId, u)[0]),
+      plan: p ? {
+        id: p.id, status: p.status, submitted_at: p.submitted_at, minutes_late: p.minutes_late,
+        task_count: Number(p.task_count),
+      } : null,
+    };
+  }).sort((a, b) => a.user.name.localeCompare(b.user.name));
+
+  const counts = { total: rows.length, not_submitted: 0 };
+  for (const st of STATUSES) counts[st] = 0;
+  for (const r of rows) {
+    if (!r.plan || ['DRAFT', 'OVERDUE', 'MISSED'].includes(r.plan.status)) counts.not_submitted += 1;
+    if (r.plan) counts[r.plan.status] += 1;
+  }
+
+  const pending = all(
+    `SELECT s.id, s.user_id, u.name AS employee_name, s.todo_date, s.status, s.submitted_at, s.minutes_late,
+            (SELECT COUNT(*) FROM todo_tasks t WHERE t.submission_id = s.id) AS task_count
+       FROM todo_submissions s JOIN users u ON u.id = s.user_id
+      WHERE s.tenant_id = ? AND s.status IN ('SUBMITTED','LATE','UNDER_REVIEW') AND s.todo_date >= ?
+        AND s.user_id != ? ${admin ? '' : 'AND s.reporting_person_id = ?'}
+      ORDER BY s.submitted_at`,
+    admin ? [auth.tenantId, win.today, auth.userId] : [auth.tenantId, win.today, auth.userId, auth.userId],
+  ).map((p) => ({ ...p, task_count: Number(p.task_count) }));
+
+  return {
+    todo_date: target,
+    deadline_time: s.deadline_time,
+    is_reviewer: admin || rows.length > 0 || pending.length > 0,
+    is_admin: admin,
+    counts,
+    rows,
+    pending,
+  };
 }
