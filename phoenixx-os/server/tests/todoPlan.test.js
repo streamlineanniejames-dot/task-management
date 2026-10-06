@@ -424,7 +424,7 @@ describe('checklists under a task', () => {
   });
 });
 
-describe('employees never see the team view', () => {
+describe('employees see the team view only when the owner grants it', () => {
   test('not even with a custom role that can edit settings', async () => {
     const esha = await join('Esha');
     const roleId = crypto.randomUUID();
@@ -441,24 +441,35 @@ describe('employees never see the team view', () => {
     assert.equal((await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: esha.token })).status, 404);
   });
 
-  test('not even if a stale grant names them, and that grant does not block saving settings', async () => {
-    const esha = db.get("SELECT id FROM users WHERE email = 'esha@review.test'");
-    const row = db.get('SELECT todo_settings FROM tenants WHERE id = ?', [tenantId]);
-    const saved = JSON.parse(row.todo_settings);
-    db.run('UPDATE tenants SET todo_settings = ? WHERE id = ?', [JSON.stringify({ ...saved, full_view_user_ids: [esha.id, ravi.id] }), tenantId]);
-
-    const login = await api.post('/auth/login', { email: 'esha@review.test', password: 'Password@123' });
-    const team = await api.get('/todo-plan/team', { token: login.body.data.access_token });
-    assert.equal(team.body.data.is_reviewer, false);
-
-    const res = await api.put('/todo-plan/settings', { allow_late: true }, { token: ownerToken });
+  test('once the owner grants it, an employee sees everyone - view only', async () => {
+    const res = await api.put('/todo-plan/settings', { full_view_user_ids: [kumar.id, ravi.id] }, { token: ownerToken });
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.deepEqual(res.body.data.full_view_user_ids, [ravi.id], 'the employee is dropped, the manager kept');
+
+    const team = await api.get('/todo-plan/team', { token: kumar.token });
+    assert.equal(team.body.data.is_reviewer, true);
+    assert.equal(team.body.data.scope, 'everyone');
+    assert.ok(team.body.data.rows.some((r) => r.user.name === 'Sita'), 'someone outside their own line');
+    assert.deepEqual(team.body.data.pending, [], 'nothing to review: they are nobody\'s reporting person');
+    assert.equal(team.body.data.can_assign, false);
+
+    const sitaPlan = db.get('SELECT id FROM todo_submissions WHERE user_id = ? ORDER BY created_at LIMIT 1', [sita.id]);
+    const view = await api.get(`/todo-plan/submissions/${sitaPlan.id}`, { token: kumar.token });
+    assert.equal(view.status, 200);
+    assert.equal(view.body.data.can_review, false);
+    assert.equal((await api.post(`/todo-plan/submissions/${sitaPlan.id}/approve`, {}, { token: kumar.token })).status, 403);
   });
 
-  test('the owner cannot grant an employee the view of everyone', async () => {
-    const res = await api.put('/todo-plan/settings', { full_view_user_ids: [kumar.id] }, { token: ownerToken });
-    assert.equal(res.status, 400);
+  test('taking the grant away takes the view away', async () => {
+    await api.put('/todo-plan/settings', { full_view_user_ids: [ravi.id] }, { token: ownerToken });
+    const team = await api.get('/todo-plan/team', { token: kumar.token });
+    assert.equal(team.body.data.is_reviewer, false);
+    assert.deepEqual(team.body.data.rows, []);
+  });
+
+  test('the grant only takes people in this workspace, never the owner or a stranger', async () => {
+    const ownerId = db.get("SELECT id FROM users WHERE email = 'owner@review.test'").id;
+    assert.equal((await api.put('/todo-plan/settings', { full_view_user_ids: [ownerId] }, { token: ownerToken })).status, 400);
+    assert.equal((await api.put('/todo-plan/settings', { full_view_user_ids: [crypto.randomUUID()] }, { token: ownerToken })).status, 400);
   });
 
   test('an employee cannot be made someone\'s reporting person', async () => {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { get } from '../db/index.js';
+import { get, all } from '../db/index.js';
 import { ok, audit, badRequest } from '../lib/http.js';
 import { requires, can } from '../middleware/rbac.js';
 import * as P from '../services/todoPlan.js';
@@ -25,8 +25,11 @@ router.get('/schedule', (req, res) => {
     channel_options: P.CHANNEL_OPTIONS,
     mine: mine || null,
     can_edit_settings: can(req.auth, 'settings', 'edit'),
-    // For the owner's access settings: who can be given a view of everyone.
-    people: can(req.auth, 'settings', 'edit') ? P.reportingCandidates(req.auth.tenantId) : [],
+    // For the owner's access settings: everyone who can be given a view of everyone.
+    people: can(req.auth, 'settings', 'edit')
+      ? all(`SELECT id, name, role FROM users WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active'
+               AND role NOT IN ('owner','client','super_admin') ORDER BY name`, [req.auth.tenantId])
+      : [],
   });
 });
 

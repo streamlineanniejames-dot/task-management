@@ -103,14 +103,16 @@ export function saveSettings(tenantId, body) {
   for (const k of ['enabled', 'allow_late', 'notify_employees', 'notify_managers', 'escalate_to_owner', 'managers_can_assign']) {
     if (typeof s[k] !== 'boolean') throw badRequest(`${k.replace(/_/g, ' ')} must be true or false`);
   }
-  const isManager = (id) => typeof id === 'string'
-    && !!get("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role = 'manager'", [id, tenantId]);
+  // Any staff member can be granted it; owners already see everything.
+  const isStaff = (id) => typeof id === 'string'
+    && !!get(`SELECT id FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL
+                AND role NOT IN ('owner','client','super_admin')`, [id, tenantId]);
   if (body.full_view_user_ids !== undefined
-    && (!Array.isArray(body.full_view_user_ids) || !body.full_view_user_ids.every(isManager))) {
-    throw badRequest('Only managers in this workspace can be given a view of everyone');
+    && (!Array.isArray(body.full_view_user_ids) || !body.full_view_user_ids.every(isStaff))) {
+    throw badRequest('Only people in this workspace can be given a view of everyone');
   }
-  // A grant saved earlier for someone who is no longer a manager is dropped, not an error.
-  const viewers = [...new Set(Array.isArray(s.full_view_user_ids) ? s.full_view_user_ids : [])].filter(isManager);
+  // A grant saved earlier for someone who has since left is dropped, not an error.
+  const viewers = [...new Set(Array.isArray(s.full_view_user_ids) ? s.full_view_user_ids : [])].filter(isStaff);
   const clean = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((k) => [k, s[k]]));
   clean.working_days = days.sort();
   clean.channels = channels;
@@ -352,7 +354,8 @@ const isLead = (auth) => isAdmin(auth) || auth.role === 'manager';
 
 /** The owner, or a manager the owner has granted a view of every plan. */
 export const seesEveryone = (auth) => isAdmin(auth)
-  || (auth.role === 'manager' && settingsFor(auth.tenantId).full_view_user_ids.includes(auth.userId));
+  || (!['client', 'super_admin'].includes(auth.role)
+    && settingsFor(auth.tenantId).full_view_user_ids.includes(auth.userId));
 
 const userName = (id) => (id ? get('SELECT name FROM users WHERE id = ?', [id])?.name : null) || null;
 const userRow = (id) => get('SELECT * FROM users WHERE id = ?', [id]);
@@ -726,7 +729,8 @@ export function team(auth, day) {
   const s = win.settings;
   const target = day || win.todo_date || nextWorkingDay(auth.tenantId, win.today, s);
   const admin = isAdmin(auth);
-  if (!isLead(auth)) {
+  // Employees see only their own plan - unless the owner has granted them the view of everyone.
+  if (!isLead(auth) && !seesEveryone(auth)) {
     // Employees (and finance, HR...) only ever see their own plan.
     return {
       todo_date: target, deadline_time: s.deadline_time, is_reviewer: false, is_admin: false, scope: 'none',
