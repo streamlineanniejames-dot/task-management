@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Users2, Download, Copy, KeyRound, Network, Trash2, Mail, ShieldCheck, PencilLine,
+  Plus, Users2, Download, Copy, KeyRound, Network, Trash2, Mail, ShieldCheck, PencilLine, FolderKanban,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -68,6 +68,7 @@ export default function Team() {
           <Tabs active={tab} onChange={setTab} tabs={[
             { id: 'list', label: 'Directory' },
             { id: 'org', label: 'Reporting structure' },
+            ...(can('projects', 'view') ? [{ id: 'projects', label: 'Projects handled' }] : []),
           ]} />
         }
       />
@@ -148,8 +149,102 @@ export default function Team() {
         </Card>
       )}
 
+      {tab === 'projects' && <ProjectsHandled onSelect={setOpenId} />}
+
       {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} />}
       {openId && <MemberDrawer id={openId} onClose={() => setOpenId(null)} />}
+    </>
+  );
+}
+
+/* ============================================================ PROJECTS HANDLED */
+/**
+ * How many projects each person is on, in one short line each: the count, how
+ * many they run (manager or lead), the time committed across them, and which
+ * ones. Same numbers as Projects → Who is on what, read from the people side.
+ */
+function ProjectsHandled({ onSelect }: { onSelect: (id: string) => void }) {
+  const [search, setSearch] = useState('');
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['team-workload'],
+    queryFn: () => api.get('/projects/workload').then((r) => r.data),
+  });
+
+  if (error) return <ErrorState error={error} retry={refetch} />;
+  if (isLoading || !data) return <Card><TableSkeleton cols={5} /></Card>;
+
+  const q = search.trim().toLowerCase();
+  const people = (data as any[])
+    .filter((u) => u.role !== 'client' && (!q || u.name.toLowerCase().includes(q)))
+    .sort((a, b) => b.project_count - a.project_count || a.name.localeCompare(b.name));
+  const onSome = (data as any[]).filter((u) => u.project_count > 0).length;
+  const onNone = (data as any[]).length - onSome;
+  const over = (data as any[]).filter((u) => u.allocation_pct > 100).length;
+
+  return (
+    <>
+      <Card className="mb-4">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 p-3">
+          <SearchInput value={search} onChange={setSearch} placeholder="Search a person…" className="flex-1 min-w-[220px]" />
+          <span className="text-[13px] text-muted"><span className="text-ink font-semibold tabular">{onSome}</span> on projects</span>
+          <span className="text-[13px] text-muted"><span className="text-ink font-semibold tabular">{onNone}</span> on none</span>
+          {over > 0 && <span className="text-[13px] text-[var(--negative)]"><span className="font-semibold tabular">{over}</span> over 100% allocated</span>}
+        </div>
+      </Card>
+
+      <Card>
+        <Table>
+          <THead>
+            <tr>
+              <TH>Person</TH>
+              <TH align="right" width="100px">Projects</TH>
+              <TH align="right" width="100px">Leading</TH>
+              <TH width="170px">Time allocated</TH>
+              <TH>On</TH>
+            </tr>
+          </THead>
+          <tbody>
+            {people.map((u: any) => {
+              const pct = Math.round(u.allocation_pct || 0);
+              const shown = u.projects.slice(0, 4);
+              return (
+                <TR key={u.id} onClick={() => onSelect(u.id)}>
+                  <TD><AvatarWithName name={u.name} url={u.avatar_url} sub={u.designation || titleCase(u.role)} size={30} /></TD>
+                  <TD align="right">
+                    <span className={cx('tabular text-[15px] font-semibold', u.project_count ? 'text-ink' : 'text-subtle')}>{u.project_count}</span>
+                  </TD>
+                  <TD align="right"><span className="tabular text-muted">{u.leads || '—'}</span></TD>
+                  <TD>
+                    {u.project_count ? (
+                      <span className="flex items-center gap-2">
+                        <Meter value={Math.min(pct, 100)} className="w-20"
+                          tone={pct > 100 ? 'negative' : pct >= 80 ? 'warning' : 'positive'} />
+                        <span className={cx('tabular text-[12.5px]', pct > 100 ? 'text-[var(--negative)] font-medium' : 'text-muted')}>{pct}%</span>
+                      </span>
+                    ) : <span className="text-subtle text-[12.5px]">—</span>}
+                  </TD>
+                  <TD>
+                    {u.project_count ? (
+                      <span className="flex flex-wrap gap-1.5">
+                        {shown.map((p: any) => (
+                          <span key={`${p.project_id}-${p.seat}`} title={p.client_name}
+                            className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[12px] text-muted">
+                            <FolderKanban size={11} aria-hidden />
+                            <span className="text-ink">{p.project_name}</span> · {titleCase(p.seat)}
+                          </span>
+                        ))}
+                        {u.projects.length > shown.length && (
+                          <span className="text-[12px] text-subtle self-center">+{u.projects.length - shown.length} more</span>
+                        )}
+                      </span>
+                    ) : <span className="text-subtle text-[12.5px]">Not on any project</span>}
+                  </TD>
+                </TR>
+              );
+            })}
+          </tbody>
+        </Table>
+      </Card>
     </>
   );
 }
