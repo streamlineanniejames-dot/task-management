@@ -38,6 +38,15 @@ export const STATUSES = [
 /** A late arrival nobody has ruled on yet. */
 export const PENDING = 'pending_approval';
 
+/**
+ * Logins that are not on the attendance register. The owner, and the HR and
+ * Finance management logins: they run the register, they are not rows on it.
+ */
+export const NO_ATTENDANCE_ROLES = ['client', 'super_admin', 'owner', 'hr', 'finance'];
+export const keepsAttendance = (role) => !NO_ATTENDANCE_ROLES.includes(role);
+/** For SQL: `role NOT IN (${NO_ATTENDANCE_SQL})`. Constant strings, never user input. */
+export const NO_ATTENDANCE_SQL = NO_ATTENDANCE_ROLES.map((r) => `'${r}'`).join(', ');
+
 const tenantRow = (tenantId) => get(
   `SELECT timezone, work_start, work_end, late_grace_minutes, week_off_days
      FROM tenants WHERE id = ?`,

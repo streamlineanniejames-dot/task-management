@@ -213,3 +213,18 @@ describe('reporting person changes', () => {
     assert.deepEqual(maniToday.map((n) => n.meta.person), ['Arun'], 'Mani still hears about Arun, no longer about Kumar');
   });
 });
+
+describe('HR and Finance logins do not file a To-Do', () => {
+  test('they get no reminders, and the server refuses a plan from them', async () => {
+    const hr = await join('Hema', 'hema@plan.test', 'hr');
+    const fin = await join('Farook', 'farook@plan.test', 'finance');
+    await at('2026-10-20', '17:31');
+    for (const id of [hr.id, fin.id]) assert.equal(inbox(id, 'todo.submission_open').length, 0);
+    assert.ok(inbox(kumar, 'todo.submission_open').some((n) => n.meta.todo_date === '2026-10-21'), 'employees still are');
+
+    const mine = await api.get('/todo-plan/mine', { token: hr.token });
+    assert.equal(mine.body.data.expected, false);
+    const res = await api.put('/todo-plan/mine/2030-01-01', { tasks: [{ task: 'x' }] }, { token: fin.token });
+    assert.equal(res.status, 403);
+  });
+});

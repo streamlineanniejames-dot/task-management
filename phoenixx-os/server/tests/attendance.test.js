@@ -586,3 +586,19 @@ describe('the working-day clock', () => {
     assert.equal(localToUtc('2026-09-03', '09:30', TZ).toISOString(), '2026-09-03T04:00:00.000Z');
   });
 });
+
+// ------------------------------------------------- management logins
+describe('HR and Finance logins are not on the register', () => {
+  test('they are not rows on the monthly register, and cannot check in', async () => {
+    const meera = await join('Meera', 'meera@shift.test', 'finance');
+    const month = today().slice(0, 7);
+    const res = await api.get(`/hr/attendance/register?month=${month}`, { token: hr.token });
+    assert.equal(res.status, 200);
+    const ids = res.body.data.rows.map((r) => r.user.id);
+    assert.ok(!ids.includes(hr.id), 'the HR login is not a row');
+    assert.ok(!ids.includes(meera.id), 'the Finance login is not a row');
+    assert.ok(ids.includes(chandru.id), 'employees still are');
+
+    assert.equal((await api.post('/hr/attendance/check-in', {}, { token: hr.token })).status, 403);
+  });
+});

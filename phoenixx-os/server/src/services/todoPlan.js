@@ -175,9 +175,16 @@ export function windowFor(tenantId, now = new Date()) {
 
 // ---------------------------------------------------------------- people
 /** Everyone expected to file a plan: active staff other than the owners themselves. */
+/**
+ * Logins that do not file a plan: the owner, and the HR and Finance management
+ * logins. They can still be given a view of everyone's plans.
+ */
+export const NON_PLANNERS = ['owner', 'client', 'super_admin', 'hr', 'finance'];
+export const filesPlans = (role) => !NON_PLANNERS.includes(role);
+
 export const plannersOf = (tenantId) => all(
   `SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL AND status = 'active'
-      AND role NOT IN ('owner','client','super_admin')`,
+      AND role NOT IN (${NON_PLANNERS.map((r) => `'${r}'`).join(',')})`,
   [tenantId],
 );
 
@@ -469,7 +476,7 @@ export function mine(auth) {
       enabled: settings.enabled, open_time: settings.open_time, deadline_time: settings.deadline_time,
       allow_late: settings.allow_late,
     },
-    expected: !['owner', 'client', 'super_admin'].includes(me.role),
+    expected: filesPlans(me.role),
     plan: sub ? detail(auth, sub, win) : null,
     // The plan being worked today: filed yesterday, or carried into.
     today_plan: (() => {
@@ -548,6 +555,7 @@ function auditAs(auth, entityId, action, before, after) {
  * employee's record at the moment of submission.
  */
 export async function savePlan(auth, todoDate, { tasks = [], submit = false } = {}) {
+  if (!filesPlans(auth.role)) throw forbidden('This login does not file a To-Do');
   const win = windowFor(auth.tenantId);
   const s = win.settings;
   let sub = get('SELECT * FROM todo_submissions WHERE tenant_id = ? AND user_id = ? AND todo_date = ?',

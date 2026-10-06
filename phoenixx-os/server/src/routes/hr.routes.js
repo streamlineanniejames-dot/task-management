@@ -13,6 +13,7 @@ import {
   PENDING, decorate, dayKind, historyFor, holidaysBetween, hoursLabel, logAttendance,
   scheduleFor, tzFor, workDayFor, workspaceSchedule, workMinutes, assessCheckIn,
   weekOffDays, weekdayOf, permissionCovering, minutesAtCheckout, statusAtCheckout,
+  keepsAttendance, NO_ATTENDANCE_SQL,
 } from '../services/attendance.js';
 import {
   METHOD as NETWORK_METHOD, checkEnabled, isPrivateRange, isTooBroad, matchNetwork,
@@ -40,8 +41,8 @@ const geoSchema = z.object({
  */
 router.post('/attendance/check-in', requires('hr_attendance', 'create'), (req, res) => {
   const { tenantId, userId } = req.auth;
-  // The owner is not on the attendance register, so there is nothing to stamp.
-  if (req.auth.role === 'owner') throw forbidden('Attendance is not tracked for the owner');
+  // The owner and the HR / Finance management logins are not on the register.
+  if (!keepsAttendance(req.auth.role)) throw forbidden('Attendance is not tracked for this login');
   const body = validate(z.object({
     geo: geoSchema.optional(),
     source: z.enum(['web', 'mobile']).optional(),
@@ -343,7 +344,7 @@ router.get('/attendance/today', requires('hr_attendance', 'view'), (req, res) =>
       ? all(
         `SELECT u.id, u.name, u.avatar_url, u.designation FROM users u
           WHERE u.tenant_id = ? AND u.deleted_at IS NULL AND u.status = 'active'
-            AND u.role NOT IN ('client', 'owner')
+            AND u.role NOT IN (${NO_ATTENDANCE_SQL})
             AND u.id NOT IN (SELECT user_id FROM attendance WHERE tenant_id = ? AND work_date = ?)`,
         [tenantId, tenantId, today],
       )
@@ -518,7 +519,7 @@ router.post('/attendance/mark', requires('hr_attendance', 'approve'), (req, res)
 
   const employee = get(
     `SELECT id, name, role FROM users
-      WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role NOT IN ('client', 'owner')`,
+      WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND role NOT IN (${NO_ATTENDANCE_SQL})`,
     [body.user_id, tenantId],
   );
   if (!employee) throw notFound('Employee');
@@ -633,7 +634,7 @@ router.get('/work-schedules', requires('hr_attendance', 'view'), (req, res) => {
   const users = all(
     `SELECT id, name, avatar_url, designation, role, work_start, work_end, grace_minutes
        FROM users
-      WHERE tenant_id = ? AND deleted_at IS NULL AND role NOT IN ('client', 'owner') AND status != 'disabled'
+      WHERE tenant_id = ? AND deleted_at IS NULL AND role NOT IN (${NO_ATTENDANCE_SQL}) AND status != 'disabled'
         ${scoped ? 'AND id = ?' : ''}
       ORDER BY name`,
     scoped ? [tenantId, req.auth.userId] : [tenantId],
@@ -1009,8 +1010,8 @@ router.get('/attendance/register', requires('hr_attendance', 'view'), (req, res)
   const today = workDayFor(tenantId);
 
   const scopeToSelf = !can(req.auth, 'hr_attendance', 'approve');
-  // The owner does not keep attendance, so they are not a row on the register.
-  const filters = ["tenant_id = ?", 'deleted_at IS NULL', "role NOT IN ('client', 'owner')"];
+  // The owner and the HR / Finance management logins are not rows on the register.
+  const filters = ["tenant_id = ?", 'deleted_at IS NULL', `role NOT IN (${NO_ATTENDANCE_SQL})`];
   const params = [tenantId];
   if (scopeToSelf) { filters.push('id = ?'); params.push(req.auth.userId); }
   // HR filters the register the way they think about it: one person, or one

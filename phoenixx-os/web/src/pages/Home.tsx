@@ -88,7 +88,8 @@ export default function Home() {
   // would mark them late is not offered on one.
   const offToday = attendanceDay?.kind && attendanceDay.kind !== 'working';
   // The owner is not on the attendance register at all.
-  const keepsAttendance = user?.role !== 'owner';
+  // The owner and the HR / Finance management logins are not on the register.
+  const keepsAttendance = !['owner', 'hr', 'finance'].includes(user?.role || '');
   const approvals = data?.pending_approvals || {};
   const approvalTotal = (approvals.leave || 0) + (approvals.regularizations || 0)
     + (approvals.late_check_ins || 0)
