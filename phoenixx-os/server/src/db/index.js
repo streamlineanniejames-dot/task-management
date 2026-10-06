@@ -21,6 +21,7 @@ export function migrate() {
   addColumns();
   addIndexes();
   backfill();
+  runOneTime();
 }
 
 /**
@@ -46,6 +47,44 @@ function addIndexes() {
  * One-off data repairs, run after the columns they touch are guaranteed to
  * exist. Every one of these has to be a no-op on the second boot.
  */
+/**
+ * Data changes that must happen exactly once per database - not a schema
+ * change, so they cannot be expressed as CREATE ... IF NOT EXISTS. Each key is
+ * recorded when it runs, so a restart (or a restored snapshot that already
+ * carries the record) never repeats it.
+ */
+const ONE_TIME = [
+  // The Tomorrow's To-Do module went live on 2026-10-06 after a day of trials.
+  // Every plan filed during the trial is cleared so the module starts on real
+  // plans only. Settings, reporting lines and the audit log are kept.
+  ['2026-10-06-clear-todo-trial-data', () => {
+    if (!tableExists('todo_submissions')) return;
+    db.exec(`
+      DELETE FROM todo_comments;
+      DELETE FROM todo_tasks;
+      DELETE FROM todo_submissions;
+      DELETE FROM notifications WHERE event_key LIKE 'todo.%';
+    `);
+  }],
+];
+
+function runOneTime() {
+  db.exec('CREATE TABLE IF NOT EXISTS one_time_migrations (key TEXT PRIMARY KEY, ran_at TEXT NOT NULL)');
+  for (const [key, fn] of ONE_TIME) {
+    if (db.prepare('SELECT key FROM one_time_migrations WHERE key = ?').get(key)) continue;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      fn();
+      db.prepare('INSERT INTO one_time_migrations (key, ran_at) VALUES (?, ?)').run(key, new Date().toISOString());
+      db.exec('COMMIT');
+      console.log(JSON.stringify({ t: new Date().toISOString(), msg: 'one-time migration ran', key }));
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      throw err;
+    }
+  }
+}
+
 function backfill() {
   // Creator validation arrived after these tasks were already closed. They
   // were finished under the rules of the day, so they count as settled -

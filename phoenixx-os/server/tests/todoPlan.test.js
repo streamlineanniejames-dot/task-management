@@ -298,7 +298,7 @@ describe('reporting structure', () => {
     assert.deepEqual(team.body.data.assignable, []);
   });
 
-  test('once allowed, a manager can take in someone unassigned and release their own', async () => {
+  test('once allowed, a manager can take in someone unassigned, but only the owner takes them off', async () => {
     assert.equal((await api.put('/todo-plan/settings', { managers_can_assign: true }, { token: ownerToken })).status, 200);
     const usha = db.get("SELECT id FROM users WHERE email = 'usha@review.test'");
     const team = await api.get('/todo-plan/team', { token: mani.token });
@@ -307,7 +307,9 @@ describe('reporting structure', () => {
 
     assert.equal((await setLine(usha, mani.id, mani.token)).status, 200);
     assert.equal(db.get('SELECT manager_id FROM users WHERE id = ?', [usha.id]).manager_id, mani.id);
-    assert.equal((await setLine(usha, null, mani.token)).status, 200);
+    assert.equal((await setLine(usha, null, mani.token)).status, 403, 'a manager cannot remove someone from a team');
+    assert.equal(db.get('SELECT manager_id FROM users WHERE id = ?', [usha.id]).manager_id, mani.id);
+    assert.equal((await setLine(usha, null, ownerToken)).status, 200, 'the owner can');
     assert.equal(db.get('SELECT manager_id FROM users WHERE id = ?', [usha.id]).manager_id, null);
   });
 

@@ -402,7 +402,7 @@ function TodoScheduleTab() {
           subtitle="Who reports to whom is set on Home → Team To-Do. Employees never choose their own reporting person." />
         <div className="p-4 space-y-4">
           <Toggle k="managers_can_assign" title="Managers can build their own team"
-            hint="A manager may add people who are not on anyone's team, and release their own. They can never take someone from another manager." />
+            hint="A manager may add people who are not on anyone's team. Only the owner moves someone off a team or between managers." />
           <div className="border-t border-line pt-3.5">
             <p className="text-[13px] text-ink font-medium">People who can see everyone's plans</p>
             <p className="text-[12.5px] text-muted mb-2.5">

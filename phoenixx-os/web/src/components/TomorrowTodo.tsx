@@ -905,10 +905,6 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
                     .map((o: any) => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </Select>
               )}
-              {r.can_release && (
-                <button onClick={() => reporting.mutate({ userId: r.user.id, managerId: null })} disabled={reporting.isPending}
-                  className="text-[12px] text-subtle hover:text-[var(--negative)] cursor-pointer shrink-0">Remove from team</button>
-              )}
               <PlanStatus status={r.plan?.status === 'DRAFT' ? null : r.plan?.status} />
             </li>
           ))}

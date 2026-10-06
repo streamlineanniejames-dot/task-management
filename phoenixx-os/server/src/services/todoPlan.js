@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS = {
   escalate_to_owner: false,
   /** In-app always goes; these are the extra channels, still subject to each person's preferences. */
   channels: ['in_app', 'email'],
-  /** Managers may take unassigned people (or the owner's direct reports) into their own team, and release their own. */
+  /** Managers may take unassigned people (or the owner's direct reports) into their own team. Only the owner moves anyone off a team. */
   managers_can_assign: false,
   /** People the owner has let see every plan in the workspace. View only: reviewing stays with the reporting person. */
   full_view_user_ids: [],
@@ -772,7 +772,6 @@ export function team(auth, day, wantAll = false) {
     return {
       user: { id: u.id, name: u.name, designation: u.designation },
       manager_id: u.manager_id || null,
-      can_release: managerAssigns && u.manager_id === auth.userId,
       reporting_person_name: userName(reportingPersonIds(auth.tenantId, u)[0]),
       plan: p ? {
         id: p.id, status: p.status, submitted_at: p.submitted_at, minutes_late: p.minutes_late,
@@ -866,11 +865,9 @@ export function setReporting(auth, userId, managerId) {
   if (!isAdmin(auth)) {
     const s = settingsFor(auth.tenantId);
     if (!s.managers_can_assign || auth.role !== 'manager') throw forbidden('Only the owner can change reporting persons');
+    // Adding only: taking someone off a team is the owner's call.
     const takingIn = next === auth.userId && isUnclaimed(auth.tenantId, target);
-    const handingBack = next === null && target.manager_id === auth.userId;
-    if (!takingIn && !handingBack) {
-      throw forbidden('You can add people nobody else manages, or release your own - nothing else');
-    }
+    if (!takingIn) throw forbidden('You can add people nobody else manages. Only the owner can move someone off a team.');
   }
 
   if (next) {
