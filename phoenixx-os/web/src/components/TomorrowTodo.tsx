@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ClipboardList, Plus, Trash2, CheckCircle2, MessageSquare, Send, Undo2, Users2, Clock, AlertTriangle,
+  ClipboardList, Plus, Trash2, Check, CheckCircle2, MessageSquare, Send, Undo2, Users2, Clock, AlertTriangle,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { date, time, dateTime, clockTime } from '../lib/format';
 import {
-  Badge, Button, Card, CardHeader, EmptyState, Field, Input, Modal, Select, Skeleton, Textarea, useToast, cx,
+  Avatar, Badge, Button, Card, CardHeader, EmptyState, Field, Input, Modal, Select, Skeleton, Textarea, useToast, cx,
 } from './ui';
 
 /**
@@ -297,6 +297,26 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
 }
 
 /* ================================================================ one plan, read + review */
+/** Plans whose tasks can be ticked off: filed and not given up on. */
+const TICKABLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
+
+/** One line of the activity feed, in the words a person would use. */
+function activityText(c: any) {
+  switch (c.kind) {
+    case 'submitted': return c.body ? 'resubmitted the plan with changes' : 'submitted the plan';
+    case 'approved': return 'approved the plan';
+    case 'changes_requested': return 'asked for changes';
+    case 'task_done': return <>marked <span className="text-ink font-medium">“{c.body}”</span> as complete</>;
+    case 'task_reopened': return <>reopened <span className="text-ink font-medium">“{c.body}”</span></>;
+    default: return null;
+  }
+}
+
+/**
+ * A plan opened like a card: the plan on the left, and the conversation with
+ * the reporting person on the right - comments and every step it went
+ * through, newest first.
+ */
 function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -305,6 +325,7 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
   const [note, setNote] = useState('');
   const [asking, setAsking] = useState(false);
   const [commentText, setCommentText] = useState('');
+  const [writing, setWriting] = useState(false);
 
   const { data: plan, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get(`/todo-plan/submissions/${id}`).then((r) => r.data) });
 
@@ -319,11 +340,11 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
     }).catch(() => {});
   }, [plan]);
 
-  const done = (r: any, msg: string) => {
+  const done = (r: any, msg?: string) => {
     qc.setQueryData(key, r.data);
     qc.invalidateQueries({ queryKey: ['todo-plan', 'team'] });
     qc.invalidateQueries({ queryKey: ['todo-plan', 'mine'] });
-    toast.success(msg);
+    if (msg) toast.success(msg);
   };
   const approve = useMutation({
     mutationFn: () => api.post(`/todo-plan/submissions/${id}/approve`, { note: note || undefined }),
@@ -337,20 +358,29 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
   });
   const comment = useMutation({
     mutationFn: () => api.post(`/todo-plan/submissions/${id}/comments`, { body: commentText }),
-    onSuccess: (r) => { done(r, 'Comment added.'); setCommentText(''); },
+    onSuccess: (r) => { done(r); setCommentText(''); setWriting(false); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const tick = useMutation({
+    mutationFn: ({ taskId, value }: { taskId: string; value: boolean }) =>
+      api.post(`/todo-plan/submissions/${id}/tasks/${taskId}`, { done: value }),
+    onSuccess: (r) => done(r),
     onError: (e: any) => toast.error(e.message),
   });
 
   const reviewable = plan?.can_review && ['SUBMITTED', 'LATE', 'UNDER_REVIEW'].includes(plan.status);
   const own = plan && plan.user_id === user?.id;
+  const canTick = own && TICKABLE.includes(plan?.status);
+  const doneCount = plan?.tasks?.filter((t: any) => t.done_at).length || 0;
+  const feed = [...(plan?.comments || [])].reverse();
 
   return (
-    <Modal open onClose={onClose} size="lg"
-      title={plan ? `${own ? 'My' : `${plan.employee_name}'s`} To-Do for ${date(plan.todo_date, 'long')}` : 'To-Do'}
-      subtitle={plan ? `Reporting person: ${plan.reporting_person_name || '—'}` : undefined}
+    <Modal open onClose={onClose} size="xl"
+      title={plan ? `${own ? 'My' : `${plan.employee_name}'s`} To-Do · ${date(plan.todo_date, 'long')}` : 'To-Do'}
+      subtitle={plan ? `${plan.employee_name} → ${plan.reporting_person_name || 'Owner'}` : undefined}
       footer={plan && (
         <>
-          {own && plan.can_edit && <Button onClick={onEdit}>Edit</Button>}
+          {own && plan.can_edit && <Button onClick={onEdit}>Edit plan</Button>}
           {reviewable && !asking && (
             <>
               <Button icon={<Undo2 size={15} />} onClick={() => setAsking(true)}>Request changes</Button>
@@ -368,63 +398,134 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
       )}>
       {error ? (
         <EmptyState compact icon={<AlertTriangle size={18} />} title="Not available" message="This To-Do does not exist or is not yours to see." />
-      ) : isLoading || !plan ? <Skeleton className="h-48" /> : (
-        <div className="space-y-5">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-muted">
-            <PlanStatus status={plan.status} />
-            {plan.submitted_at && <span className="flex items-center gap-1"><Clock size={13} /> Submitted {dateTime(plan.submitted_at)}</span>}
-            {plan.minutes_late ? <span className="text-[var(--warning)]">{plan.minutes_late} min late</span> : null}
-            {plan.reviewed_by_name && plan.status === 'APPROVED' && <span>Approved by {plan.reviewed_by_name}</span>}
-          </div>
-
-          {plan.tasks.length === 0 ? (
-            <p className="text-[13px] text-subtle">No tasks yet.</p>
-          ) : (
-            <ol className="divide-y divide-[var(--border)] rounded-lg border border-line">
-              {plan.tasks.map((t: any, i: number) => (
-                <li key={t.id} className="flex gap-3 px-3.5 py-3">
-                  <span className="text-[12px] text-subtle tabular w-4 shrink-0 pt-0.5">{i + 1}</span>
-                  <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-2 text-[14px] text-ink font-medium"><PriorityDot p={t.priority} /> {t.task}</p>
-                    <p className="text-[12.5px] text-subtle mt-0.5">
-                      {[PRIORITY[t.priority]?.label, t.project_name, t.client_name, t.expected_time && `by ${clockTime(t.expected_time)}`].filter(Boolean).join(' · ')}
-                    </p>
-                    {t.notes && <p className="text-[12.5px] text-muted mt-1 whitespace-pre-line">{t.notes}</p>}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
-
-          {reviewable && asking && (
-            <Field label="What needs to change?" required>
-              <Textarea rows={3} autoFocus value={note} onChange={(e) => setNote(e.target.value)}
-                placeholder="e.g. Please add the expected number of leads to be completed." />
-            </Field>
-          )}
-
-          <div>
-            <p className="flex items-center gap-1.5 text-[12.5px] font-semibold text-subtle mb-2"><MessageSquare size={13} /> Activity</p>
-            <ul className="space-y-2">
-              {plan.comments.map((c: any) => (
-                <li key={c.id} className="text-[13px]">
-                  <span className="text-ink font-medium">{c.user_name || 'System'}</span>{' '}
-                  <span className="text-muted">
-                    {c.kind === 'submitted' ? (c.body || 'submitted the plan')
-                      : c.kind === 'approved' ? `approved${c.body ? `: “${c.body}”` : ''}`
-                        : c.kind === 'changes_requested' ? `asked for changes: “${c.body}”` : c.body}
-                  </span>
-                  <span className="text-[11.5px] text-subtle"> · {dateTime(c.created_at)}</span>
-                </li>
-              ))}
-              {plan.comments.length === 0 && <li className="text-[12.5px] text-subtle">Nothing yet.</li>}
-            </ul>
-            <div className="mt-3 flex gap-2">
-              <Input value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Add a comment…" maxLength={2000}
-                onKeyDown={(e) => { if (e.key === 'Enter' && commentText.trim()) comment.mutate(); }} />
-              <Button loading={comment.isPending} disabled={!commentText.trim()} onClick={() => comment.mutate()}>Comment</Button>
+      ) : isLoading || !plan ? <Skeleton className="h-64" /> : (
+        <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_320px]">
+          {/* ------------------------------------------------ the plan */}
+          <section className="min-w-0 space-y-5">
+            <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+              <PlanStatus status={plan.status} />
+              {plan.submitted_at && (
+                <span className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-muted">
+                  <Clock size={13} /> Submitted {dateTime(plan.submitted_at)}
+                </span>
+              )}
+              {plan.minutes_late ? (
+                <span className="rounded-md border border-[var(--warning)]/40 bg-warning-soft px-2 py-1 text-ink">{plan.minutes_late} min late</span>
+              ) : null}
+              {plan.status === 'APPROVED' && plan.reviewed_by_name && (
+                <span className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-muted">
+                  <CheckCircle2 size={13} className="text-[var(--positive)]" /> Approved by {plan.reviewed_by_name}
+                </span>
+              )}
             </div>
-          </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink"><ClipboardList size={16} /> Tasks</h3>
+                {plan.tasks.length > 0 && <span className="text-[12px] text-subtle tabular">{doneCount}/{plan.tasks.length} done</span>}
+              </div>
+              {plan.tasks.length > 0 && (
+                <div className="h-1.5 rounded-full bg-sunken overflow-hidden mb-3" aria-hidden>
+                  <div className="h-full bg-[var(--positive)] transition-all duration-300"
+                    style={{ width: `${Math.round((doneCount / plan.tasks.length) * 100)}%` }} />
+                </div>
+              )}
+              {plan.tasks.length === 0 ? (
+                <p className="text-[13px] text-subtle">No tasks yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {plan.tasks.map((t: any) => {
+                    const isDone = !!t.done_at;
+                    return (
+                      <li key={t.id} className="flex gap-3 rounded-lg border border-line bg-raised px-3.5 py-3">
+                        <button type="button" disabled={!canTick || tick.isPending}
+                          onClick={() => tick.mutate({ taskId: t.id, value: !isDone })}
+                          aria-label={isDone ? `Reopen “${t.task}”` : `Mark “${t.task}” complete`}
+                          title={canTick ? (isDone ? 'Reopen' : 'Mark complete') : undefined}
+                          className={cx('mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 transition-colors duration-150',
+                            isDone ? 'border-[var(--positive)] bg-[var(--positive)] text-white' : 'border-line-strong',
+                            canTick ? 'cursor-pointer hover:border-[var(--positive)]' : 'cursor-default')}>
+                          {isDone && <Check size={13} strokeWidth={3.5} className="text-white" />}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <p className={cx('flex items-center gap-2 text-[14px] font-medium', isDone ? 'text-subtle line-through' : 'text-ink')}>
+                            <PriorityDot p={t.priority} /> {t.task}
+                          </p>
+                          <p className="text-[12.5px] text-subtle mt-0.5">
+                            {[PRIORITY[t.priority]?.label, t.project_name, t.client_name, t.expected_time && `by ${clockTime(t.expected_time)}`].filter(Boolean).join(' · ')}
+                          </p>
+                          {t.notes && <p className="text-[13px] text-muted mt-1.5 whitespace-pre-line">{t.notes}</p>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {reviewable && asking && (
+              <Field label="What needs to change?" required>
+                <Textarea rows={3} autoFocus value={note} onChange={(e) => setNote(e.target.value)}
+                  placeholder="e.g. Please add the expected number of leads to be completed." />
+              </Field>
+            )}
+          </section>
+
+          {/* ------------------------------------------- comments and activity */}
+          <aside className="rounded-lg bg-sunken p-3.5 md:max-h-[62vh] md:overflow-y-auto">
+            <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink mb-3">
+              <MessageSquare size={16} /> Comments and activity
+            </h3>
+
+            <div className="mb-4">
+              {writing || commentText ? (
+                <div className="space-y-2">
+                  <Textarea rows={3} autoFocus value={commentText} maxLength={2000} placeholder="Write a comment…"
+                    onChange={(e) => setCommentText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && commentText.trim()) comment.mutate(); }} />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="primary" icon={<Send size={13} />} loading={comment.isPending}
+                      disabled={!commentText.trim()} onClick={() => comment.mutate()}>Save</Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setCommentText(''); setWriting(false); }}>Cancel</Button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setWriting(true)}
+                  className="w-full rounded-md border border-line bg-raised px-3 py-2 text-left text-[13px] text-subtle hover:border-line-strong cursor-text">
+                  Write a comment…
+                </button>
+              )}
+            </div>
+
+            {feed.length === 0 ? (
+              <p className="text-[12.5px] text-subtle">Nothing yet.</p>
+            ) : (
+              <ul className="space-y-3.5">
+                {feed.map((c: any) => {
+                  const action = activityText(c);
+                  const bubble = c.kind === 'comment' || (['approved', 'changes_requested'].includes(c.kind) && c.body);
+                  return (
+                    <li key={c.id} className="flex gap-2.5">
+                      <Avatar name={c.user_name || 'System'} size={28} />
+                      <div className="min-w-0 flex-1 text-[13px] leading-snug">
+                        <p className="text-muted">
+                          <span className="font-semibold text-ink">{c.user_name || 'System'}</span>
+                          {action && <> {action}</>}
+                        </p>
+                        {bubble && (
+                          <p className={cx('mt-1 rounded-md border bg-raised px-2.5 py-1.5 text-ink whitespace-pre-line break-words',
+                            c.kind === 'changes_requested' ? 'border-[var(--warning)]/50' : 'border-line')}>
+                            {c.body}
+                          </p>
+                        )}
+                        <p className="mt-0.5 text-[11.5px] text-[var(--brand)]">{dateTime(c.created_at)}</p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </aside>
         </div>
       )}
     </Modal>

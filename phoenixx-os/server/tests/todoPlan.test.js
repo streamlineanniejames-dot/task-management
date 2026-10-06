@@ -350,3 +350,41 @@ describe('owner-granted view of everyone', () => {
     assert.equal(res.status, 400);
   });
 });
+
+describe('ticking tasks off', () => {
+  test('the employee marks a task complete and it lands on the activity feed', async () => {
+    const plan = (await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: kumar.token })).body.data;
+    const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks/${plan.tasks[0].id}`, { done: true }, { token: kumar.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.ok(res.body.data.tasks[0].done_at);
+    const entry = res.body.data.comments.at(-1);
+    assert.equal(entry.kind, 'task_done');
+    assert.match(entry.body, /lead verification/);
+  });
+
+  test('only the person who planned it can tick it', async () => {
+    const plan = (await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: mani.token })).body.data;
+    const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks/${plan.tasks[1].id}`, { done: true }, { token: mani.token });
+    assert.equal(res.status, 403);
+  });
+
+  test('a task can be reopened', async () => {
+    const plan = (await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: kumar.token })).body.data;
+    const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks/${plan.tasks[0].id}`, { done: false }, { token: kumar.token });
+    assert.equal(res.body.data.tasks[0].done_at, null);
+    assert.equal(res.body.data.comments.at(-1).kind, 'task_reopened');
+  });
+
+  test('a draft cannot be ticked off', async () => {
+    const usha = db.get("SELECT id FROM users WHERE email = 'usha@review.test'");
+    const draftId = crypto.randomUUID();
+    const taskId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    db.run(`INSERT INTO todo_submissions (id, tenant_id, user_id, todo_date, plan_date, status, created_at, updated_at)
+            VALUES (?,?,?, '2031-01-02', '2031-01-01', 'DRAFT', ?, ?)`, [draftId, tenantId, usha.id, now, now]);
+    db.run(`INSERT INTO todo_tasks (id, tenant_id, submission_id, task, created_at, updated_at) VALUES (?,?,?, 'x', ?, ?)`,
+      [taskId, tenantId, draftId, now, now]);
+    const res = await api.post(`/todo-plan/submissions/${draftId}/tasks/${taskId}`, { done: true }, { token: ownerToken });
+    assert.equal(res.status, 403, 'not the owner\'s plan');
+  });
+});

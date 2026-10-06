@@ -377,6 +377,9 @@ function editState(auth, sub, win) {
   if (sub.todo_date < win.today || (sub.todo_date === win.today && sub.status !== 'CHANGES_REQUESTED')) {
     return { can_edit: false, reason: 'The planned day has arrived.' };
   }
+  if (get('SELECT 1 FROM todo_tasks WHERE submission_id = ? AND done_at IS NOT NULL LIMIT 1', [sub.id])) {
+    return { can_edit: false, reason: 'Work has started on this plan.' };
+  }
   if (sub.status === 'CHANGES_REQUESTED') return { can_edit: true, reason: null };
   const past = sub.deadline_at && Date.now() > Date.parse(sub.deadline_at);
   if (past && ['SUBMITTED', 'LATE'].includes(sub.status)) return { can_edit: false, reason: 'Submitted plans can be edited until the deadline.' };
@@ -387,7 +390,7 @@ function editState(auth, sub, win) {
 export function detail(auth, sub, win = windowFor(auth.tenantId)) {
   const tasks = all(
     `SELECT t.id, t.task, t.project_id, p.name AS project_name, t.client_id, c.name AS client_name,
-            t.priority, t.expected_time, t.notes
+            t.priority, t.expected_time, t.notes, t.done_at
        FROM todo_tasks t
        LEFT JOIN projects p ON p.id = t.project_id
        LEFT JOIN client_accounts c ON c.id = t.client_id
@@ -633,6 +636,32 @@ export async function addComment(auth, id, body) {
 }
 
 export const getPlan = (auth, id) => detail(auth, loadSubmission(auth, id));
+
+/** Plans whose tasks can be ticked off: filed and not given up on. */
+const TICKABLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
+
+/**
+ * The employee ticks a task done (or reopens it). Only their own plan, only
+ * once it has been filed, and each tick goes on the activity feed so the
+ * reporting person sees progress where they comment.
+ */
+export function setTaskDone(auth, id, taskId, done) {
+  const sub = loadSubmission(auth, id);
+  if (sub.user_id !== auth.userId) throw forbidden('Only the person who planned it can tick a task off');
+  if (!TICKABLE.includes(sub.status)) throw badRequest('Submit the plan before ticking tasks off');
+  const task = get('SELECT * FROM todo_tasks WHERE id = ? AND submission_id = ?', [taskId, sub.id]);
+  if (!task) throw notFound('Task');
+  if (!!task.done_at === !!done) return detail(auth, sub);
+
+  const now = nowIso();
+  tx(() => {
+    run('UPDATE todo_tasks SET done_at = ?, done_by = ?, updated_at = ? WHERE id = ?',
+      [done ? now : null, done ? auth.userId : null, now, task.id]);
+    addThread(auth.tenantId, sub.id, auth.userId, done ? 'task_done' : 'task_reopened', task.task);
+  });
+  auditAs(auth, sub.id, done ? 'task_done' : 'task_reopened', null, { task: task.task });
+  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
+}
 
 /**
  * The reviewer's view of one planned day: each of their people and where their
