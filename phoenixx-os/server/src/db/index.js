@@ -293,6 +293,14 @@ const ADDED_COLUMNS = [
   ['todo_tasks', 'done_by', 'TEXT'],
   // The sub-steps under a task: JSON [{ text, done }], ticked off one by one.
   ['todo_tasks', 'checklist', "TEXT NOT NULL DEFAULT '[]'"],
+  // Added to a plan after it was filed (no re-approval), and by whom.
+  ['todo_tasks', 'added_at', 'TEXT'],
+  ['todo_tasks', 'added_by', 'TEXT'],
+  // Carry-over: an unfinished task moves to the next working day's plan. The
+  // copy remembers the day it was first planned; the original, where it went.
+  ['todo_tasks', 'carried_from_date', 'TEXT'],
+  ['todo_tasks', 'carried_from_task_id', 'TEXT'],
+  ['todo_tasks', 'carried_to_date', 'TEXT'],
   // A report about one project (the marketing reports) is only shown to the
   // people who can see that project.
   ['report_runs', 'project_id', 'TEXT'],

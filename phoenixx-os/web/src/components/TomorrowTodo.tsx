@@ -61,8 +61,12 @@ export function TodoPlanSection() {
   const mine = useQuery({ queryKey: ['todo-plan', 'mine'], queryFn: () => api.get('/todo-plan/mine').then((r) => r.data) });
   const team = useQuery({ queryKey: ['todo-plan', 'team'], queryFn: () => api.get('/todo-plan/team').then((r) => r.data) });
 
-  const close = () => { params.delete('plan'); setParams(params, { replace: true }); };
-  const view = (id: string) => { params.set('plan', id); setParams(params, { replace: true }); };
+  const close = () => { params.delete('plan'); params.delete('add'); setParams(params, { replace: true }); };
+  const view = (id: string, add = false) => {
+    params.set('plan', id);
+    if (add) params.set('add', '1'); else params.delete('add');
+    setParams(params, { replace: true });
+  };
 
   const showMine = !!mine.data?.expected && !!mine.data?.settings?.enabled;
   const showTeam = !!team.data?.is_reviewer;
@@ -77,15 +81,15 @@ export function TodoPlanSection() {
       </div>
       {editing && <PlanEditor onClose={() => setEditing(false)} />}
       {openId && !editing && (
-        <PlanModal id={openId} onClose={close} onEdit={() => { close(); setEditing(true); }} />
+        <PlanModal id={openId} startAdding={params.get('add') === '1'} onClose={close} onEdit={() => { close(); setEditing(true); }} />
       )}
     </>
   );
 }
 
 /* ================================================================ employee card */
-function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => void; onView: (id: string) => void }) {
-  const { window: win, settings, plan, reporting_person: rp, history } = data;
+function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => void; onView: (id: string, add?: boolean) => void }) {
+  const { window: win, settings, plan, reporting_person: rp, history, today_plan: today } = data;
   const status = plan?.status;
   const filed = status && FILED.includes(status);
   const lastNote = plan?.comments?.filter((c: any) => c.kind === 'changes_requested').at(-1);
@@ -155,6 +159,7 @@ function MyPlanCard({ data, onCreate, onView }: { data: any; onCreate: () => voi
         subtitle={(win.todo_date || plan?.todo_date)
           ? `For ${date(plan?.todo_date || win.todo_date, 'long')}${rp ? ` · goes to ${rp.name}` : ''}`
           : undefined} />
+      {today && <TodayStrip plan={today} onView={onView} />}
       <div className="p-4">{body}</div>
       {history?.length > 0 && (
         <details className="border-t border-line">
@@ -309,9 +314,6 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
 }
 
 /* ================================================================ one plan, read + review */
-/** Plans whose tasks can be ticked off: filed and not given up on. */
-const TICKABLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
-
 /** One line of the activity feed, in the words a person would use. */
 function activityText(c: any) {
   switch (c.kind) {
@@ -322,6 +324,12 @@ function activityText(c: any) {
     case 'task_reopened': return <>reopened <span className="text-ink font-medium">“{c.body}”</span></>;
     case 'check_done': return <>checked off <span className="text-ink font-medium">“{c.body}”</span></>;
     case 'check_reopened': return <>unchecked <span className="text-ink font-medium">“{c.body}”</span></>;
+    case 'task_added': return <>added <span className="text-ink font-medium">“{c.body}”</span></>;
+    case 'carried_over': return <>carried over unfinished <span className="text-ink font-medium">“{c.body}”</span> from the day before</>;
+    case 'moved_on': {
+      const [task, day] = String(c.body || '').split(' → ');
+      return <>moved unfinished <span className="text-ink font-medium">“{task}”</span> to {day}</>;
+    }
     default: return null;
   }
 }
@@ -331,7 +339,9 @@ function activityText(c: any) {
  * the reporting person on the right - comments and every step it went
  * through, newest first.
  */
-function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: () => void }) {
+function PlanModal({ id, onClose, onEdit, startAdding = false }: {
+  id: string; onClose: () => void; onEdit: () => void; startAdding?: boolean;
+}) {
   const qc = useQueryClient();
   const toast = useToast();
   const { user } = useAuth();
@@ -391,8 +401,11 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
 
   const reviewable = plan?.can_review && ['SUBMITTED', 'LATE', 'UNDER_REVIEW'].includes(plan.status);
   const own = plan && plan.user_id === user?.id;
-  const canTick = own && TICKABLE.includes(plan?.status);
-  const doneCount = plan?.tasks?.filter((t: any) => t.done_at).length || 0;
+  const [adding, setAdding] = useState(startAdding);
+  const canTick = !!plan?.can_tick;
+  // A task that moved to the next day no longer counts here.
+  const live = (plan?.tasks || []).filter((t: any) => !t.carried_to_date);
+  const doneCount = live.filter((t: any) => t.done_at).length;
   const feed = [...(plan?.comments || [])].reverse();
 
   return (
@@ -443,13 +456,23 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink"><ClipboardList size={16} /> Tasks</h3>
-                {plan.tasks.length > 0 && <span className="text-[12px] text-subtle tabular">{doneCount}/{plan.tasks.length} done</span>}
+                <span className="flex items-center gap-3">
+                  {live.length > 0 && <span className="text-[12px] text-subtle tabular">{doneCount}/{live.length} done</span>}
+                  {plan.can_add_task && !adding && (
+                    <Button size="sm" icon={<Plus size={14} />} onClick={() => setAdding(true)}>Add task</Button>
+                  )}
+                </span>
               </div>
-              {plan.tasks.length > 0 && (
+              {live.length > 0 && (
                 <div className="h-1.5 rounded-full bg-sunken overflow-hidden mb-3" aria-hidden>
                   <div className="h-full bg-[var(--positive)] transition-all duration-300"
-                    style={{ width: `${Math.round((doneCount / plan.tasks.length) * 100)}%` }} />
+                    style={{ width: `${Math.round((doneCount / live.length) * 100)}%` }} />
                 </div>
+              )}
+              {adding && plan.can_add_task && (
+                <AddTaskForm planId={plan.id} options={plan.options || { projects: [], clients: [] }}
+                  onCancel={() => setAdding(false)}
+                  onAdded={(r) => { done(r, 'Task added.'); setAdding(false); }} />
               )}
               {plan.tasks.length === 0 ? (
                 <p className="text-[13px] text-subtle">No tasks yet.</p>
@@ -457,9 +480,10 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
                 <ul className="space-y-2">
                   {plan.tasks.map((t: any) => {
                     const isDone = !!t.done_at;
+                    const movedOn = !!t.carried_to_date;
                     return (
-                      <li key={t.id} className="flex gap-3 rounded-lg border border-line bg-raised px-3.5 py-3">
-                        <button type="button" disabled={!canTick || tick.isPending}
+                      <li key={t.id} className={cx('flex gap-3 rounded-lg border border-line bg-raised px-3.5 py-3', movedOn && 'opacity-60')}>
+                        <button type="button" disabled={!canTick || movedOn || tick.isPending}
                           onClick={() => tick.mutate({ taskId: t.id, value: !isDone })}
                           aria-label={isDone ? `Reopen “${t.task}”` : `Mark “${t.task}” complete`}
                           title={canTick ? (isDone ? 'Reopen' : 'Mark complete') : undefined}
@@ -475,9 +499,28 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
                           <p className="text-[12.5px] text-subtle mt-0.5">
                             {[PRIORITY[t.priority]?.label, t.project_name, t.client_name, t.expected_time && `by ${clockTime(t.expected_time)}`].filter(Boolean).join(' · ')}
                           </p>
+                          {(t.carried_from_date || t.added_at || movedOn) && (
+                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                              {t.carried_from_date && (
+                                <span className="rounded border border-[var(--warning)]/40 bg-warning-soft px-1.5 py-0.5 text-[11.5px] text-ink">
+                                  Carried over from {date(t.carried_from_date, 'day')}
+                                </span>
+                              )}
+                              {t.added_at && t.added_by_name && (
+                                <span className="rounded border border-line px-1.5 py-0.5 text-[11.5px] text-muted">
+                                  Added by {t.added_by_name} · {dateTime(t.added_at)}
+                                </span>
+                              )}
+                              {movedOn && (
+                                <span className="rounded border border-line px-1.5 py-0.5 text-[11.5px] text-muted">
+                                  Not finished · moved to {date(t.carried_to_date, 'day')}
+                                </span>
+                              )}
+                            </div>
+                          )}
                           {t.notes && <p className="text-[13px] text-muted mt-1.5 whitespace-pre-line">{t.notes}</p>}
                           {t.checklist?.length > 0 && (
-                            <ChecklistView items={t.checklist} canTick={!!canTick} busy={check.isPending}
+                            <ChecklistView items={t.checklist} canTick={canTick && !movedOn} busy={check.isPending}
                               onTick={(index, value) => check.mutate({ taskId: t.id, index, value })} />
                           )}
                         </div>
@@ -554,6 +597,101 @@ function PlanModal({ id, onClose, onEdit }: { id: string; onClose: () => void; o
         </div>
       )}
     </Modal>
+  );
+}
+
+/* ================================================================ today and adding */
+/** The plan being worked today, on top of the employee card: progress, open it, add to it. */
+function TodayStrip({ plan, onView }: { plan: any; onView: (id: string, add?: boolean) => void }) {
+  const live = plan.tasks.filter((t: any) => !t.carried_to_date);
+  const doneCount = live.filter((t: any) => t.done_at).length;
+  const carried = live.filter((t: any) => t.carried_from_date).length;
+  return (
+    <div className="border-b border-line bg-sunken/60 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <p className="text-[13px] font-semibold text-ink">Today · {date(plan.todo_date, 'day')}</p>
+        <PlanStatus status={plan.status} />
+        <span className="text-[12.5px] text-subtle tabular">{doneCount}/{live.length} done</span>
+        {carried > 0 && <span className="text-[12px] text-[var(--warning)]">{carried} carried over</span>}
+      </div>
+      {live.length > 0 && (
+        <div className="h-1 rounded-full bg-[var(--border)] overflow-hidden mt-2" aria-hidden>
+          <div className="h-full bg-[var(--positive)]" style={{ width: `${Math.round((doneCount / live.length) * 100)}%` }} />
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 mt-2.5">
+        <Button size="sm" onClick={() => onView(plan.id)}>Open today's To-Do</Button>
+        {plan.can_add_task && <Button size="sm" variant="ghost" icon={<Plus size={14} />} onClick={() => onView(plan.id, true)}>Add task</Button>}
+      </div>
+    </div>
+  );
+}
+
+/** One more task on a plan already filed. Saved straight away: no re-approval. */
+function AddTaskForm({ planId, options, onAdded, onCancel }: {
+  planId: string; options: { projects: any[]; clients: any[] }; onAdded: (r: any) => void; onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [row, setRow] = useState<TaskRow>(blank());
+  const set = (k: keyof TaskRow, v: string) => setRow((r) => ({ ...r, [k]: v }));
+  const add = useMutation({
+    mutationFn: () => api.post(`/todo-plan/submissions/${planId}/tasks`, {
+      task: row.task, priority: row.priority, project_id: row.project_id || null, client_id: row.client_id || null,
+      expected_time: row.expected_time || null, notes: row.notes, checklist: row.checklist.map(({ key: _k, ...c }) => c),
+    }),
+    onSuccess: onAdded,
+    onError: (e: any) => toast.error(e.message),
+  });
+  return (
+    <div className="rounded-lg border border-[var(--brand)]/40 bg-raised p-3.5 mb-3 space-y-3">
+      <Field label="New task" required>
+        <Input autoFocus value={row.task} maxLength={300} placeholder="What else needs doing?"
+          onChange={(e) => set('task', e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && row.task.trim()) add.mutate(); }} />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Priority">
+          <div className="flex gap-1.5" role="radiogroup" aria-label="Priority">
+            {Object.entries(PRIORITY).map(([k, pr]) => (
+              <button key={k} type="button" role="radio" aria-checked={row.priority === k} onClick={() => set('priority', k)}
+                className={cx('flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border text-[12.5px] cursor-pointer',
+                  row.priority === k ? 'border-[var(--brand)] bg-brand-soft text-ink font-medium' : 'border-line-strong text-muted hover:text-ink')}>
+                <PriorityDot p={k} /> {pr.label}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <Field label="Expected completion">
+          <Input type="time" value={row.expected_time} onChange={(e) => set('expected_time', e.target.value)} className="h-8" />
+        </Field>
+        {options.projects.length > 0 && (
+          <Field label="Project">
+            <Select value={row.project_id} onChange={(e) => set('project_id', e.target.value)} className="h-8">
+              <option value="">— None —</option>
+              {options.projects.map((pr: any) => <option key={pr.id} value={pr.id}>{pr.name}</option>)}
+            </Select>
+          </Field>
+        )}
+        {options.clients.length > 0 && (
+          <Field label="Client">
+            <Select value={row.client_id} onChange={(e) => set('client_id', e.target.value)} className="h-8">
+              <option value="">— None —</option>
+              {options.clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </Field>
+        )}
+      </div>
+      <Field label="Notes">
+        <Textarea rows={2} value={row.notes} maxLength={1000} onChange={(e) => set('notes', e.target.value)} />
+      </Field>
+      <ChecklistEditor items={row.checklist} onChange={(fn) => setRow((r) => ({ ...r, checklist: fn(r.checklist) }))} />
+      <div className="flex gap-2">
+        <Button size="sm" variant="primary" icon={<Plus size={14} />} loading={add.isPending} disabled={!row.task.trim()}
+          onClick={() => add.mutate()}>Add to plan</Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
+        <span className="self-center text-[12px] text-subtle">Added straight away, no approval needed.</span>
+      </div>
+    </div>
   );
 }
 
@@ -703,14 +841,23 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
       )}
 
       {data.can_assign && (
-        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-line">
-          <span className="text-[12.5px] text-subtle">Add to my team</span>
-          <Select value="" disabled={reporting.isPending || !data.assignable.length} aria-label="Add someone to my team"
-            onChange={(e) => e.target.value && reporting.mutate({ userId: e.target.value, managerId: user!.id })}
-            className="h-8 w-auto min-w-[200px] text-[13px]">
-            <option value="">{data.assignable.length ? 'Choose a person…' : 'Nobody unassigned'}</option>
-            {data.assignable.map((u: any) => <option key={u.id} value={u.id}>{u.name}{u.designation ? ` · ${u.designation}` : ''}</option>)}
-          </Select>
+        <div className="px-4 py-3 border-b border-line bg-brand-soft/30">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="flex items-center gap-1.5 text-[13px] font-medium text-ink"><Plus size={14} /> Build your team</span>
+            {data.assignable.length > 0 ? (
+              <Select value="" disabled={reporting.isPending} aria-label="Add someone to my team"
+                onChange={(e) => e.target.value && reporting.mutate({ userId: e.target.value, managerId: user!.id })}
+                className="h-8 w-auto min-w-[220px] text-[13px]">
+                <option value="">Add a person to my team…</option>
+                {data.assignable.map((u: any) => <option key={u.id} value={u.id}>{u.name}{u.designation ? ` · ${u.designation}` : ''}</option>)}
+              </Select>
+            ) : null}
+          </div>
+          <p className="text-[12px] text-subtle mt-1.5">
+            {data.assignable.length > 0
+              ? 'Lists people who are not on anyone\'s team yet. Someone on another manager\'s team can only be moved by the owner.'
+              : 'Everyone already has a manager. Ask the owner to move someone to your team.'}
+          </p>
         </div>
       )}
 
@@ -742,7 +889,7 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
               )}
               {r.can_release && (
                 <button onClick={() => reporting.mutate({ userId: r.user.id, managerId: null })} disabled={reporting.isPending}
-                  className="text-[12px] text-subtle hover:text-[var(--negative)] cursor-pointer shrink-0">Remove</button>
+                  className="text-[12px] text-subtle hover:text-[var(--negative)] cursor-pointer shrink-0">Remove from team</button>
               )}
               <PlanStatus status={r.plan?.status === 'DRAFT' ? null : r.plan?.status} />
             </li>

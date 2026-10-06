@@ -75,6 +75,9 @@ router.post('/submissions/:id/approve', async (req, res) =>
 router.post('/submissions/:id/request-changes', async (req, res) =>
   ok(res, await P.decide(req.auth, req.params.id, { approve: false, note: req.body?.note })));
 
+/** Add a task to a plan being worked - no re-approval. */
+router.post('/submissions/:id/tasks', async (req, res) => ok(res, await P.addTask(req.auth, req.params.id, req.body)));
+
 router.post('/submissions/:id/tasks/:taskId', (req, res) =>
   ok(res, P.setTaskDone(req.auth, req.params.id, req.params.taskId, req.body?.done === true)));
 

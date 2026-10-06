@@ -233,6 +233,14 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Changes needed on your To-Do',
     body: 'Your To-Do list for {{todo_day}} requires changes from {{reviewer}}: {{note}}',
   },
+  'todo.task_added': {
+    subject: '{{person}} added a task for {{todo_day}}',
+    body: '{{person}} added "{{note}}" to the To-Do for {{todo_day}}.',
+  },
+  'todo.carried_over': {
+    subject: '{{count}} unfinished task(s) moved to {{todo_day}}',
+    body: 'Not completed, so now on your To-Do for {{todo_day}}: {{tasks}}.',
+  },
   'todo.comment': {
     subject: '{{person}} commented on the To-Do for {{todo_day}}',
     body: '{{person}}: {{note}}',

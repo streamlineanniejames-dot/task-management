@@ -8,6 +8,7 @@ useTempDatabase();
 const db = await import('../src/db/index.js');
 db.migrate();
 await seedPlan(db);
+const P = await import('../src/services/todoPlan.js');
 
 const api = await startServer();
 after(() => api.close());
@@ -464,5 +465,83 @@ describe('employees never see the team view', () => {
     const res = await api.put(`/todo-plan/reporting/${arun.id}`, { manager_id: kumar.id }, { token: ownerToken });
     assert.equal(res.status, 400);
     assert.match(JSON.stringify(res.body), /manager or the owner/);
+  });
+});
+
+describe('adding tasks to a filed plan, without re-approval', () => {
+  test('the employee adds a task to their approved plan; it stays approved', async () => {
+    const before = inbox(mani.id, 'todo.task_added').length;
+    const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks`, { task: 'Call back Sharma Traders', priority: 'high' }, { token: kumar.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.data.status, 'APPROVED');
+    const added = res.body.data.tasks.at(-1);
+    assert.equal(added.task, 'Call back Sharma Traders');
+    assert.equal(added.added_by_name, 'Kumar');
+    assert.ok(added.added_at);
+    assert.equal(res.body.data.comments.at(-1).kind, 'task_added');
+    assert.equal(inbox(mani.id, 'todo.task_added').length, before + 1);
+  });
+
+  test('the reporting person can add one too, and the employee hears about it', async () => {
+    const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks`, { task: 'Share lead list with Mani' }, { token: mani.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.data.tasks.at(-1).added_by_name, 'Mani');
+    assert.match(inbox(kumar.id, 'todo.task_added').at(-1).body, /Share lead list/);
+  });
+
+  test('nobody else can add to it', async () => {
+    assert.equal((await api.post(`/todo-plan/submissions/${kumarPlan}/tasks`, { task: 'x' }, { token: arun.token })).status, 404);
+  });
+
+  test('an empty task is refused', async () => {
+    assert.equal((await api.post(`/todo-plan/submissions/${kumarPlan}/tasks`, { task: '  ' }, { token: kumar.token })).status, 400);
+  });
+});
+
+describe('unfinished tasks carry over to the next working day', () => {
+  const dayAfter = (d) => new Date(Date.parse(`${d}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  let moved;
+
+  test('what was not done moves to the next day\'s plan, once', async () => {
+    const plan = (await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: kumar.token })).body.data;
+    // Finish one, so only the rest carry.
+    await api.post(`/todo-plan/submissions/${kumarPlan}/tasks/${plan.tasks[1].id}`, { done: true }, { token: kumar.token });
+    const open = plan.tasks.filter((t, i) => i !== 1 && !t.done_at).map((t) => t.task);
+
+    const next = dayAfter(target); // every day is a working day in this suite
+    const count = await P.carryOver(tenantId, next);
+    assert.ok(count >= open.length);
+
+    const dest = db.get('SELECT * FROM todo_submissions WHERE user_id = ? AND todo_date = ?', [kumar.id, next]);
+    assert.ok(dest, 'a plan for the next day exists');
+    moved = db.all('SELECT * FROM todo_tasks WHERE submission_id = ? ORDER BY sort', [dest.id]);
+    assert.deepEqual(moved.map((t) => t.task), open);
+    assert.ok(moved.every((t) => t.carried_from_date === target));
+    assert.ok(!moved.some((t) => t.task === plan.tasks[1].task), 'the finished task stays behind');
+
+    const originals = db.all('SELECT carried_to_date FROM todo_tasks WHERE submission_id = ? AND done_at IS NULL', [kumarPlan]);
+    assert.ok(originals.every((t) => t.carried_to_date === next));
+
+    assert.equal(await P.carryOver(tenantId, next), 0, 'running again moves nothing');
+    assert.match(inbox(kumar.id, 'todo.carried_over').at(-1).body, /Call back Sharma Traders/);
+  });
+
+  test('a moved task cannot be ticked on the old plan', async () => {
+    const original = db.get('SELECT id FROM todo_tasks WHERE submission_id = ? AND carried_to_date IS NOT NULL', [kumarPlan]);
+    const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks/${original.id}`, { done: true }, { token: kumar.token });
+    assert.equal(res.status, 400);
+    assert.match(JSON.stringify(res.body), /moved to/);
+  });
+
+  test('carried again, a task keeps the day it was first planned', async () => {
+    const next = dayAfter(target);
+    const count = await P.carryOver(tenantId, dayAfter(next));
+    assert.ok(count >= moved.length);
+    const again = db.all(
+      `SELECT t.* FROM todo_tasks t JOIN todo_submissions s ON s.id = t.submission_id
+        WHERE s.user_id = ? AND s.todo_date = ?`, [kumar.id, dayAfter(next)],
+    );
+    assert.ok(again.length >= moved.length);
+    assert.ok(again.every((t) => t.carried_from_date === target));
   });
 });

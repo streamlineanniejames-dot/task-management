@@ -38,6 +38,8 @@ export const EVENTS = {
   approved: 'todo.approved',
   changes: 'todo.changes_requested',
   comment: 'todo.comment',
+  task_added: 'todo.task_added',
+  carried_over: 'todo.carried_over',
 };
 
 const PLAN_LINK = '/';
@@ -265,6 +267,9 @@ export async function todoTick(tenantIds, now = new Date()) {
     );
     n += Number(missed.changes || 0);
 
+    // Yesterday is over: what was not finished moves to the next working day.
+    if (s.enabled) n += await carryOver(tenantId, win.today, s);
+
     if (!win.working || !win.todo_date) continue;
     const t = win.time;
     if (t < s.open_time) continue;
@@ -327,6 +332,12 @@ export const PRIORITIES = ['high', 'medium', 'low'];
 /** The reporting person is working on it or has decided: the employee's copy is frozen. */
 const LOCKED = ['UNDER_REVIEW', 'APPROVED', 'MISSED'];
 const AWAITING_REVIEW = ['SUBMITTED', 'LATE', 'UNDER_REVIEW'];
+/**
+ * A plan being worked: filed (or missed, but still today's), and its day has
+ * not gone by. Its tasks can be ticked off and added to - no re-approval.
+ */
+const WORKABLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED', 'MISSED'];
+const workable = (sub, today) => WORKABLE.includes(sub.status) && sub.todo_date >= today;
 
 /**
  * The owner sees and reviews every plan. Decided by the role itself, never by a
@@ -403,8 +414,10 @@ function editState(auth, sub, win) {
 export function detail(auth, sub, win = windowFor(auth.tenantId)) {
   const tasks = all(
     `SELECT t.id, t.task, t.project_id, p.name AS project_name, t.client_id, c.name AS client_name,
-            t.priority, t.expected_time, t.notes, t.done_at, t.checklist
+            t.priority, t.expected_time, t.notes, t.done_at, t.checklist,
+            t.added_at, t.added_by, ab.name AS added_by_name, t.carried_from_date, t.carried_to_date
        FROM todo_tasks t
+       LEFT JOIN users ab ON ab.id = t.added_by
        LEFT JOIN projects p ON p.id = t.project_id
        LEFT JOIN client_accounts c ON c.id = t.client_id
       WHERE t.submission_id = ? ORDER BY t.sort`,
@@ -425,8 +438,15 @@ export function detail(auth, sub, win = windowFor(auth.tenantId)) {
     comments,
     ...editState(auth, sub, win),
     can_review: canReview(auth, sub),
+    can_tick: sub.user_id === auth.userId && workable(sub, win.today),
+    can_add_task: canAddTask(auth, sub, win.today),
+    options: canAddTask(auth, sub, win.today) ? optionsFor(auth) : undefined,
   };
 }
+
+/** The person, their reporting person or the owner may add to a plan being worked. */
+const canAddTask = (auth, sub, today) => workable(sub, today)
+  && (sub.user_id === auth.userId || sub.reporting_person_id === auth.userId || isAdmin(auth));
 
 export function mine(auth) {
   const win = windowFor(auth.tenantId);
@@ -448,6 +468,12 @@ export function mine(auth) {
     },
     expected: !['owner', 'client', 'super_admin'].includes(me.role),
     plan: sub ? detail(auth, sub, win) : null,
+    // The plan being worked today: filed yesterday, or carried into.
+    today_plan: (() => {
+      const t = get('SELECT * FROM todo_submissions WHERE tenant_id = ? AND user_id = ? AND todo_date = ?',
+        [auth.tenantId, auth.userId, win.today]);
+      return t && t.id !== sub?.id ? detail(auth, t, win) : null;
+    })(),
     reporting_person: reporting ? { id: reporting, name: userName(reporting) } : null,
     options: optionsFor(auth),
     history: all(
@@ -470,6 +496,7 @@ function cleanTasks(auth, tasks, submitting) {
   const clientIds = new Set(opts.clients.map((c) => c.id));
   const out = tasks
     .map((t) => ({
+      id: typeof t?.id === 'string' ? t.id : null,
       task: String(t?.task ?? '').trim(),
       project_id: t?.project_id || null,
       client_id: t?.client_id || null,
@@ -554,13 +581,21 @@ export async function savePlan(auth, todoDate, { tasks = [], submit = false } = 
       );
       sub = get('SELECT * FROM todo_submissions WHERE id = ?', [newId]);
     }
+    // Rows are replaced as a set, but a task that was added later or carried
+    // over keeps saying so.
+    const prior = new Map(all('SELECT * FROM todo_tasks WHERE submission_id = ?', [sub.id]).map((r) => [r.id, r]));
     run('DELETE FROM todo_tasks WHERE submission_id = ?', [sub.id]);
-    clean.forEach((t, i) => run(
-      `INSERT INTO todo_tasks (id, tenant_id, submission_id, task, project_id, client_id, priority, expected_time, notes,
-         checklist, sort, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [uuid(), auth.tenantId, sub.id, t.task, t.project_id, t.client_id, t.priority, t.expected_time, t.notes,
-        JSON.stringify(t.checklist), i, now, now],
-    ));
+    clean.forEach((t, i) => {
+      const was = (t.id && prior.get(t.id)) || {};
+      run(
+        `INSERT INTO todo_tasks (id, tenant_id, submission_id, task, project_id, client_id, priority, expected_time, notes,
+           checklist, sort, added_at, added_by, carried_from_date, carried_from_task_id, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [uuid(), auth.tenantId, sub.id, t.task, t.project_id, t.client_id, t.priority, t.expected_time, t.notes,
+          JSON.stringify(t.checklist), i, was.added_at ?? null, was.added_by ?? null, was.carried_from_date ?? null,
+          was.carried_from_task_id ?? null, now, now],
+      );
+    });
 
     if (submit) {
       // A resubmission answers the reviewer; it is not late against the original deadline.
@@ -656,8 +691,6 @@ export async function addComment(auth, id, body) {
 
 export const getPlan = (auth, id) => detail(auth, loadSubmission(auth, id));
 
-/** Plans whose tasks can be ticked off: filed and not given up on. */
-const TICKABLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
 
 /**
  * The employee ticks a task done (or reopens it). Only their own plan, only
@@ -667,9 +700,10 @@ const TICKABLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
 export function setTaskDone(auth, id, taskId, done) {
   const sub = loadSubmission(auth, id);
   if (sub.user_id !== auth.userId) throw forbidden('Only the person who planned it can tick a task off');
-  if (!TICKABLE.includes(sub.status)) throw badRequest('Submit the plan before ticking tasks off');
+  if (!workable(sub, windowFor(auth.tenantId).today)) throw badRequest('Only a submitted plan whose day has not passed can be ticked off');
   const task = get('SELECT * FROM todo_tasks WHERE id = ? AND submission_id = ?', [taskId, sub.id]);
   if (!task) throw notFound('Task');
+  if (task.carried_to_date) throw badRequest(`This task moved to ${task.carried_to_date}; tick it there`);
   if (!!task.done_at === !!done) return detail(auth, sub);
 
   const now = nowIso();
@@ -840,9 +874,10 @@ export function setReporting(auth, userId, managerId) {
 export function setChecklistItem(auth, id, taskId, index, done) {
   const sub = loadSubmission(auth, id);
   if (sub.user_id !== auth.userId) throw forbidden('Only the person who planned it can tick a checklist item');
-  if (!TICKABLE.includes(sub.status)) throw badRequest('Submit the plan before ticking items off');
+  if (!workable(sub, windowFor(auth.tenantId).today)) throw badRequest('Only a submitted plan whose day has not passed can be ticked off');
   const task = get('SELECT * FROM todo_tasks WHERE id = ? AND submission_id = ?', [taskId, sub.id]);
   if (!task) throw notFound('Task');
+  if (task.carried_to_date) throw badRequest(`This task moved to ${task.carried_to_date}; tick it there`);
   const list = parseJson(task.checklist, []);
   const item = list[index];
   if (!item) throw notFound('Checklist item');
@@ -856,4 +891,113 @@ export function setChecklistItem(auth, id, taskId, index, done) {
   });
   auditAs(auth, sub.id, done ? 'check_done' : 'check_reopened', null, { task: task.task, item: item.text });
   return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
+}
+
+// ================================================================ adding and carrying over
+/**
+ * Add one task to a plan that is being worked - today's, or tomorrow's after
+ * it was filed. No re-approval: the task is marked as added later, by whom,
+ * and the other side hears about it.
+ */
+export async function addTask(auth, id, body) {
+  const sub = loadSubmission(auth, id);
+  const win = windowFor(auth.tenantId);
+  if (!canAddTask(auth, sub, win.today)) {
+    throw forbidden(workable(sub, win.today)
+      ? 'Only the person, their reporting person or the owner can add to this plan'
+      : 'Tasks can be added to a filed plan whose day has not passed');
+  }
+  const [t] = cleanTasks(auth, [body || {}], true);
+  const count = Number(get('SELECT COUNT(*) AS n FROM todo_tasks WHERE submission_id = ?', [sub.id])?.n || 0);
+  if (count >= 30) throw badRequest('A plan can hold at most 30 tasks');
+  const sort = Number(get('SELECT COALESCE(MAX(sort), -1) AS m FROM todo_tasks WHERE submission_id = ?', [sub.id])?.m ?? -1) + 1;
+  const now = nowIso();
+  tx(() => {
+    run(
+      `INSERT INTO todo_tasks (id, tenant_id, submission_id, task, project_id, client_id, priority, expected_time, notes,
+         checklist, sort, added_at, added_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid(), auth.tenantId, sub.id, t.task, t.project_id, t.client_id, t.priority, t.expected_time, t.notes,
+        JSON.stringify(t.checklist), sort, now, auth.userId, now, now],
+    );
+    addThread(auth.tenantId, sub.id, auth.userId, 'task_added', t.task);
+  });
+  auditAs(auth, sub.id, 'task_added', null, { task: t.task, priority: t.priority });
+
+  const to = sub.user_id === auth.userId ? [sub.reporting_person_id].filter(Boolean) : [sub.user_id];
+  for (const rid of to.filter((x) => x !== auth.userId)) {
+    const recipient = userRow(rid);
+    if (recipient) {
+      await tell(auth.tenantId, recipient, EVENTS.task_added,
+        { person: userName(auth.userId), todo_date: sub.todo_date, todo_day: dayLabel(sub.todo_date), note: t.task },
+        null, win.settings, planLink(sub.id));
+    }
+  }
+  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]), win);
+}
+
+/**
+ * The day after: every task left unfinished on a plan whose day has passed is
+ * copied onto the plan for the next working day (made if there is none) and
+ * the original is marked as moved, so it is carried exactly once. A task
+ * carried again keeps the day it was first planned. Looks back two weeks, so
+ * a server that was down for a while still catches up.
+ */
+export async function carryOver(tenantId, today, settings = settingsFor(tenantId)) {
+  const rows = all(
+    `SELECT t.*, s.user_id, s.todo_date AS plan_day, s.reporting_person_id
+       FROM todo_tasks t JOIN todo_submissions s ON s.id = t.submission_id
+      WHERE t.tenant_id = ? AND s.todo_date < ? AND s.todo_date >= ?
+        AND t.done_at IS NULL AND t.carried_to_date IS NULL
+      ORDER BY s.user_id, s.todo_date, t.sort`,
+    [tenantId, today, addDay(today, -14)],
+  );
+  if (!rows.length) return 0;
+
+  const firstFromToday = isWorkingDay(tenantId, today, settings) ? today : nextWorkingDay(tenantId, today, settings);
+  const moved = new Map(); // user_id -> { dest, titles[] }
+  const now = nowIso();
+
+  tx(() => {
+    for (const r of rows) {
+      let dest = nextWorkingDay(tenantId, r.plan_day, settings);
+      if (!dest || dest < firstFromToday) dest = firstFromToday;
+      if (!dest) continue;
+
+      let plan = get('SELECT * FROM todo_submissions WHERE tenant_id = ? AND user_id = ? AND todo_date = ?', [tenantId, r.user_id, dest]);
+      if (!plan) {
+        const pid = uuid();
+        run(
+          `INSERT INTO todo_submissions (id, tenant_id, user_id, reporting_person_id, todo_date, plan_date, status, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)`,
+          [pid, tenantId, r.user_id, r.reporting_person_id, dest, r.plan_day, dest <= today ? 'MISSED' : 'OVERDUE', now, now],
+        );
+        plan = get('SELECT * FROM todo_submissions WHERE id = ?', [pid]);
+      }
+      const sort = Number(get('SELECT COALESCE(MAX(sort), -1) AS m FROM todo_tasks WHERE submission_id = ?', [plan.id])?.m ?? -1) + 1;
+      run(
+        `INSERT INTO todo_tasks (id, tenant_id, submission_id, task, project_id, client_id, priority, expected_time, notes,
+           checklist, sort, added_at, carried_from_date, carried_from_task_id, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [uuid(), tenantId, plan.id, r.task, r.project_id, r.client_id, r.priority, r.expected_time, r.notes,
+          r.checklist, sort, now, r.carried_from_date || r.plan_day, r.id, now, now],
+      );
+      run('UPDATE todo_tasks SET carried_to_date = ?, updated_at = ? WHERE id = ?', [dest, now, r.id]);
+      addThread(tenantId, plan.id, null, 'carried_over', r.task);
+      addThread(tenantId, r.submission_id, null, 'moved_on', `${r.task} → ${dayLabel(dest)}`);
+
+      const m = moved.get(r.user_id) || { dest, titles: [], planId: plan.id };
+      m.titles.push(r.task);
+      moved.set(r.user_id, m);
+    }
+  });
+
+  for (const [userId, m] of moved) {
+    const user = userRow(userId);
+    if (!user) continue;
+    const list = m.titles.slice(0, 4).join(', ') + (m.titles.length > 4 ? ` and ${m.titles.length - 4} more` : '');
+    await tell(tenantId, user, EVENTS.carried_over,
+      { count: m.titles.length, todo_date: m.dest, todo_day: dayLabel(m.dest), tasks: list },
+      `todo_carry:${today}`, settings, planLink(m.planId));
+  }
+  return rows.length;
 }

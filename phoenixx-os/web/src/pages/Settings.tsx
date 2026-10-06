@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Building2, Palette, Receipt, Workflow, Tags, ShieldCheck, Download, Plus, Trash2, Check,
@@ -251,6 +252,8 @@ const to12h = (hhmm?: string) => {
 function TodoScheduleTab() {
   const qc = useQueryClient();
   const toast = useToast();
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [form, setForm] = useState<any>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
@@ -297,6 +300,20 @@ function TodoScheduleTab() {
 
   return (
     <div className="space-y-5">
+      {!editable && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-brand-soft/40 px-4 py-3 text-[13px]">
+          <ShieldCheck size={16} className="text-[var(--brand)] shrink-0" />
+          <p className="min-w-0 flex-1 text-muted">
+            <span className="text-ink font-medium">Only the owner can change these settings.</span>{' '}
+            {user?.role === 'manager' && form.managers_can_assign
+              ? 'You are allowed to build your own team: go to Home → Team To-Do → Build your team.'
+              : 'Ask the owner if something here should change.'}
+          </p>
+          {user?.role === 'manager' && form.managers_can_assign && (
+            <Button size="sm" variant="primary" onClick={() => navigate('/')}>Go to my team</Button>
+          )}
+        </div>
+      )}
       <Card>
         <div className="p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
           <span className="flex items-center gap-2">
