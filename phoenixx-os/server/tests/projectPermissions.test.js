@@ -166,6 +166,16 @@ describe('managers and admins keep their project permissions', () => {
     assert.equal((await api.del(`/projects/${p.id}`, { token: ownerToken })).status, 200);
   });
 
+  test('a manager cannot delete a project they neither run nor own', async () => {
+    const p = (await api.post('/projects', { client_id: client.id, name: 'Not Divya\'s' },
+      { token: ownerToken })).body.data;
+    const res = await api.del(`/projects/${p.id}`, { token: divya.token });
+    // Refused either way: 404 where the project is not even visible to them, 403 where it is.
+    assert.ok([403, 404].includes(res.status), JSON.stringify(res.body));
+    assert.equal((await api.get(`/projects/${p.id}`, { token: ownerToken })).status, 200, 'still there');
+    assert.equal((await api.del(`/projects/${p.id}`, { token: ownerToken })).status, 200);
+  });
+
   test('finance can read projects for costing but not restructure them', async () => {
     assert.equal((await api.get('/projects', { token: meera.token })).status, 200);
     assert.equal((await api.post('/projects', { client_id: client.id, name: 'Finance project' },

@@ -459,10 +459,25 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const [addOpen, setAddOpen] = useState(false);
   const [ownersOpen, setOwnersOpen] = useState(false);
   const [filing, setFiling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const qc = useQueryClient();
+  const toast = useToast();
 
   const { data: p, isLoading } = useQuery({
     queryKey: ['project', id],
     queryFn: () => api.get(`/projects/${id}`).then((r) => r.data),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.del(`/projects/${id}`),
+    onSuccess: () => {
+      toast.success('Project deleted.');
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.removeQueries({ queryKey: ['project', id] }); // it is gone: do not refetch it
+      setDeleting(false);
+      onClose();
+    },
+    onError: (e: any) => toast.error(e.message),
   });
 
   if (isLoading || !p) {
@@ -473,6 +488,9 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   // The manager and the lead are the two who file the daily project update.
   const mySeat = p.team?.find((m: any) => m.user_id === user?.id)?.seat;
   const files = mySeat === 'manager' || mySeat === 'lead';
+  // The server has the final word: a manager may only delete a project they run or own.
+  const deletable = can('projects', 'delete') && (user?.role === 'owner'
+    || p.manager_id === user?.id || !!p.owners?.some((o: any) => o.user_id === user?.id || o.id === user?.id));
 
   return (
     <>
@@ -502,6 +520,11 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             {editable && (
               <Button variant="primary" icon={<UserPlus size={15} />} onClick={() => setAddOpen(true)}>
                 Add to team
+              </Button>
+            )}
+            {deletable && (
+              <Button variant="danger" icon={<Trash2 size={15} />} onClick={() => setDeleting(true)}>
+                Delete project
               </Button>
             )}
           </>
@@ -535,6 +558,10 @@ function ProjectDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       {addOpen && <AddMemberModal project={p} onClose={() => setAddOpen(false)} />}
       {ownersOpen && <EditOwnersModal project={p} onClose={() => setOwnersOpen(false)} />}
       {filing && <DrawerFiling project={p} seat={mySeat} onClose={() => setFiling(false)} />}
+      <ConfirmDialog open={deleting} onClose={() => setDeleting(false)} onConfirm={() => remove.mutate()}
+        loading={remove.isPending} danger confirmLabel="Delete project"
+        title={`Delete ${p.name}?`}
+        message={`It disappears from Projects for everyone and its ${p.team_size || 0} team seat(s) are released. Its chat room closes. Past daily updates, To-Do tasks and the audit log keep their history.`} />
     </>
   );
 }

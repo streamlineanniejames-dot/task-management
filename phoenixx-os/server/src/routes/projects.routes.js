@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { get, all, run, repo, tx } from '../db/index.js';
 import { uuid, nowIso, toCsv } from '../lib/util.js';
-import { ok, created, validate, notFound, badRequest, conflict, audit } from '../lib/http.js';
+import { ok, created, validate, notFound, badRequest, conflict, forbidden, audit } from '../lib/http.js';
 import { requires } from '../middleware/rbac.js';
 import { syncProjectChannel } from '../services/chat.js';
 import {
@@ -296,6 +296,16 @@ router.patch('/:id', requires('projects', 'edit'), (req, res) => {
 });
 
 router.delete('/:id', requires('projects', 'delete'), (req, res) => {
+  const before = repo('projects', req.auth.tenantId).findById(req.params.id);
+  if (!before) throw notFound('Project');
+  // Deleting is final for everyone on the project, so a manager may only delete
+  // one they run or own; the workspace owner may delete any.
+  if (!['owner', 'super_admin'].includes(req.auth.role)) {
+    const theirs = before.manager_id === req.auth.userId
+      || !!get('SELECT id FROM project_owners WHERE project_id = ? AND user_id = ? AND tenant_id = ?',
+        [before.id, req.auth.userId, req.auth.tenantId]);
+    if (!theirs) throw forbidden('Only the workspace owner, or this project\'s manager or owner, can delete it');
+  }
   const at = nowIso();
   tx(() => {
     repo('projects', req.auth.tenantId).softDelete(req.params.id, at);
@@ -304,7 +314,7 @@ router.delete('/:id', requires('projects', 'delete'), (req, res) => {
   });
   syncProjectChannel(req.auth.tenantId, req.params.id, { actorId: req.auth.userId });
 
-  audit(req, { entity: 'project', entityId: req.params.id, action: 'delete' });
+  audit(req, { entity: 'project', entityId: req.params.id, action: 'delete', before });
   return ok(res, { ok: true });
 });
 
