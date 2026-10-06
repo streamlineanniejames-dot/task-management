@@ -62,7 +62,7 @@ router.put('/mine/:todoDate', async (req, res) => {
 router.get('/team', (req, res) => {
   const day = req.query.date ? String(req.query.date) : null;
   if (day && !DAY.test(day)) throw badRequest('date must be YYYY-MM-DD');
-  return ok(res, P.team(req.auth, day));
+  return ok(res, P.team(req.auth, day, req.query.scope === 'all'));
 });
 
 /** Change who someone reports to. The rules (owner, or a manager the owner allows) live in the service. */

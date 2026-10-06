@@ -732,7 +732,7 @@ export function setTaskDone(auth, id, taskId, done) {
  * plan stands, plus every plan still waiting on them. An owner sees everyone.
  * Someone with nobody reporting to them gets `is_reviewer: false`.
  */
-export function team(auth, day) {
+export function team(auth, day, wantAll = false) {
   const win = windowFor(auth.tenantId);
   const s = win.settings;
   const target = day || win.todo_date || nextWorkingDay(auth.tenantId, win.today, s);
@@ -745,11 +745,16 @@ export function team(auth, day) {
       counts: { total: 0, not_submitted: 0 }, rows: [], pending: [], reporting_options: [], assignable: [], can_assign: false,
     };
   }
-  const everyone = seesEveryone(auth);
+  // Someone with a team of their own starts on it; "everyone" is a switch for
+  // those allowed it. An employee granted the view has no team, so it is all they see.
+  const canSeeAll = seesEveryone(auth);
+  const everyone = canSeeAll && (wantAll || !isLead(auth));
   const managerAssigns = !admin && s.managers_can_assign;
 
+  // The owner's own team: people with no manager, or whose manager is an owner.
+  const mine = (u) => u.manager_id === auth.userId || (admin && isUnclaimed(auth.tenantId, u));
   const people = plannersOf(auth.tenantId)
-    .filter((u) => u.id !== auth.userId && (everyone || u.manager_id === auth.userId));
+    .filter((u) => u.id !== auth.userId && (everyone || mine(u)));
 
   const plans = all(
     `SELECT s.*, (SELECT COUNT(*) FROM todo_tasks t WHERE t.submission_id = s.id) AS task_count
@@ -783,15 +788,18 @@ export function team(auth, day) {
     if (r.plan) counts[r.plan.status] += 1;
   }
 
+  const rowIds = new Set(rows.map((r) => r.user.id));
   const pending = all(
-    `SELECT s.id, s.user_id, u.name AS employee_name, s.todo_date, s.status, s.submitted_at, s.minutes_late,
+    `SELECT s.id, s.user_id, s.reporting_person_id, u.name AS employee_name, s.todo_date, s.status, s.submitted_at, s.minutes_late,
             (SELECT COUNT(*) FROM todo_tasks t WHERE t.submission_id = s.id) AS task_count
        FROM todo_submissions s JOIN users u ON u.id = s.user_id
       WHERE s.tenant_id = ? AND s.status IN ('SUBMITTED','LATE','UNDER_REVIEW') AND s.todo_date >= ?
         AND s.user_id != ? ${admin ? '' : 'AND s.reporting_person_id = ?'}
       ORDER BY s.submitted_at`,
     admin ? [auth.tenantId, win.today, auth.userId] : [auth.tenantId, win.today, auth.userId, auth.userId],
-  ).map((p) => ({ ...p, task_count: Number(p.task_count) }));
+  ).map((p) => ({ ...p, task_count: Number(p.task_count) }))
+    // On "my team", only what is mine to review; on "everyone", the owner's whole queue.
+    .filter((p) => (admin && everyone) || p.reporting_person_id === auth.userId || rowIds.has(p.user_id));
 
   const manages = managerAssigns && auth.role === 'manager';
   return {
@@ -800,6 +808,7 @@ export function team(auth, day) {
     is_reviewer: everyone || manages || rows.length > 0 || pending.length > 0,
     is_admin: admin,
     scope: everyone ? 'everyone' : 'team',
+    can_see_all: canSeeAll && isLead(auth),
     counts,
     rows,
     pending,

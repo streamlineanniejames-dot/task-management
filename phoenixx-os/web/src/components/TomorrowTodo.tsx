@@ -773,10 +773,12 @@ function ChecklistView({ items, canTick, busy, onTick }: {
 /* ================================================================ reviewer card */
 function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (id: string) => void; className?: string }) {
   const [day, setDay] = useState<string>(initial.todo_date);
+  const [all, setAll] = useState(false); // "My team" first; "Everyone" for those allowed it
   const { data = initial } = useQuery({
-    queryKey: ['todo-plan', 'team', day],
-    queryFn: () => api.get('/todo-plan/team', { date: day }).then((r) => r.data),
-    initialData: day === initial.todo_date ? initial : undefined,
+    queryKey: ['todo-plan', 'team', day, all],
+    queryFn: () => api.get('/todo-plan/team', { date: day, ...(all ? { scope: 'all' } : {}) }).then((r) => r.data),
+    initialData: day === initial.todo_date && !all ? initial : undefined,
+    placeholderData: (prev: any) => prev,
   });
   const qc = useQueryClient();
   const toast = useToast();
@@ -802,10 +804,26 @@ function TeamPlanCard({ initial, onView, className }: { initial: any; onView: (i
 
   return (
     <Card className={className}>
-      <CardHeader title={data.scope === 'everyone' ? 'Team To-Do · everyone' : 'Team To-Do'} icon={<Users2 size={16} />}
+      <CardHeader title={data.scope === 'everyone' ? 'Team To-Do · everyone' : data.is_admin ? 'Team To-Do · reporting to you' : 'Team To-Do'}
+        icon={<Users2 size={16} />}
         subtitle={`Plans for ${date(data.todo_date, 'long')} · deadline ${clockTime(data.deadline_time)}`}
-        action={<Input type="date" value={day} onChange={(e) => setDay(e.target.value || initial.todo_date)}
-          aria-label="Planned day" className="h-8 w-[150px] text-[13px]" />} />
+        action={(
+          <span className="flex items-center gap-2">
+            {data.can_see_all && (
+              <span className="inline-flex rounded-md border border-line-strong p-0.5 text-[12.5px]" role="group" aria-label="Whose plans">
+                {[[false, 'My team'], [true, 'Everyone']].map(([v, label]) => (
+                  <button key={String(v)} type="button" aria-pressed={all === v} onClick={() => setAll(v as boolean)}
+                    className={cx('rounded px-2.5 py-1 whitespace-nowrap cursor-pointer transition-colors duration-150',
+                      all === v ? 'bg-brand-soft text-ink font-medium' : 'text-muted hover:text-ink')}>
+                    {label as string}
+                  </button>
+                ))}
+              </span>
+            )}
+            <Input type="date" value={day} onChange={(e) => setDay(e.target.value || initial.todo_date)}
+              aria-label="Planned day" className="h-8 w-[150px] text-[13px]" />
+          </span>
+        )} />
 
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-px bg-[var(--border)] border-b border-line">
         {[

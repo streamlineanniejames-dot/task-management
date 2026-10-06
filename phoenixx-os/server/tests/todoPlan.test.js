@@ -337,7 +337,11 @@ describe('owner-granted view of everyone', () => {
 
   test('with the grant they see everyone, but reviewing stays with the reporting person', async () => {
     assert.equal((await api.put('/todo-plan/settings', { full_view_user_ids: [ravi.id] }, { token: ownerToken })).status, 200);
-    const team = await api.get('/todo-plan/team', { token: ravi.token });
+    // A manager starts on their own team, and switches to everyone.
+    const own = await api.get('/todo-plan/team', { token: ravi.token });
+    assert.equal(own.body.data.scope, 'team');
+    assert.equal(own.body.data.can_see_all, true);
+    const team = await api.get('/todo-plan/team?scope=all', { token: ravi.token });
     assert.equal(team.body.data.scope, 'everyone');
     assert.ok(team.body.data.rows.some((r) => r.user.name === 'Kumar'));
     const plan = await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: ravi.token });
@@ -554,5 +558,22 @@ describe('unfinished tasks carry over to the next working day', () => {
     );
     assert.ok(again.length >= moved.length);
     assert.ok(again.every((t) => t.carried_from_date === target));
+  });
+});
+
+describe('the owner\'s Team To-Do', () => {
+  test('starts on the people who report to the owner, with their reviews only', async () => {
+    const res = await api.get('/todo-plan/team', { token: ownerToken });
+    assert.equal(res.body.data.scope, 'team');
+    const names = res.body.data.rows.map((r) => r.user.name);
+    assert.ok(names.includes('Mani') && names.includes('Ravi'), 'managers with no manager report to the owner');
+    assert.ok(!names.includes('Kumar') && !names.includes('Sita'), 'other managers\' people are not listed');
+    assert.ok(res.body.data.pending.every((p) => names.includes(p.employee_name)), 'only reviews that are the owner\'s');
+  });
+
+  test('can switch to everyone', async () => {
+    const res = await api.get('/todo-plan/team?scope=all', { token: ownerToken });
+    assert.equal(res.body.data.scope, 'everyone');
+    assert.ok(res.body.data.rows.some((r) => r.user.name === 'Kumar'));
   });
 });
