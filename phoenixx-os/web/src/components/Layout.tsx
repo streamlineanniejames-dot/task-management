@@ -8,6 +8,7 @@ import {
   FolderKanban, Megaphone, MessagesSquare, Contact, FileSpreadsheet, History, Send, Landmark, ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { PushBanner, PushToggle, usePushMessages } from './PushControls';
 import { api } from '../lib/api';
 import { store } from '../lib/storage';
 import { Logo } from './Logo';
@@ -127,6 +128,7 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  usePushMessages();
 
   useEffect(() => { setSidebarOpen(false); }, [location.pathname]);
 
@@ -293,6 +295,7 @@ export default function Layout() {
       <div className="flex-1 min-w-0 flex flex-col">
         <TopBar onMenu={() => setSidebarOpen(true)} dark={dark} toggleTheme={toggle} signOut={signOut} />
         <main className="flex-1 min-w-0 px-4 py-5 sm:px-6 lg:px-7 max-w-[1600px] w-full mx-auto">
+          <PushBanner />
           <Outlet />
         </main>
         <TodoReminders />
@@ -559,6 +562,7 @@ function NotificationBell({ open, setOpen }: { open: boolean; setOpen: (v: boole
               </button>
             ))}
           </div>
+          <PushToggle />
           <div className="border-t border-line px-3.5 py-2">
             <Link to="/notifications" onClick={() => setOpen(false)}
               className="text-[12.5px] text-[var(--brand)] hover:underline">

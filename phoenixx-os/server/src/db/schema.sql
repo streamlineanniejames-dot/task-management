@@ -1868,3 +1868,19 @@ CREATE TABLE IF NOT EXISTS todo_comments (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_todo_comments_sub ON todo_comments(submission_id, created_at);
+
+-- Browser pop-ups: one row per browser a person has switched them on in. The
+-- endpoint is the browser's own address for this site, so it is unique: when
+-- someone else signs in on the same browser the row moves to them.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_push_user ON push_subscriptions(user_id);

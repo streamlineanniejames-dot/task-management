@@ -4,7 +4,8 @@ import { get, all, run } from '../db/index.js';
 import { uuid, nowIso, todayIso, parseJson } from '../lib/util.js';
 import { ok, created, validate, notFound, badRequest, audit, paginate, pageMeta } from '../lib/http.js';
 import { requires, can } from '../middleware/rbac.js';
-import { DEFAULT_TEMPLATES, CHANNELS, notify } from '../services/notifications.js';
+import { DEFAULT_TEMPLATES, CHANNELS, notify, pushConfigured, pushToUser } from '../services/notifications.js';
+import { config } from '../config.js';
 import { runDeadlineLadder, resolveEscalations } from '../services/deadlines.js';
 import { WEBHOOK_EVENTS } from '../services/webhooks.js';
 
@@ -287,6 +288,51 @@ router.post('/webhooks', requires('settings', 'edit'), (req, res) => {
 router.delete('/webhooks/:id', requires('settings', 'edit'), (req, res) => {
   run('DELETE FROM webhook_endpoints WHERE id = ? AND tenant_id = ?', [req.params.id, req.auth.tenantId]);
   return ok(res, { ok: true });
+});
+
+// ------------------------------------------------------------ browser pop-ups
+/** Whether pop-ups are available here, and the key a browser subscribes with. */
+router.get('/push/config', (req, res) => ok(res, {
+  enabled: pushConfigured(),
+  public_key: config.providers.push.publicKey || null,
+  subscribed_browsers: Number(get('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?', [req.auth.userId])?.n || 0),
+}));
+
+/** This browser wants pop-ups for the signed-in person. Re-sent on every sign-in. */
+router.post('/push/subscribe', (req, res) => {
+  const body = validate(z.object({
+    endpoint: z.string().url().max(2000),
+    keys: z.object({ p256dh: z.string().min(10).max(500), auth: z.string().min(4).max(200) }),
+  }), req.body);
+  // The endpoint identifies the browser: whoever signed in last owns it.
+  run('DELETE FROM push_subscriptions WHERE endpoint = ?', [body.endpoint]);
+  run(
+    `INSERT INTO push_subscriptions (id, tenant_id, user_id, endpoint, p256dh, auth, user_agent, created_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [uuid(), req.auth.tenantId, req.auth.userId, body.endpoint, body.keys.p256dh, body.keys.auth,
+      String(req.get('user-agent') || '').slice(0, 300), nowIso()],
+  );
+  return created(res, { subscribed: true });
+});
+
+/** Stop pop-ups in this browser (switched off, or signing out). */
+router.post('/push/unsubscribe', (req, res) => {
+  const endpoint = String(req.body?.endpoint || '');
+  run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?', [endpoint, req.auth.userId]);
+  return ok(res, { subscribed: false });
+});
+
+/** "Send me a test pop-up". */
+router.post('/push/test', async (req, res) => {
+  if (!pushConfigured()) throw badRequest('Browser pop-ups are not set up on this server yet');
+  const out = await pushToUser(req.auth.userId, {
+    title: 'Pop-ups are on',
+    body: 'This is how Phoenixx OS notifications will appear.',
+    link: '/',
+    tag: `test-${Date.now()}`,
+  });
+  if (out.skipped) throw badRequest('Pop-ups are not switched on in any of your browsers');
+  return ok(res, out);
 });
 
 export { router as notificationsRouter };

@@ -87,6 +87,13 @@ export const config = {
       from: process.env.MAIL_FROM || 'no-reply@phoenixxit.com',
     },
     teamsWebhook: process.env.TEAMS_WEBHOOK_URL || '',
+    // Browser pop-ups (Web Push). Without both keys the push channel is off and
+    // every other channel works exactly as before.
+    push: {
+      publicKey: process.env.VAPID_PUBLIC_KEY || '',
+      privateKey: process.env.VAPID_PRIVATE_KEY || '',
+      subject: process.env.VAPID_SUBJECT || 'mailto:admin@phoenixxedu.com',
+    },
   },
 
   billing: {

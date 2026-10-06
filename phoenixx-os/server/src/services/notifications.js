@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { get, all, run } from '../db/index.js';
 import { uuid, nowIso, parseJson, renderTemplate } from '../lib/util.js';
+import webpush from 'web-push';
 
 /**
  * Module B - multi-channel notifications.
@@ -82,6 +83,55 @@ const providers = {
     },
   },
 };
+
+// ------------------------------------------------------------- browser push
+/**
+ * Web Push: the pop-up Chrome shows even with no Phoenixx tab open. One person
+ * can have it on in several browsers; each gets the message. A browser that has
+ * gone away (uninstalled, cleared, permission revoked) answers 404/410 and its
+ * row is dropped.
+ */
+let pushSender = null; // tests swap in a fake; production uses web-push
+export function setPushSender(fn) { pushSender = fn; }
+
+export const pushConfigured = () => !!pushSender
+  || !!(config.providers.push.publicKey && config.providers.push.privateKey);
+
+function sendWithWebPush(sub, payload) {
+  return webpush.sendNotification(
+    { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+    payload,
+    {
+      TTL: 60 * 60 * 24,
+      vapidDetails: {
+        subject: config.providers.push.subject,
+        publicKey: config.providers.push.publicKey,
+        privateKey: config.providers.push.privateKey,
+      },
+    },
+  );
+}
+
+/** Push one message to every browser the person has pop-ups on in. */
+export async function pushToUser(userId, message) {
+  const subs = all('SELECT * FROM push_subscriptions WHERE user_id = ?', [userId]);
+  if (!subs.length || !pushConfigured()) return { ok: false, skipped: true };
+  const payload = JSON.stringify(message);
+  let delivered = 0;
+  let error = null;
+  for (const sub of subs) {
+    try {
+      await (pushSender || sendWithWebPush)(sub, payload);
+      delivered += 1;
+      run('UPDATE push_subscriptions SET last_used_at = ? WHERE id = ?', [nowIso(), sub.id]);
+    } catch (err) {
+      const code = err?.statusCode;
+      if (code === 404 || code === 410) run('DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
+      error = err?.body || err?.message || `HTTP ${code}`;
+    }
+  }
+  return delivered ? { ok: true, delivered } : { ok: false, error };
+}
 
 function providerFor(channel) {
   if (channel === 'in_app') return providers.in_app;
@@ -378,12 +428,16 @@ export async function notify({
   tenantId, user, eventKey, vars = {}, link = null, channels = null, dedupeKey = null,
 }) {
   if (!user) return [];
-  const targets = channels || channelsFor(user, eventKey);
+  let targets = channels || channelsFor(user, eventKey);
+  // Every message that reaches the bell also pops up in the browser, unless the
+  // person has switched pop-ups off for it - whichever channels the caller chose.
+  if (targets.includes('in_app') && !targets.includes('push') && channelsFor(user, eventKey).includes('push')) {
+    targets = [...targets, 'push'];
+  }
   const results = [];
 
   for (const channel of targets) {
-    if (channel === 'push') continue; // FCM/APNs: mobile device tokens, out of scope for the dev harness
-    const tpl = templateFor(tenantId, eventKey, channel);
+    const tpl = templateFor(tenantId, eventKey, channel === 'push' ? 'in_app' : channel);
     const scope = { ...vars, user };
     const subject = renderTemplate(tpl.subject || eventKey, scope);
     const body = renderTemplate(tpl.body, scope);
@@ -391,6 +445,21 @@ export async function notify({
 
     if (key && get('SELECT id FROM notifications WHERE tenant_id = ? AND dedupe_key = ?', [tenantId, key])) {
       continue; // already sent this rung of the ladder
+    }
+
+    // Browser pop-up: nothing to record for someone who has it off everywhere.
+    if (channel === 'push') {
+      const res = await pushToUser(user.id, { title: subject, body, link: link || '/', tag: key || uuid() });
+      if (res.skipped) continue;
+      run(
+        `INSERT INTO notifications (id, tenant_id, user_id, event_key, channel, title, body, link,
+           status, provider, provider_ref, error, dedupe_key, meta, sent_at, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [uuid(), tenantId, user.id, eventKey, 'push', subject, body, link, res.ok ? 'delivered' : 'failed', 'webpush', null,
+          res.error ? String(res.error).slice(0, 300) : null, key, JSON.stringify(vars), res.ok ? nowIso() : null, nowIso()],
+      );
+      results.push({ channel, status: res.ok ? 'delivered' : 'failed', error: res.error || null });
+      continue;
     }
 
     const id = uuid();

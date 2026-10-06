@@ -122,3 +122,14 @@ services:
         value: log
       - key: EMAIL_PROVIDER
         value: log
+
+      # Browser pop-ups (Web Push). Generate a pair once with
+      #   npx web-push generate-vapid-keys
+      # and paste both in the Render dashboard. Never commit them. Changing the
+      # pair later signs everyone out of pop-ups until they switch them on again.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: mailto:admin@phoenixxedu.com

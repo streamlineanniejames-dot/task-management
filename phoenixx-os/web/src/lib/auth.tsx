@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { api, tokens, ApiError } from './api';
 import { API_BASE } from './config';
 import { configureLocale } from './format';
+import { syncPush, forgetPushForThisBrowser } from './push';
 
 export type Role = 'super_admin' | 'owner' | 'manager' | 'employee' | 'finance' | 'hr' | 'client';
 
@@ -55,6 +56,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const applySession = (data: Session) => {
     setSession(data);
+    // A browser that already allows pop-ups now delivers them to this person.
+    syncPush();
     if (data.tenant) {
       configureLocale(data.tenant);
       // The tenant's own brand colour drives the UI accent (tenant branding).
@@ -125,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
 
     signOut() {
+      forgetPushForThisBrowser(tokens.access);
       const refreshToken = tokens.refresh;
       tokens.clear();
       setSession(null);
