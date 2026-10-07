@@ -104,6 +104,16 @@ function backfill() {
   // workspace timezone. Idempotent: only rows with no instant are touched.
   if (tableExists('action_items') && hasColumn('action_items', 'due_at')) backfillDueAt();
 
+  // Leave filed before the two-step approval: a request still waiting on a
+  // reporting manager stays with them first; everything else is HR's.
+  if (tableExists('leave_requests') && hasColumn('leave_requests', 'stage')) {
+    db.exec(`UPDATE leave_requests
+                SET stage = 'manager', manager_id = approver_id
+              WHERE stage IS NULL AND status = 'pending' AND approver_id IN (
+                SELECT id FROM users WHERE role NOT IN ('owner', 'hr', 'super_admin'))`);
+    db.exec(`UPDATE leave_requests SET stage = 'hr' WHERE stage IS NULL`);
+  }
+
   /**
    * Saturday is a working day.
    *
@@ -343,6 +353,13 @@ const ADDED_COLUMNS = [
   // A report about one project (the marketing reports) is only shown to the
   // people who can see that project.
   ['report_runs', 'project_id', 'TEXT'],
+  // Leave is approved in two steps: the reporting manager verifies it, then
+  // HR gives the final word. `stage` is whose desk it is on: manager | hr.
+  ['leave_requests', 'stage', 'TEXT'],
+  ['leave_requests', 'manager_id', 'TEXT'],
+  ['leave_requests', 'manager_approved_by', 'TEXT'],
+  ['leave_requests', 'manager_approved_at', 'TEXT'],
+  ['leave_requests', 'manager_note', 'TEXT'],
 ];
 
 function addColumns() {

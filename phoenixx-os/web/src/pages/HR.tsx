@@ -1408,8 +1408,10 @@ function LeaveTab() {
   const decide = useMutation({
     mutationFn: ({ id, decision }: { id: string; decision: string }) =>
       api.post(`/hr/leave/requests/${id}/decide`, { decision }),
-    onSuccess: () => {
-      toast.success('Decision recorded and the employee notified.');
+    onSuccess: (res: any) => {
+      toast.success(res?.data?.status === 'pending'
+        ? 'Verified — sent to HR for final approval.'
+        : 'Decision recorded and the employee notified.');
       qc.invalidateQueries({ queryKey: ['leave-requests'] });
       qc.invalidateQueries({ queryKey: ['home-counters'] });
     },
@@ -1484,18 +1486,41 @@ function LeaveTab() {
                     <TD><span className="tabular text-muted">{r.days}</span></TD>
                     <TD><span className="text-muted text-[13px] line-clamp-1">{r.reason}</span></TD>
                     <TD>
-                      {r.status === 'pending' && can('hr_leave', 'approve') && r.user_id !== user?.id ? (
-                        <span className="flex gap-2">
-                          <Button size="sm" icon={<Check size={13} />}
-                            onClick={() => decide.mutate({ id: r.id, decision: 'approved' })}>Approve</Button>
-                          <Button size="sm" variant="ghost" icon={<X size={13} />}
-                            onClick={() => decide.mutate({ id: r.id, decision: 'rejected' })}>Reject</Button>
+                      {r.can_decide ? (
+                        <span>
+                          <span className="flex gap-2">
+                            <Button size="sm" icon={<Check size={13} />}
+                              onClick={() => decide.mutate({ id: r.id, decision: 'approved' })}>
+                              {r.stage === 'manager' && user?.role !== 'owner' ? 'Verify' : 'Approve'}
+                            </Button>
+                            <Button size="sm" variant="ghost" icon={<X size={13} />}
+                              onClick={() => decide.mutate({ id: r.id, decision: 'rejected' })}>Reject</Button>
+                          </span>
+                          {r.manager_approved_by_name && (
+                            <span className="block text-[11.5px] text-subtle mt-1">
+                              Verified by {r.manager_approved_by_name}
+                            </span>
+                          )}
+                        </span>
+                      ) : r.status === 'pending' ? (
+                        <span>
+                          <Badge tone="warning" dot>
+                            {r.stage === 'manager' ? 'Awaiting manager' : 'Awaiting HR'}
+                          </Badge>
+                          <span className="block text-[11.5px] text-subtle mt-0.5">
+                            {r.stage === 'manager'
+                              ? `with ${r.manager_name || 'reporting manager'}`
+                              : r.manager_approved_by_name ? `verified by ${r.manager_approved_by_name}` : 'final approval'}
+                          </span>
                         </span>
                       ) : (
                         <span>
                           <StatusBadge status={r.status} />
-                          {r.approver_name && r.status !== 'pending' && (
-                            <span className="block text-[11.5px] text-subtle mt-0.5">by {r.approver_name}</span>
+                          {r.approver_name && (
+                            <span className="block text-[11.5px] text-subtle mt-0.5">
+                              by {r.approver_name}
+                              {r.manager_approved_by_name && ` · verified by ${r.manager_approved_by_name}`}
+                            </span>
                           )}
                         </span>
                       )}

@@ -38,8 +38,10 @@ export const ROLE_TEMPLATES = {
     meetings: [...RW, 'delete'],
     deadlines: [...RW, 'approve'],
     notifications: RW,
-    hr_attendance: [...RO, 'approve', 'export'],
-    hr_leave: [...RO, 'approve', 'export'],
+    // A manager is an employee too: they check in and apply for leave like
+    // everyone else (`create` covers only their own records).
+    hr_attendance: [...RO, 'create', 'approve', 'export'],
+    hr_leave: [...RO, 'create', 'approve', 'export'],
     hr_performance: [...RW, 'approve', 'export'],
     hr_hiring: [...RW, 'approve'],
     employees: RO,

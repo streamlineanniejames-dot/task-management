@@ -1295,6 +1295,32 @@ const leaveSchema = z.object({
   reason: z.string().min(3).max(1000),
 });
 
+/**
+ * Leave is approved in two steps. The person's reporting manager verifies it
+ * first; only then does it reach HR, who give the final word. Somebody who
+ * reports straight to the Owner or HR (or to nobody) goes to HR directly.
+ * The Owner can decide at either step, and their word is final.
+ */
+const HR_LEAVE_ROLES = ['owner', 'hr', 'super_admin'];
+const isHrApprover = (auth) => HR_LEAVE_ROLES.includes(auth.role);
+const isOwner = (auth) => auth.role === 'owner' || auth.role === 'super_admin';
+
+function leaveFirstApprover(tenantId, managerId) {
+  if (!managerId) return null;
+  const m = get(
+    "SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status != 'disabled'",
+    [managerId, tenantId],
+  );
+  return m && !HR_LEAVE_ROLES.includes(m.role) ? m.id : null;
+}
+
+function canDecideLeave(auth, lr) {
+  if (lr.status !== 'pending') return false;
+  if (lr.user_id === auth.userId && !isOwner(auth)) return false;
+  if (isOwner(auth)) return true;
+  return (lr.stage || 'hr') === 'manager' ? lr.manager_id === auth.userId : isHrApprover(auth);
+}
+
 router.get('/leave/requests', requires('hr_leave', 'view'), (req, res) => {
   const { page, limit, offset } = paginate(req);
   const canApprove = can(req.auth, 'hr_leave', 'approve');
@@ -1315,15 +1341,17 @@ router.get('/leave/requests', requires('hr_leave', 'view'), (req, res) => {
   const total = Number(get(`SELECT COUNT(*) AS n FROM leave_requests l WHERE ${where}`, params)?.n || 0);
   const rows = all(
     `SELECT l.*, u.name AS user_name, u.avatar_url, lt.name AS leave_type_name, lt.code AS leave_type_code,
-            lt.color, a.name AS approver_name
+            lt.color, a.name AS approver_name, mg.name AS manager_name, mv.name AS manager_approved_by_name
        FROM leave_requests l
        JOIN users u ON u.id = l.user_id
        JOIN leave_types lt ON lt.id = l.leave_type_id
        LEFT JOIN users a ON a.id = l.approver_id
+       LEFT JOIN users mg ON mg.id = l.manager_id
+       LEFT JOIN users mv ON mv.id = l.manager_approved_by
       WHERE ${where} ORDER BY l.from_date DESC LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
-  return ok(res, rows, pageMeta(page, limit, total));
+  return ok(res, rows.map((r) => ({ ...r, can_decide: canDecideLeave(req.auth, r) })), pageMeta(page, limit, total));
 });
 
 router.post('/leave/requests', requires('hr_leave', 'create'), (req, res) => {
@@ -1354,27 +1382,34 @@ router.post('/leave/requests', requires('hr_leave', 'create'), (req, res) => {
   if (overlap) throw badRequest('You already have a leave request covering those dates');
 
   const id = uuid();
+  const firstApprover = leaveFirstApprover(tenantId, req.auth.managerId);
   run(
     `INSERT INTO leave_requests (id, tenant_id, user_id, leave_type_id, kind, from_date, to_date,
-       from_time, to_time, days, reason, approver_id, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       from_time, to_time, days, reason, approver_id, stage, manager_id, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [id, tenantId, userId, body.leave_type_id, body.kind || 'leave', body.from_date, body.to_date,
-      body.from_time ?? null, body.to_time ?? null, days, body.reason, req.auth.managerId ?? null,
-      nowIso(), nowIso()],
+      body.from_time ?? null, body.to_time ?? null, days, body.reason, firstApprover,
+      firstApprover ? 'manager' : 'hr', firstApprover, nowIso(), nowIso()],
   );
 
-  // B1: an approval that has not happened is a deadline the manager owns.
-  if (req.auth.managerId) {
+  const vars = { days, leave_type: type.name, from_date: body.from_date, to_date: body.to_date, reason: body.reason };
+  if (firstApprover) {
+    // B1: an approval that has not happened is a deadline the manager owns.
     upsertDeadline({
       tenantId, sourceType: 'leave', sourceId: id,
-      title: `Approve leave: ${req.auth.name} (${body.from_date})`,
-      dueAt: body.from_date, ownerId: req.auth.managerId, escalationDays: 1,
+      title: `Verify leave: ${req.auth.name} (${body.from_date})`,
+      dueAt: body.from_date, ownerId: firstApprover, escalationDays: 1,
     });
-    notifyMany({
-      tenantId, userIds: [req.auth.managerId], eventKey: 'leave.requested',
-      vars: { days, leave_type: type.name, from_date: body.from_date, to_date: body.to_date, reason: body.reason },
-      link: '/hr/leave',
-    }).catch(() => {});
+    notifyMany({ tenantId, userIds: [firstApprover], eventKey: 'leave.requested', vars, link: '/hr?tab=leave' })
+      .catch(() => {});
+  } else {
+    // Nobody to verify it first: straight to HR, and the reporting person
+    // (the Owner, usually) still hears about it.
+    notifyRole({ tenantId, roles: ['hr'], eventKey: 'leave.requested', vars, link: '/hr?tab=leave' }).catch(() => {});
+    if (req.auth.managerId) {
+      notifyMany({ tenantId, userIds: [req.auth.managerId], eventKey: 'leave.requested', vars, link: '/hr?tab=leave' })
+        .catch(() => {});
+    }
   }
 
   return created(res, get('SELECT * FROM leave_requests WHERE id = ?', [id]));
@@ -1388,7 +1423,43 @@ router.post('/leave/requests/:id/decide', requires('hr_leave', 'approve'), (req,
   const lr = get('SELECT * FROM leave_requests WHERE id = ? AND tenant_id = ?', [req.params.id, tenantId]);
   if (!lr) throw notFound('Leave request');
   if (lr.status !== 'pending') throw badRequest('This request has already been decided');
-  if (lr.user_id === userId && req.auth.role !== 'owner') throw forbidden('You cannot approve your own leave');
+  if (lr.user_id === userId && !isOwner(req.auth)) throw forbidden('You cannot approve your own leave');
+  if (!canDecideLeave(req.auth, lr)) {
+    throw forbidden((lr.stage || 'hr') === 'manager'
+      ? 'This request is waiting on the reporting manager to verify it first'
+      : 'Only HR gives the final approval on leave');
+  }
+
+  // Step one: the reporting manager verifies it and hands it to HR. A
+  // rejection here is final - there is nothing left for HR to rule on.
+  if ((lr.stage || 'hr') === 'manager' && decision === 'approved' && !isOwner(req.auth)) {
+    const ts = nowIso();
+    run(
+      `UPDATE leave_requests SET stage = 'hr', approver_id = NULL, manager_approved_by = ?, manager_approved_at = ?,
+         manager_note = ?, updated_at = ? WHERE id = ?`,
+      [userId, ts, note ?? null, ts, lr.id],
+    );
+    resolveDeadline(tenantId, 'leave', lr.id, 'met');
+    const employee = get('SELECT name FROM users WHERE id = ?', [lr.user_id]);
+    notifyRole({
+      tenantId, roles: ['hr'], eventKey: 'leave.manager_verified',
+      vars: {
+        employee: employee?.name || 'An employee', manager: req.auth.name,
+        days: lr.days, from_date: lr.from_date, to_date: lr.to_date,
+      },
+      link: '/hr?tab=leave',
+    }).catch(() => {});
+    notifyMany({
+      tenantId, userIds: [lr.user_id], eventKey: 'leave.decided',
+      vars: {
+        status: 'verified by your manager and sent to HR for final approval',
+        from_date: lr.from_date, to_date: lr.to_date, note: note ? `: ${note}` : '',
+      },
+      link: '/hr?tab=leave',
+    }).catch(() => {});
+    audit(req, { entity: 'leave_request', entityId: lr.id, action: 'verify' });
+    return ok(res, get('SELECT * FROM leave_requests WHERE id = ?', [lr.id]));
+  }
 
   run('UPDATE leave_requests SET status = ?, approver_id = ?, decided_at = ?, decision_note = ?, updated_at = ? WHERE id = ?',
     [decision, userId, nowIso(), note ?? null, nowIso(), lr.id]);

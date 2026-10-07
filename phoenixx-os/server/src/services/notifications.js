@@ -351,6 +351,10 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Leave request from {{user.name}}',
     body: '{{user.name}} requested {{days}} day(s) {{leave_type}} from {{from_date}} to {{to_date}}. Reason: {{reason}}.',
   },
+  'leave.manager_verified': {
+    subject: 'Leave awaiting HR approval: {{employee}}',
+    body: '{{manager}} verified {{employee}}\'s {{days}} day(s) leave from {{from_date}} to {{to_date}}. It needs your final approval.',
+  },
   'leave.decided': {
     subject: 'Leave {{status}}',
     body: 'Your leave request ({{from_date}} to {{to_date}}) was {{status}}{{note}}.',

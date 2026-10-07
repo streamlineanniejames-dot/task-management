@@ -306,8 +306,12 @@ router.get('/home', (req, res) => {
     ),
     pending_approvals: {
       leave: Number(get(
-        `SELECT COUNT(*) AS n FROM leave_requests WHERE tenant_id = ? AND status = 'pending' AND approver_id = ?`,
-        [tenantId, userId],
+        // Step one sits with the reporting manager; step two, once they have
+        // verified it, with HR.
+        `SELECT COUNT(*) AS n FROM leave_requests WHERE tenant_id = ? AND status = 'pending' AND user_id != ?
+           AND ((COALESCE(stage, 'hr') = 'manager' AND manager_id = ?)
+             OR (COALESCE(stage, 'hr') = 'hr' AND (approver_id = ? OR ?)))`,
+        [tenantId, userId, userId, userId, ['hr', 'owner', 'super_admin'].includes(req.auth.role) ? 1 : 0],
       )?.n || 0),
       regularizations: Number(get(
         `SELECT COUNT(*) AS n FROM attendance_regularizations WHERE tenant_id = ? AND status = 'pending' AND approver_id = ?`,
