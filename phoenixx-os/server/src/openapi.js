@@ -324,6 +324,7 @@ export const openapi = {
         { name: 'user_id', in: 'query', schema: { type: 'string' } },
         { name: 'service_line_id', in: 'query', schema: { type: 'string' }, description: 'Filter to one team' },
         { name: 'manager_id', in: 'query', schema: { type: 'string' } },
+        { name: 'self', in: 'query', schema: { type: 'string' }, description: '1 = only the caller\'s own row, even for approvers' },
         { name: 'status', in: 'query', schema: { type: 'string' }, description: 'Comma separated: present,pending_approval,not_approved,absent,half_day,leave' },
       ]),
     },

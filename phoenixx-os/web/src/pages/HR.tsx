@@ -118,6 +118,15 @@ function AttendanceTab() {
     enabled: approver,
   });
 
+  // A manager is an employee too: alongside the team they see their own month,
+  // exactly as everybody else sees theirs.
+  const showMine = approver && today.data != null && !today.data.exempt;
+  const mine = useQuery({
+    queryKey: ['attendance', 'register', 'self', month],
+    queryFn: () => api.get('/hr/attendance/register', { month, self: 1 }).then((r) => r.data),
+    enabled: showMine,
+  });
+
   const meta = useQuery({
     queryKey: ['attendance', 'filter-meta'],
     queryFn: () => api.get('/hr/work-schedules').then((r) => r.data),
@@ -370,24 +379,31 @@ function AttendanceTab() {
         </Card>
       )}
 
-      {/* ------------------------------------------------- month at a glance */}
-      {totals && (
-        <div className="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-5">
-          <Stat label="Working days" value={totals.working_days} icon={<CalendarDays size={15} />}
-            sub={`${totals.employees} employee${totals.employees === 1 ? '' : 's'}`} />
-          <Stat label="Present" value={totals.present} tone="positive" />
-          <Stat label="Absent" value={totals.absent} tone={totals.absent ? 'negative' : 'neutral'} />
-          <Stat label="Leave" value={totals.leave} />
-          <Stat label="Pending" value={totals.pending} tone={totals.pending ? 'warning' : 'neutral'}
-            sub={totals.pending ? 'awaiting HR' : 'nothing waiting'} />
-          <Stat label="Holidays" value={totals.holiday ? Math.round(totals.holiday / (totals.employees || 1)) : 0}
-            sub={`${Math.round((totals.week_off || 0) / (totals.employees || 1))} weekly off`} />
-        </div>
+      {/* ---------------------------------------------- my month (managers) */}
+      {showMine && mine.data?.rows?.length > 0 && (
+        <>
+          <p className="label-cap mb-2">My attendance</p>
+          <MonthStats totals={mine.data.totals} personal />
+          <Card className="mb-6">
+            <CardHeader title="My register" subtitle={monthLabel(month)} icon={<CalendarDays size={16} />}
+              action={
+                <Select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" className="h-8 w-[140px] text-[13px]">
+                  {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+                </Select>
+              } />
+            <RegisterGrid reg={mine.data} onOpenDay={setOpenDay} />
+            <RegisterLegend />
+          </Card>
+          <p className="label-cap mb-2">Team attendance</p>
+        </>
       )}
+
+      {/* ------------------------------------------------- month at a glance */}
+      {totals && <MonthStats totals={totals} personal={!approver} />}
 
       {/* --------------------------------------------------- monthly register */}
       <Card>
-        <CardHeader title="Monthly register" subtitle={monthLabel(month)} icon={<CalendarDays size={16} />}
+        <CardHeader title={showMine ? 'Team register' : 'Monthly register'} subtitle={monthLabel(month)} icon={<CalendarDays size={16} />}
           action={
             <div className="flex flex-wrap gap-2">
               {approver && (
@@ -424,89 +440,8 @@ function AttendanceTab() {
 
         {register.isLoading ? <TableSkeleton cols={8} />
           : !reg?.rows?.length ? <EmptyState compact title="No attendance data for this month" />
-            : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm border-collapse">
-                  <thead className="bg-sunken">
-                    <tr>
-                      <th className="label-cap px-3 py-2 text-left border-b border-line sticky left-0 bg-sunken z-10 min-w-[170px]">
-                        Employee
-                      </th>
-                      {reg.days.map((d: any) => (
-                        <th key={d.date}
-                          title={d.holiday ? d.holiday.name : d.week_off ? 'Weekly off' : undefined}
-                          className={cx('label-cap px-1 py-2 text-center border-b border-line min-w-[26px]',
-                            // A weekly off column reads differently from a
-                            // working one before anybody looks at a single cell.
-                            d.week_off && 'bg-sunken text-subtle/70',
-                            d.holiday && 'text-[#8b5cf6]')}>
-                          {Number(d.date.slice(-2))}
-                        </th>
-                      ))}
-                      <th className="label-cap px-3 py-2 text-right border-b border-line min-w-[130px]">Present</th>
-                      <th className="label-cap px-3 py-2 text-right border-b border-line min-w-[110px]">Attendance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reg.rows.map((row: any) => (
-                      <tr key={row.user.id} className="row-hover">
-                        <td className="px-3 py-2 border-b border-line sticky left-0 bg-raised z-10">
-                          <AvatarWithName name={row.user.name} url={row.user.avatar_url} sub={row.user.designation} size={26} />
-                        </td>
-                        {row.cells.map((c: any) => {
-                          const m = statusMeta(c.status);
-                          return (
-                            <td key={c.date}
-                              className={cx('px-1 py-2 border-b border-line text-center', c.week_off && 'bg-sunken')}>
-                              <button
-                                type="button"
-                                onClick={() => setOpenDay({ userId: row.user.id, date: c.date })}
-                                title={`${date(c.date)} — ${m.label}${c.work_minutes ? ` · ${Math.floor(c.work_minutes / 60)}h${String(c.work_minutes % 60).padStart(2, '0')}m` : ''}`}
-                                aria-label={`${row.user.name}, ${date(c.date)}: ${m.label}`}
-                                className={cx('inline-block h-4 w-4 rounded-sm cursor-pointer align-middle',
-                                  'hover:ring-2 hover:ring-[var(--brand)] hover:ring-offset-1 hover:ring-offset-[var(--raised)]',
-                                  'focus-visible:ring-2 focus-visible:ring-[var(--brand)] transition-shadow',
-                                  m.swatch)}
-                              />
-                            </td>
-                          );
-                        })}
-                        <td className="px-3 py-2 border-b border-line text-right">
-                          <span className="tabular text-[13px] font-medium">{row.summary.present_days}</span>
-                          <span className="text-subtle text-[12px]"> / {row.summary.working_days}</span>
-                          {row.summary.pending > 0 && (
-                            <Badge tone="warning" className="ml-1.5">{row.summary.pending} pending</Badge>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 border-b border-line text-right">
-                          <span className="flex items-center gap-2 justify-end">
-                            <Meter value={row.summary.attendance_pct}
-                              tone={row.summary.attendance_pct >= 95 ? 'positive' : row.summary.attendance_pct >= 85 ? 'warning' : 'negative'}
-                              className="w-12" />
-                            <span className="tabular text-[13px] w-10 text-right font-medium">
-                              {percent(row.summary.attendance_pct)}
-                            </span>
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-        <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-line px-4 py-2.5 text-[12px] text-subtle">
-          {['present', 'pending_approval', 'absent', 'leave', 'weekoff', 'holiday', 'half_day', 'wfh']
-            .map((key) => (
-              <span key={key} className="flex items-center gap-1.5">
-                <span className={cx('h-3 w-3 rounded-sm', ATTENDANCE_STATUS[key].swatch)} aria-hidden />
-                {ATTENDANCE_STATUS[key].label}
-              </span>
-            ))}
-          <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-sm border border-line-strong" aria-hidden />Not marked
-          </span>
-        </div>
+            : <RegisterGrid reg={reg} onOpenDay={setOpenDay} />}
+        <RegisterLegend />
       </Card>
 
       {regularizeOpen && <RegularizeModal onClose={() => setRegularizeOpen(false)} />}
@@ -521,6 +456,116 @@ function AttendanceTab() {
         <DecideLateModal row={decide.row} decision={decide.decision} onClose={() => setDecide(null)} />
       )}
     </>
+  );
+}
+
+/* --------------------------------------------- month stats and register */
+function MonthStats({ totals, personal }: { totals: any; personal?: boolean }) {
+  const per = totals.employees || 1;
+  return (
+    <div className="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-5">
+      <Stat label="Working days" value={totals.working_days} icon={<CalendarDays size={15} />}
+        sub={personal ? 'this month' : `${totals.employees} employee${totals.employees === 1 ? '' : 's'}`} />
+      <Stat label="Present" value={totals.present} tone="positive" />
+      <Stat label="Absent" value={totals.absent} tone={totals.absent ? 'negative' : 'neutral'} />
+      <Stat label="Leave" value={totals.leave} />
+      <Stat label="Pending" value={totals.pending} tone={totals.pending ? 'warning' : 'neutral'}
+        sub={totals.pending ? 'awaiting HR' : 'nothing waiting'} />
+      <Stat label="Holidays" value={totals.holiday ? Math.round(totals.holiday / per) : 0}
+        sub={`${Math.round((totals.week_off || 0) / per)} weekly off`} />
+    </div>
+  );
+}
+
+function RegisterGrid({ reg, onOpenDay }: {
+  reg: any; onOpenDay: (d: { userId: string; date: string }) => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse">
+        <thead className="bg-sunken">
+          <tr>
+            <th className="label-cap px-3 py-2 text-left border-b border-line sticky left-0 bg-sunken z-10 min-w-[170px]">
+              Employee
+            </th>
+            {reg.days.map((d: any) => (
+              <th key={d.date}
+                title={d.holiday ? d.holiday.name : d.week_off ? 'Weekly off' : undefined}
+                className={cx('label-cap px-1 py-2 text-center border-b border-line min-w-[26px]',
+                  // A weekly off column reads differently from a
+                  // working one before anybody looks at a single cell.
+                  d.week_off && 'bg-sunken text-subtle/70',
+                  d.holiday && 'text-[#8b5cf6]')}>
+                {Number(d.date.slice(-2))}
+              </th>
+            ))}
+            <th className="label-cap px-3 py-2 text-right border-b border-line min-w-[130px]">Present</th>
+            <th className="label-cap px-3 py-2 text-right border-b border-line min-w-[110px]">Attendance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {reg.rows.map((row: any) => (
+            <tr key={row.user.id} className="row-hover">
+              <td className="px-3 py-2 border-b border-line sticky left-0 bg-raised z-10">
+                <AvatarWithName name={row.user.name} url={row.user.avatar_url} sub={row.user.designation} size={26} />
+              </td>
+              {row.cells.map((c: any) => {
+                const m = statusMeta(c.status);
+                return (
+                  <td key={c.date}
+                    className={cx('px-1 py-2 border-b border-line text-center', c.week_off && 'bg-sunken')}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDay({ userId: row.user.id, date: c.date })}
+                      title={`${date(c.date)} — ${m.label}${c.work_minutes ? ` · ${Math.floor(c.work_minutes / 60)}h${String(c.work_minutes % 60).padStart(2, '0')}m` : ''}`}
+                      aria-label={`${row.user.name}, ${date(c.date)}: ${m.label}`}
+                      className={cx('inline-block h-4 w-4 rounded-sm cursor-pointer align-middle',
+                        'hover:ring-2 hover:ring-[var(--brand)] hover:ring-offset-1 hover:ring-offset-[var(--raised)]',
+                        'focus-visible:ring-2 focus-visible:ring-[var(--brand)] transition-shadow',
+                        m.swatch)}
+                    />
+                  </td>
+                );
+              })}
+              <td className="px-3 py-2 border-b border-line text-right">
+                <span className="tabular text-[13px] font-medium">{row.summary.present_days}</span>
+                <span className="text-subtle text-[12px]"> / {row.summary.working_days}</span>
+                {row.summary.pending > 0 && (
+                  <Badge tone="warning" className="ml-1.5">{row.summary.pending} pending</Badge>
+                )}
+              </td>
+              <td className="px-3 py-2 border-b border-line text-right">
+                <span className="flex items-center gap-2 justify-end">
+                  <Meter value={row.summary.attendance_pct}
+                    tone={row.summary.attendance_pct >= 95 ? 'positive' : row.summary.attendance_pct >= 85 ? 'warning' : 'negative'}
+                    className="w-12" />
+                  <span className="tabular text-[13px] w-10 text-right font-medium">
+                    {percent(row.summary.attendance_pct)}
+                  </span>
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RegisterLegend() {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-line px-4 py-2.5 text-[12px] text-subtle">
+      {['present', 'pending_approval', 'absent', 'leave', 'weekoff', 'holiday', 'half_day', 'wfh']
+        .map((key) => (
+          <span key={key} className="flex items-center gap-1.5">
+            <span className={cx('h-3 w-3 rounded-sm', ATTENDANCE_STATUS[key].swatch)} aria-hidden />
+            {ATTENDANCE_STATUS[key].label}
+          </span>
+        ))}
+      <span className="flex items-center gap-1.5">
+        <span className="h-3 w-3 rounded-sm border border-line-strong" aria-hidden />Not marked
+      </span>
+    </div>
   );
 }
 

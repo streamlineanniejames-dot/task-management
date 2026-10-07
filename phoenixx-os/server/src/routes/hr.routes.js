@@ -1009,7 +1009,10 @@ router.get('/attendance/register', requires('hr_attendance', 'view'), (req, res)
   const to = endOfMonth(month).slice(0, 10);
   const today = workDayFor(tenantId);
 
-  const scopeToSelf = !can(req.auth, 'hr_attendance', 'approve');
+  // A manager is an employee too: `self=1` asks for their own row only, the
+  // same register everybody without approval rights sees.
+  const scopeToSelf = ['1', 'true'].includes(String(req.query.self))
+    || !can(req.auth, 'hr_attendance', 'approve');
   // The owner and the HR / Finance management logins are not rows on the register.
   const filters = ["tenant_id = ?", 'deleted_at IS NULL', `role NOT IN (${NO_ATTENDANCE_SQL})`];
   const params = [tenantId];
