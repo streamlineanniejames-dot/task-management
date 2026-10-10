@@ -524,7 +524,15 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
   };
   const approve = useMutation({
     mutationFn: () => api.post(`/todo-plan/submissions/${id}/approve`, { note: note || undefined }),
-    onSuccess: (r) => { done(r, 'Approved.'); setNote(''); },
+    onSuccess: (r: any) => {
+      // Approval also turns the plan's tasks into action items.
+      const c = r.data.conversion_result;
+      const n = c?.created?.length || 0;
+      done(r, n ? `Approved. ${n} action item${n === 1 ? '' : 's'} created.` : 'Approved.');
+      if (c?.error) toast.error(`Approved, but no action items were created: ${c.error}`);
+      if (n) qc.invalidateQueries({ queryKey: ['action-items'] });
+      setNote('');
+    },
     onError: (e: any) => toast.error(e.message),
   });
   const changes = useMutation({

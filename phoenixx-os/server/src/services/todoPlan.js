@@ -706,7 +706,20 @@ export async function decide(auth, id, { approve, note }) {
 
   await tell(auth.tenantId, userRow(sub.user_id), approve ? EVENTS.approved : EVENTS.changes,
     { reviewer: userName(auth.userId), todo_date: sub.todo_date, todo_day: dayLabel(sub.todo_date), note: text }, null, settingsFor(auth.tenantId), planLink(sub.id));
-  return detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id]));
+
+  // An approved plan is agreed work, so its tasks move to Action Items there
+  // and then. The approval stands even if that cannot happen - the plan then
+  // says why, and "Create Action Items" retries once it is fixed.
+  let conversion = null;
+  if (approve) {
+    try {
+      const { plan: _plan, ...outcome } = await convertPlan(auth, sub.id);
+      conversion = outcome;
+    } catch (err) {
+      conversion = { error: err.message };
+    }
+  }
+  return { ...detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id])), conversion_result: conversion };
 }
 
 export async function addComment(auth, id, body) {

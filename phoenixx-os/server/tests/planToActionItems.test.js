@@ -422,6 +422,41 @@ describe('who may convert, and to whom', () => {
   });
 });
 
+describe('approving a plan moves its tasks to Action Items', () => {
+  test('approval creates one item per task, assigned to the employee, validated by the approver', async () => {
+    const emp = await join('Meena');
+    await reportTo(emp, mani);
+    const plan = await file(emp, [{ task: 'Approved task one' }, { task: 'Approved task two' }]);
+    const res = await api.post(`/todo-plan/submissions/${plan.id}/approve`, {}, { token: mani.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.data.status, 'APPROVED');
+    assert.equal(res.body.data.conversion_result.created.length, 2);
+    assert.equal(res.body.data.conversion.converted, 2);
+    const items = itemsOf(plan.id);
+    assert.ok(items.every((a) => a.owner_id === emp.id && a.created_by === mani.id && a.status === 'open'));
+    const mine = await api.get('/action-items?assigned_to_me=true', { token: emp.token });
+    assert.equal(mine.body.data.filter((a) => a.source_plan_id === plan.id).length, 2);
+    // The button afterwards finds nothing left to do.
+    const again = await convert(plan.id, emp.token);
+    assert.equal(again.body.data.created.length, 0);
+    assert.equal(itemsOf(plan.id).length, 2);
+  });
+
+  test('an approval that cannot convert still approves, and says why', async () => {
+    const emp = await join('Tara');
+    await reportTo(emp, mani);
+    const plan = await file(emp, [{ task: 'Converted later' }]);
+    // Nobody to assign the items to: the employee left after filing.
+    db.run("UPDATE users SET status = 'disabled' WHERE id = ?", [emp.id]);
+    const res = await api.post(`/todo-plan/submissions/${plan.id}/approve`, {}, { token: mani.token });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.data.status, 'APPROVED');
+    assert.match(res.body.data.conversion_result.error, /no longer active/);
+    assert.equal(itemsOf(plan.id).length, 0);
+    db.run("UPDATE users SET status = 'active' WHERE id = ?", [emp.id]);
+  });
+});
+
 describe('a reporting person who cannot validate stops the conversion', () => {
   test('an inactive reporting person is an error, not a silent swap', async () => {
     const boss = await join('Kavi', 'manager');

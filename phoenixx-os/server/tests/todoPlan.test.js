@@ -234,6 +234,9 @@ describe('review', () => {
     assert.ok(res.body.data.approved_at);
     assert.equal(res.body.data.reviewed_by, mani.id);
     assert.equal(inbox(kumar.id, 'todo.approved').length, 1);
+    // Approval moves every task to Action Items: Kumar's, for Mani to validate.
+    assert.equal(res.body.data.conversion_result.created.length, res.body.data.tasks.length);
+    assert.ok(res.body.data.tasks.every((t) => t.action_item));
     assert.equal((await api.put(`/todo-plan/mine/${target}`, { tasks: TASKS }, { token: kumar.token })).status, 403);
     assert.equal((await api.post(`/todo-plan/submissions/${kumarPlan}/approve`, {}, { token: mani.token })).status, 400);
 
@@ -359,6 +362,13 @@ describe('owner-granted view of everyone', () => {
 });
 
 describe('ticking tasks off', () => {
+  // Approval turned Kumar's tasks into action items. These suites cover a plan
+  // whose tasks stayed in the planner - one approved before that existed, or
+  // whose conversion could not run - so the items are taken away again here.
+  before(() => {
+    db.run("DELETE FROM action_items WHERE source_type = 'advance_planner' AND source_plan_id = ?", [kumarPlan]);
+  });
+
   test('the employee marks a task complete and it lands on the activity feed', async () => {
     const plan = (await api.get(`/todo-plan/submissions/${kumarPlan}`, { token: kumar.token })).body.data;
     const res = await api.post(`/todo-plan/submissions/${kumarPlan}/tasks/${plan.tasks[0].id}`, { done: true }, { token: kumar.token });
