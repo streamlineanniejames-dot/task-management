@@ -35,6 +35,13 @@ const ADDED_INDEXES = [
   ['action_items', 'due_at', 'CREATE INDEX IF NOT EXISTS ix_ai_due_at ON action_items(tenant_id, status, due_at)'],
   // HR's queue of late arrivals waiting on a ruling.
   ['attendance', 'scheduled_start', 'CREATE INDEX IF NOT EXISTS ix_att_status ON attendance(tenant_id, status, work_date)'],
+  // A planner task becomes at most one action item, ever - deleted ones
+  // included, so a retry can never bring a removed item back as a duplicate.
+  // The database says no, not just the code, so two requests racing each
+  // other cannot both win.
+  ['action_items', 'source_plan_id', `CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_planner_task
+     ON action_items(tenant_id, source_id) WHERE source_type = 'advance_planner'`],
+  ['action_items', 'source_plan_id', 'CREATE INDEX IF NOT EXISTS ix_ai_source_plan ON action_items(tenant_id, source_plan_id)'],
 ];
 
 function addIndexes() {
@@ -350,6 +357,10 @@ const ADDED_COLUMNS = [
   ['todo_tasks', 'carried_from_date', 'TEXT'],
   ['todo_tasks', 'carried_from_task_id', 'TEXT'],
   ['todo_tasks', 'carried_to_date', 'TEXT'],
+  // An action item made from an Advance Planner task: `source_type` is
+  // 'advance_planner', `source_id` the planner task, and this the plan it sat
+  // on, so a plan can list its items without walking task rows.
+  ['action_items', 'source_plan_id', 'TEXT'],
   // A report about one project (the marketing reports) is only shown to the
   // people who can see that project.
   ['report_runs', 'project_id', 'TEXT'],

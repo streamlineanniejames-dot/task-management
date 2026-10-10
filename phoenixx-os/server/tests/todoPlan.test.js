@@ -88,7 +88,7 @@ describe('employee: filing tomorrow\'s plan', () => {
   });
 
   test('bad tasks are refused with the line that is wrong', async () => {
-    const res = await api.put(`/todo-plan/mine/${target}`, { tasks: [{ task: 'x', priority: 'urgent' }] }, { token: kumar.token });
+    const res = await api.put(`/todo-plan/mine/${target}`, { tasks: [{ task: 'x', priority: 'critical' }] }, { token: kumar.token });
     assert.equal(res.status, 400);
     assert.match(JSON.stringify(res.body), /Task 1: priority/);
     const empty = await api.put(`/todo-plan/mine/${target}`, { tasks: [], submit: true }, { token: kumar.token });

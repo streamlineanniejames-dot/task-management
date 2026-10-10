@@ -47,7 +47,10 @@ const itemSchema = z.object({
   recurrence_until: z.string().optional().nullable(),
   estimate_minutes: z.number().int().min(0).optional().nullable(),
   watchers: z.array(z.string()).optional(),
-  source_type: z.string().optional().nullable(),
+  // 'advance_planner' is written only by the plan conversion: a forged link
+  // would claim a planner task and stop the real conversion of it.
+  source_type: z.string().refine((s) => s !== 'advance_planner', 'That source is set by the Advance Planner only')
+    .optional().nullable(),
   source_id: z.string().optional().nullable(),
   sop_id: z.string().optional().nullable(),
   blocked_reason: z.string().optional().nullable(),
@@ -420,6 +423,8 @@ router.get('/', requires('action_items', 'view'), (req, res) => {
   }
   if (q.client_id) { filters.push('a.client_id = ?'); params.push(q.client_id); }
   if (q.project_id) { filters.push('a.project_id = ?'); params.push(q.project_id); }
+  // Everything made from one Advance Planner plan - the plan's "view in Action Items" link.
+  if (q.source_plan_id) { filters.push('a.source_plan_id = ?'); params.push(q.source_plan_id); }
   if (q.category_id) { filters.push('a.category_id = ?'); params.push(q.category_id); }
   if (q.due_before) { filters.push('a.due_date <= ?'); params.push(q.due_before); }
   if (q.due_after) { filters.push('a.due_date >= ?'); params.push(q.due_after); }
@@ -860,6 +865,12 @@ router.get('/:id', requires('action_items', 'view'), (req, res) => {
       [req.auth.tenantId, item.id],
     ),
     updates: updatesForItem(req.auth.tenantId, item.id),
+    /** The Advance Planner plan this was made from, for the link back. */
+    source_plan: item.source_plan_id ? get(
+      `SELECT s.id, s.todo_date, u.name AS employee_name FROM todo_submissions s
+         LEFT JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.tenant_id = ?`,
+      [item.source_plan_id, req.auth.tenantId],
+    ) || null : null,
     /** Whether this caller still owes an update on it today. */
     my_update_today: get(
       `SELECT * FROM action_updates WHERE tenant_id = ? AND action_item_id = ? AND user_id = ?
@@ -933,6 +944,8 @@ router.patch('/:id', requires('action_items', 'edit'), (req, res) => {
   delete patch.watchers;
   delete patch.assignee_ids;
   delete patch.assign_from_project_id;
+  // An item's link back to the planner task it came from is permanent.
+  if (before.source_type === 'advance_planner') { delete patch.source_type; delete patch.source_id; }
   // The three due columns are derived together or not at all - sending a bare
   // time, or a date the caller has already missed, is settled here.
   delete patch.due_date;
@@ -1207,6 +1220,7 @@ router.post('/bulk', requires('action_items', 'edit'), (req, res) => {
       const ts = nowIso();
       const fields = { ...patch, updated_at: ts };
       delete fields.watchers;
+      if (before.source_type === 'advance_planner') { delete fields.source_type; delete fields.source_id; }
       // Each row is measured against its own current due date, so moving fifty
       // tasks to Friday afternoon settles fifty instants rather than one.
       delete fields.due_date;

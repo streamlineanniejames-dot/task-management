@@ -93,4 +93,12 @@ router.post('/submissions/:id/tasks/:taskId/checklist/:index', (req, res) => {
 router.post('/submissions/:id/comments', async (req, res) =>
   ok(res, await P.addComment(req.auth, req.params.id, req.body?.body)));
 
+/**
+ * "Create Action Items": one action item per task not converted yet. Safe to
+ * repeat - the reply lists what was created, what already was, and what could
+ * not be. Who may ask and who the items go to are decided in the service.
+ */
+router.post('/submissions/:id/action-items', requires('action_items', 'create'), async (req, res) =>
+  ok(res, await P.convertPlan(req.auth, req.params.id)));
+
 export { router as todoPlanRouter };

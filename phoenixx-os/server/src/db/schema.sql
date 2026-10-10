@@ -326,8 +326,9 @@ CREATE TABLE IF NOT EXISTS action_items (
   recurrence TEXT,                         -- none|daily|weekly|monthly (A3)
   recurrence_until TEXT,
   recurrence_parent_id TEXT,
-  source_type TEXT,                        -- mom|sop|invoice|lead|manual
-  source_id TEXT,
+  source_type TEXT,                        -- mom|sop|invoice|lead|manual|advance_planner
+  source_id TEXT,                          -- for advance_planner: the todo_tasks row
+  source_plan_id TEXT,                     -- for advance_planner: the todo_submissions row
   escalation_level INTEGER NOT NULL DEFAULT 0,
   escalated_at TEXT,
   sop_id TEXT,

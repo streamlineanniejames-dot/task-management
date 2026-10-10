@@ -287,6 +287,10 @@ export const DEFAULT_TEMPLATES = {
     subject: '{{person}} added a task for {{todo_day}}',
     body: '{{person}} added "{{note}}" to the plan for {{todo_day}}.',
   },
+  'todo.converted': {
+    subject: '{{count}} planned task(s) are now action items',
+    body: '{{person}} turned {{count}} task(s) from the plan for {{todo_day}} into action items, assigned to {{employee}} and validated by {{reviewer}}.',
+  },
   'todo.carried_over': {
     subject: '{{count}} unfinished task(s) moved to {{todo_day}}',
     body: 'Not completed, so now on your plan for {{todo_day}}: {{tasks}}.',

@@ -1,8 +1,9 @@
 import { get, all, run, tx } from '../db/index.js';
 import { uuid, nowIso, parseJson } from '../lib/util.js';
-import { badRequest, forbidden, notFound } from '../lib/http.js';
-import { DEFAULT_TZ, todayInTz, timeInTz, localToUtc, formatDueTime } from '../lib/dueTime.js';
+import { badRequest, forbidden, notFound, unprocessable } from '../lib/http.js';
+import { DEFAULT_TZ, todayInTz, timeInTz, localToUtc, formatDueTime, dueAtIso } from '../lib/dueTime.js';
 import { notify, channelsFor } from './notifications.js';
+import { syncDeadline } from '../routes/actionItems.routes.js';
 import { can } from '../middleware/rbac.js';
 import { visibleProjectIds } from './projectOversight.js';
 
@@ -40,6 +41,7 @@ export const EVENTS = {
   comment: 'todo.comment',
   task_added: 'todo.task_added',
   carried_over: 'todo.carried_over',
+  converted: 'todo.converted',
 };
 
 const PLAN_LINK = '/';
@@ -337,7 +339,8 @@ export async function todoTick(tenantIds, now = new Date()) {
 }
 
 // ================================================================ the plan
-export const PRIORITIES = ['high', 'medium', 'low'];
+/** The Action Items scale, so a planned task keeps its priority when it becomes one. */
+export const PRIORITIES = ['urgent', 'high', 'medium', 'low'];
 /** The reporting person is working on it or has decided: the employee's copy is frozen. */
 const LOCKED = ['UNDER_REVIEW', 'APPROVED', 'MISSED'];
 const AWAITING_REVIEW = ['SUBMITTED', 'LATE', 'UNDER_REVIEW'];
@@ -405,6 +408,11 @@ export function optionsFor(auth) {
 function editState(auth, sub, win) {
   if (sub.user_id !== auth.userId) return { can_edit: false, reason: null };
   if (sub.status === 'MISSED') return { can_edit: false, reason: 'The planned day has arrived.' };
+  // Saving replaces every task row, which would cut the converted ones loose
+  // from their action items.
+  if (linkedItems(sub.tenant_id, sub.id).size) {
+    return { can_edit: false, reason: 'Tasks from this plan are tracked in Action Items now.' };
+  }
   if (LOCKED.includes(sub.status)) return { can_edit: false, reason: 'Your reporting person has this plan now.' };
   if (sub.todo_date < win.today || (sub.todo_date === win.today && sub.status !== 'CHANGES_REQUESTED')) {
     return { can_edit: false, reason: 'The planned day has arrived.' };
@@ -433,6 +441,14 @@ export function detail(auth, sub, win = windowFor(auth.tenantId)) {
       WHERE t.submission_id = ? ORDER BY t.sort`,
     [sub.id],
   ).map((t) => ({ ...t, checklist: parseJson(t.checklist, []) }));
+  const linked = linkedItems(sub.tenant_id, sub.id);
+  for (const t of tasks) {
+    const a = linked.get(t.id);
+    t.action_item = a ? {
+      id: a.id, status: a.status, validation_status: a.validation_status, deleted: !!a.deleted_at,
+    } : null;
+    t.conversion_block = a ? null : conversionBlock(t);
+  }
   const comments = all(
     `SELECT tc.id, tc.kind, tc.body, tc.created_at, tc.user_id, u.name AS user_name
        FROM todo_comments tc LEFT JOIN users u ON u.id = tc.user_id
@@ -451,6 +467,7 @@ export function detail(auth, sub, win = windowFor(auth.tenantId)) {
     can_tick: sub.user_id === auth.userId && workable(sub, win.today),
     can_add_task: canAddTask(auth, sub, win.today),
     options: canAddTask(auth, sub, win.today) ? optionsFor(auth) : undefined,
+    conversion: conversionSummary(auth, sub, tasks),
   };
 }
 
@@ -526,8 +543,7 @@ function cleanTasks(auth, tasks, submitting) {
     if (t.notes && t.notes.length > 1000) throw badRequest(`${n}: keep notes under 1000 characters`);
     if (t.checklist.length > 20) throw badRequest(`${n}: a checklist can hold at most 20 items`);
     if (t.checklist.some((c) => c.text.length > 200)) throw badRequest(`${n}: keep checklist items under 200 characters`);
-    if (!PRIORITIES.includes(t.priority)) throw badRequest(`${n}: priority must be high, medium or low`);
-    if (t.expected_time && !HHMM_OPT.test(t.expected_time)) throw badRequest(`${n}: expected time must be HH:MM`);
+    if (!PRIORITIES.includes(t.priority)) throw badRequest(`${n}: priority must be urgent, high, medium or low`);    if (t.expected_time && !HHMM_OPT.test(t.expected_time)) throw badRequest(`${n}: expected time must be HH:MM`);
     if (t.project_id && !projectIds.has(t.project_id)) throw badRequest(`${n}: that project is not available to you`);
     if (t.client_id && !clientIds.has(t.client_id)) throw badRequest(`${n}: that client is not available to you`);
   });
@@ -575,6 +591,14 @@ export async function savePlan(auth, todoDate, { tasks = [], submit = false } = 
 
   const clean = cleanTasks(auth, tasks, submit);
   const me = userRow(auth.userId);
+  // The reporting person reviews the plan and later validates its action items,
+  // so a plan cannot be filed to nobody.
+  if (submit && !reportingPersonIds(auth.tenantId, me).length) {
+    throw unprocessable('Validation failed', [{
+      field: 'reporting_person_id',
+      message: 'You have no reporting person on record - ask the owner to set one before submitting',
+    }]);
+  }
   const now = nowIso();
   const before = sub
     ? { status: sub.status, tasks: all('SELECT task, priority FROM todo_tasks WHERE submission_id = ? ORDER BY sort', [sub.id]) }
@@ -661,6 +685,11 @@ export async function decide(auth, id, { approve, note }) {
     throw badRequest(`This plan is ${sub.status.toLowerCase().replace(/_/g, ' ')}, not awaiting review`);
   }
   const text = String(note ?? '').trim();
+  // Sending the plan back would reopen it for editing, and editing replaces
+  // the task rows the action items point at.
+  if (!approve && linkedItems(sub.tenant_id, sub.id).size) {
+    throw badRequest('Tasks from this plan are already action items - send the individual items back from Action Items instead');
+  }
   if (!approve && !text) throw badRequest('Say what needs to change');
   if (text.length > 2000) throw badRequest('Keep the note under 2000 characters');
 
@@ -715,6 +744,7 @@ export function setTaskDone(auth, id, taskId, done) {
   const task = get('SELECT * FROM todo_tasks WHERE id = ? AND submission_id = ?', [taskId, sub.id]);
   if (!task) throw notFound('Task');
   if (task.carried_to_date) throw badRequest(`This task moved to ${task.carried_to_date}; tick it there`);
+  assertNotConverted(sub, task);
   if (!!task.done_at === !!done) return detail(auth, sub);
 
   const now = nowIso();
@@ -896,6 +926,7 @@ export function setChecklistItem(auth, id, taskId, index, done) {
   const task = get('SELECT * FROM todo_tasks WHERE id = ? AND submission_id = ?', [taskId, sub.id]);
   if (!task) throw notFound('Task');
   if (task.carried_to_date) throw badRequest(`This task moved to ${task.carried_to_date}; tick it there`);
+  assertNotConverted(sub, task);
   const list = parseJson(task.checklist, []);
   const item = list[index];
   if (!item) throw notFound('Checklist item');
@@ -966,6 +997,10 @@ export async function carryOver(tenantId, today, settings = settingsFor(tenantId
        FROM todo_tasks t JOIN todo_submissions s ON s.id = t.submission_id
       WHERE t.tenant_id = ? AND s.todo_date < ? AND s.todo_date >= ?
         AND t.done_at IS NULL AND t.carried_to_date IS NULL
+        -- An action item carries its own deadline and overdue ladder; copying
+        -- the task forward too would put the same work in two places.
+        AND NOT EXISTS (SELECT 1 FROM action_items a WHERE a.tenant_id = t.tenant_id
+                          AND a.source_type = 'advance_planner' AND a.source_id = t.id)
       ORDER BY s.user_id, s.todo_date, t.sort`,
     [tenantId, today, addDay(today, -14)],
   );
@@ -1018,4 +1053,248 @@ export async function carryOver(tenantId, today, settings = settingsFor(tenantId
       `todo_carry:${today}`, settings, planLink(m.planId));
   }
   return rows.length;
+}
+
+// ================================================================ to action items
+/**
+ * A filed plan's tasks become action items: one per task, assigned to the
+ * person who planned them, validated by the reporting person the plan went
+ * to. From then on the action item is where the work is tracked - its status,
+ * daily updates, sign-off and deadline ladder - and the plan only reads it back.
+ *
+ * Field mapping onto the existing action item columns, no new ones:
+ *  - `owner_id`   the assignee: the plan's employee.
+ *  - `created_by` the validator: the plan's reporting person. Sign-off on an
+ *                 action item belongs to whoever raised it, so this is the
+ *                 column that makes the reporting person the one who validates.
+ *  - `source_type` 'advance_planner', `source_id` the task, `source_plan_id`
+ *                 the plan. A unique index on the task makes a second item
+ *                 for the same task impossible, whoever asks and however often.
+ */
+export const SOURCE_TYPE = 'advance_planner';
+/** Plans that have gone to the reporting person and are not being reworked. */
+const CONVERTIBLE = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
+const TITLE_MAX = 240;
+
+/** task id -> the action item made from it. Deleted ones count: a task converts once. */
+function linkedItems(tenantId, submissionId) {
+  return new Map(all(
+    `SELECT id, source_id, status, validation_status, deleted_at FROM action_items
+      WHERE tenant_id = ? AND source_type = ? AND source_plan_id = ?`,
+    [tenantId, SOURCE_TYPE, submissionId],
+  ).map((a) => [a.source_id, a]));
+}
+
+function assertNotConverted(sub, task) {
+  if (get('SELECT id FROM action_items WHERE tenant_id = ? AND source_type = ? AND source_id = ?',
+    [sub.tenant_id, SOURCE_TYPE, task.id])) {
+    throw badRequest('This task is tracked in Action Items now - update its progress there');
+  }
+}
+
+/** Why one task cannot become an action item, or null when it can. */
+function conversionBlock(t) {
+  if (t.carried_to_date) return `Moved to ${dayLabel(t.carried_to_date)} - convert it from that plan`;
+  if (t.done_at) return 'Already ticked off in the planner';
+  if (String(t.task || '').trim().length < 2) return 'The title needs at least 2 characters';
+  return null;
+}
+
+function planProblem(sub) {
+  if (CONVERTIBLE.includes(sub.status)) return null;
+  if (sub.status === 'CHANGES_REQUESTED') return 'Resubmit the plan before turning it into action items';
+  if (sub.status === 'MISSED') return 'This plan was never submitted, so it cannot be turned into action items';
+  return 'Submit the plan before turning it into action items';
+}
+
+/**
+ * The reporting person on the plan - the one it was filed to - and nobody
+ * else. If they cannot validate, the conversion stops and says so rather than
+ * quietly handing the work to someone the employee never reported to.
+ */
+function reviewerFor(sub) {
+  if (!sub.reporting_person_id) {
+    return { problem: 'This plan has no reporting person on record, so nobody could validate its action items. Ask the owner to set one.' };
+  }
+  const r = get('SELECT id, name, role, status, deleted_at FROM users WHERE id = ? AND tenant_id = ?',
+    [sub.reporting_person_id, sub.tenant_id]);
+  if (!r || r.deleted_at || r.status !== 'active' || ['client', 'super_admin'].includes(r.role)) {
+    return { problem: `${r?.name || 'The reporting person on this plan'} is no longer active, so they cannot validate its action items. Ask the owner to set a new reporting person.` };
+  }
+  if (r.id === sub.user_id) return { problem: 'The person who filed a plan cannot also validate its action items' };
+  return { user: r };
+}
+
+/** The person who filed it, the reporting person it went to, or the owner - and only with the right to create action items. */
+const mayConvert = (auth, sub) => (sub.user_id === auth.userId || sub.reporting_person_id === auth.userId || isAdmin(auth))
+  && can(auth, 'action_items', 'create');
+
+function conversionSummary(auth, sub, tasks) {
+  const converted = tasks.filter((t) => t.action_item).length;
+  const blocked = tasks.filter((t) => !t.action_item && t.conversion_block).length;
+  const ready = tasks.length - converted - blocked;
+  const rev = reviewerFor(sub);
+  const problem = planProblem(sub) || rev.problem || null;
+  return {
+    total: tasks.length,
+    converted,
+    not_converted: tasks.length - converted,
+    ready,
+    blocked,
+    problem,
+    can_convert: mayConvert(auth, sub) && !problem && ready > 0,
+    assignee: { id: sub.user_id, name: userName(sub.user_id) },
+    reviewer: rev.user ? { id: rev.user.id, name: rev.user.name } : null,
+  };
+}
+
+/** The action item columns for one planner task. */
+function itemFrom(t, sub, tz) {
+  const task = t.task.trim();
+  const title = task.length > TITLE_MAX ? `${task.slice(0, TITLE_MAX - 1)}…` : task;
+  // The client register Action Items links to is the pipeline; a planner client
+  // is the account behind it. No pipeline row, no link - the name still travels.
+  const lead = t.client_id
+    ? get('SELECT id FROM clients WHERE tenant_id = ? AND client_account_id = ? AND deleted_at IS NULL ORDER BY created_at LIMIT 1',
+      [sub.tenant_id, t.client_id])
+    : null;
+  const checklist = parseJson(t.checklist, []);
+  const description = [
+    title !== task ? task : null,
+    t.notes || null,
+    checklist.length ? `Checklist:\n${checklist.map((c) => `- [${c.done ? 'x' : ' '}] ${c.text}`).join('\n')}` : null,
+    t.client_id && !lead && t.client_name ? `Client: ${t.client_name}` : null,
+    `From the Advance Planner for ${dayLabel(sub.todo_date)}.`,
+  ].filter(Boolean).join('\n\n');
+  return {
+    title,
+    description,
+    client_id: lead?.id ?? null,
+    project_id: t.project_id || null,
+    priority: PRIORITIES.includes(t.priority) ? t.priority : 'medium',
+    due_date: sub.todo_date,
+    due_time: t.expected_time || null,
+    // Straight from the planned day and time. The same-day "pick a time that
+    // has not passed" rule is for someone typing a deadline; a plan made
+    // yesterday for today records what was agreed, late or not.
+    due_at: dueAtIso(sub.todo_date, t.expected_time || null, tz),
+  };
+}
+
+/**
+ * Turns every task on the plan that is not an action item yet into one.
+ * Repeatable: what was converted before is reported, not made again, so a
+ * retry after a partial run just finishes the job.
+ *
+ * Everything happens under one write lock (BEGIN IMMEDIATE), and the
+ * "already converted?" read happens inside it, so a second click waits for
+ * the first and then finds its rows. The unique index backs that up. Each
+ * task gets its own savepoint: one that fails is reported and the rest still
+ * go through.
+ */
+export async function convertPlan(auth, id) {
+  const sub = loadSubmission(auth, id);
+  if (!mayConvert(auth, sub)) {
+    throw forbidden('Only the person who filed this plan, their reporting person or the owner can turn it into action items');
+  }
+  const problem = planProblem(sub);
+  if (problem) throw badRequest(problem);
+  const rev = reviewerFor(sub);
+  if (rev.problem) throw unprocessable(rev.problem, [{ field: 'reporting_person_id', message: rev.problem }]);
+  const assignee = get("SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'",
+    [sub.user_id, auth.tenantId]);
+  if (!assignee) {
+    throw unprocessable(`${userName(sub.user_id) || 'The person who filed this plan'} is no longer active, so the tasks cannot be assigned to them`);
+  }
+
+  const reviewer = rev.user;
+  const tz = tzOf(auth.tenantId);
+  const result = { created: [], already_converted: [], skipped: [], failed: [] };
+
+  tx(() => {
+    const linked = linkedItems(auth.tenantId, sub.id);
+    const tasks = all(
+      `SELECT t.*, ca.name AS client_name FROM todo_tasks t
+         LEFT JOIN client_accounts ca ON ca.id = t.client_id
+        WHERE t.submission_id = ? ORDER BY t.sort`,
+      [sub.id],
+    );
+    for (const t of tasks) {
+      const ref = { task_id: t.id, task: t.task };
+      const prior = linked.get(t.id);
+      if (prior) {
+        result.already_converted.push({ ...ref, action_item_id: prior.id, status: prior.status, deleted: !!prior.deleted_at });
+        continue;
+      }
+      const block = conversionBlock(t);
+      if (block) { result.skipped.push({ ...ref, reason: block }); continue; }
+
+      const f = itemFrom(t, sub, tz);
+      const itemId = uuid();
+      const ts = nowIso();
+      run('SAVEPOINT plan_task');
+      try {
+        const out = run(
+          `INSERT INTO action_items (id, tenant_id, title, description, owner_id, created_by, client_id, project_id,
+             priority, status, due_date, due_time, due_at, source_type, source_id, source_plan_id, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?, 'open', ?,?,?,?,?,?,?,?)
+           ON CONFLICT DO NOTHING`,
+          [itemId, auth.tenantId, f.title, f.description, sub.user_id, reviewer.id, f.client_id, f.project_id,
+            f.priority, f.due_date, f.due_time, f.due_at, SOURCE_TYPE, t.id, sub.id, ts, ts],
+        );
+        run('RELEASE plan_task');
+        if (Number(out.changes) === 0) {
+          const a = get('SELECT id, status FROM action_items WHERE tenant_id = ? AND source_type = ? AND source_id = ?',
+            [auth.tenantId, SOURCE_TYPE, t.id]);
+          result.already_converted.push({ ...ref, action_item_id: a?.id ?? null, status: a?.status ?? null, deleted: false });
+        } else {
+          result.created.push({ ...ref, action_item_id: itemId });
+        }
+      } catch (err) {
+        run('ROLLBACK TO plan_task');
+        run('RELEASE plan_task');
+        result.failed.push({ ...ref, reason: err.message || 'Could not be saved' });
+      }
+    }
+    if (result.created.length) {
+      addThread(auth.tenantId, sub.id, auth.userId, 'converted',
+        `${result.created.length} task(s) → action items for ${reviewer.name} to validate`);
+    }
+  });
+
+  // Each new item joins the deadline ladder and the audit trail like one made by hand.
+  for (const c of result.created) {
+    const item = get('SELECT * FROM action_items WHERE id = ?', [c.action_item_id]);
+    syncDeadline(auth.tenantId, item);
+    run(
+      `INSERT INTO audit_logs (id, tenant_id, actor_id, actor_name, entity, entity_id, action, before_json, after_json, ip, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid(), auth.tenantId, auth.userId, auth.name ?? userName(auth.userId), 'action_item', item.id, 'create',
+        null, JSON.stringify(item), null, nowIso()],
+    );
+  }
+  auditAs(auth, sub.id, 'convert_to_action_items', null, {
+    created: result.created.map((c) => ({ task: c.task, action_item_id: c.action_item_id })),
+    already_converted: result.already_converted.length,
+    skipped: result.skipped.length,
+    failed: result.failed.length,
+    assignee_id: sub.user_id,
+    reviewer_id: reviewer.id,
+  });
+
+  // The assignee and the validator hear about it, unless they are the one who did it.
+  if (result.created.length) {
+    const s = settingsFor(auth.tenantId);
+    for (const rid of [...new Set([sub.user_id, reviewer.id])].filter((x) => x !== auth.userId)) {
+      const recipient = userRow(rid);
+      if (recipient) {
+        await tell(auth.tenantId, recipient, EVENTS.converted, {
+          person: userName(auth.userId), count: result.created.length, todo_date: sub.todo_date,
+          todo_day: dayLabel(sub.todo_date), employee: assignee.name, reviewer: reviewer.name,
+        }, null, s, `/action-items?source_plan_id=${sub.id}`);
+      }
+    }
+  }
+
+  return { ...result, plan: detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id])) };
 }

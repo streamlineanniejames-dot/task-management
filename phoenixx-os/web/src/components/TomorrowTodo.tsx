@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ClipboardList, ListChecks, Plus, Trash2, Check, CheckCircle2, MessageSquare, Send, Undo2, Users2, Clock, AlertTriangle,
+  ArrowUpRight, ShieldCheck, User,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { date, time, dateTime, clockTime } from '../lib/format';
 import {
-  Avatar, Badge, Button, Card, CardHeader, EmptyState, Field, Input, Modal, Select, Skeleton, Textarea, useToast, cx,
+  Avatar, Badge, Button, Card, CardHeader, EmptyState, Field, Input, Modal, Select, Skeleton, StatusBadge, Textarea, useToast, cx,
 } from './ui';
 
 /**
@@ -30,11 +31,177 @@ export const PLAN_STATUS: Record<string, { label: string; tone: Tone }> = {
   MISSED: { label: 'Missed', tone: 'negative' },
 };
 
+/** The Action Items scale and order, so a planned task becomes an item without translation. */
+const PRIORITIES = ['urgent', 'high', 'medium', 'low'];
 const PRIORITY: Record<string, { label: string; dot: string }> = {
-  high: { label: 'High', dot: 'bg-[var(--negative)]' },
-  medium: { label: 'Medium', dot: 'bg-[var(--warning)]' },
+  urgent: { label: 'Urgent', dot: 'bg-[var(--negative)]' },
+  high: { label: 'High', dot: 'bg-[var(--warning)]' },
+  medium: { label: 'Medium', dot: 'bg-[var(--brand)]' },
   low: { label: 'Low', dot: 'bg-[var(--positive)]' },
 };
+
+/** Ticked off in the planner, or - once it is an action item - marked done there. */
+const taskDone = (t: any) => !!t.done_at || t.action_item?.status === 'done';
+
+/** The sign-off state of a linked action item, in the Action Items wording. */
+function ItemValidation({ v, status }: { v: string; status: string }) {
+  if (v === 'validated') return <Badge tone="positive" dot>validated</Badge>;
+  if (v === 'changes_requested') return <Badge tone="warning" dot>needs changes</Badge>;
+  if (status === 'done') return <Badge tone="warning" dot>awaiting validation</Badge>;
+  return null;
+}
+
+/**
+ * The plan's tasks against Action Items: how many are there, how many are not,
+ * the button that converts the rest, and what the last run did.
+ */
+function ConversionPanel({ planId, c, outcome, busy, onConvert }: {
+  planId: string; c: any; outcome: any; busy: boolean; onConvert: () => void;
+}) {
+  const issues = outcome ? [...outcome.skipped, ...outcome.failed] : [];
+  return (
+    <div className="rounded-lg border border-line bg-sunken p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="label-cap">Action items</p>
+        <span className="flex flex-wrap items-center gap-2">
+          {c.converted > 0 && (
+            <Link to={`/action-items?source_plan_id=${planId}`}
+              className="inline-flex items-center gap-0.5 text-[12.5px] font-medium text-[var(--brand)] hover:underline">
+              View in Action Items <ArrowUpRight size={13} />
+            </Link>
+          )}
+          {c.can_convert && (
+            <Button size="sm" variant="primary" icon={<ListChecks size={14} />} loading={busy} disabled={busy} onClick={onConvert}>
+              Create Action Items
+            </Button>
+          )}
+        </span>
+      </div>
+      <div className="mt-2.5 grid grid-cols-3 gap-px overflow-hidden rounded-md border border-line bg-[var(--border)]">
+        {[
+          ['Planner tasks', c.total, ''],
+          ['Converted', c.converted, c.converted ? 'text-[var(--positive)]' : ''],
+          ['Not converted', c.not_converted, c.not_converted ? 'text-[var(--warning)]' : ''],
+        ].map(([label, n, tone]) => (
+          <div key={label as string} className="bg-raised px-3 py-2">
+            <p className="text-[11.5px] text-subtle">{label}</p>
+            <p className={cx('text-[17px] font-semibold tabular text-ink', tone as string)}>{n}</p>
+          </div>
+        ))}
+      </div>
+      {c.reviewer && (
+        <p className="mt-2 text-[12.5px] text-subtle">
+          Each task becomes one action item assigned to {c.assignee?.name}, validated by {c.reviewer.name}. Progress is tracked there from then on.
+        </p>
+      )}
+      {c.problem && (
+        <p className="mt-1.5 flex items-start gap-1.5 text-[12.5px] text-[var(--negative)]">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {c.problem}
+        </p>
+      )}
+      {outcome && (
+        <div className="mt-2.5 rounded-md border border-line bg-raised px-3 py-2 text-[12.5px]">
+          <p className="text-ink">
+            <span className="font-medium">Last run:</span> {outcome.created.length} created
+            · {outcome.already_converted.length} already converted
+            {outcome.skipped.length > 0 && <> · {outcome.skipped.length} skipped</>}
+            {outcome.failed.length > 0 && <span className="text-[var(--negative)]"> · {outcome.failed.length} failed</span>}
+          </p>
+          {issues.length > 0 && (
+            <ul className="mt-1 space-y-0.5 text-muted">
+              {issues.map((x: any) => <li key={x.task_id}>“{x.task}” — {x.reason}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The fields one planned task is made of, shared by the plan editor and "add task". */
+function TaskFields({ row, set, options, error, autoFocus, todoDate }: {
+  row: TaskRow; set: (k: keyof TaskRow, v: string) => void; options: { projects: any[]; clients: any[] };
+  error?: string; autoFocus?: boolean; todoDate?: string;
+}) {
+  return (
+    <>
+      <Field label="Title" required error={error}>
+        <Input value={row.task} maxLength={300} autoFocus={autoFocus}
+          placeholder="e.g. Follow up with 20 prospects" onChange={(e) => set('task', e.target.value)} />
+      </Field>
+      <Field label="Description">
+        <Textarea rows={2} value={row.notes} maxLength={1000} onChange={(e) => set('notes', e.target.value)}
+          placeholder="Context, links, what 'done' looks like…" />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Project">
+          <Select value={row.project_id} onChange={(e) => set('project_id', e.target.value)}>
+            <option value="">No project</option>
+            {options.projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+        </Field>
+        {options.clients.length > 0 && (
+          <Field label="Client">
+            <Select value={row.client_id} onChange={(e) => set('client_id', e.target.value)}>
+              <option value="">No client</option>
+              {options.clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </Field>
+        )}
+        <Field label="Priority">
+          <Select value={row.priority} onChange={(e) => set('priority', e.target.value)}>
+            {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+          </Select>
+        </Field>
+      </div>
+      {/* The day is the plan's; only the time on it is the task's own. */}
+      <div className="rounded-lg border border-line bg-sunken p-3">
+        <p className="label-cap mb-2.5">Due</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Due date">
+            <Input type="date" value={todoDate || ''} disabled readOnly />
+          </Field>
+          <Field label="Due time">
+            <Input type="time" value={row.expected_time} onChange={(e) => set('expected_time', e.target.value)} />
+          </Field>
+        </div>
+        <p className="mt-2 text-[12.5px] text-subtle">Optional. Left blank, it is due by the end of the planned day.</p>
+      </div>
+    </>
+  );
+}
+
+/** Who the plan's action items go to, read from the server - never picked here. */
+function AssignmentPanel({ assignee, reviewer }: { assignee?: string | null; reviewer?: string | null }) {
+  return (
+    <div className="rounded-lg border border-line bg-sunken p-3">
+      <p className="label-cap mb-2.5">Assign to</p>
+      <div className="grid gap-3 sm:grid-cols-2 text-[13px]">
+        <div>
+          <p className="text-muted mb-1">Assigned to</p>
+          <p className="flex items-center gap-1.5 font-medium text-ink"><User size={14} /> {assignee || 'You'}</p>
+        </div>
+        <div>
+          <p className="text-muted mb-1">Validated by</p>
+          {reviewer
+            ? <p className="flex items-center gap-1.5 font-medium text-ink"><ShieldCheck size={14} /> {reviewer}</p>
+            : <p className="text-[var(--negative)]">No reporting person on record. Ask the owner to set one.</p>}
+        </div>
+      </div>
+      <p className="mt-2 text-[12.5px] text-subtle">
+        Each task becomes its own action item, assigned to the person who planned it and validated by their reporting person.
+      </p>
+    </div>
+  );
+}
+
+/** "Task 2: describe the task" from the server, as the row and the message. */
+const rowError = (message: string) => {
+  const m = /^Task (\d+): (.*)$/.exec(message || '');
+  return m ? { index: Number(m[1]) - 1, message: m[2] } : null;
+};
+/** The server drops rows nobody filled in before numbering them; so does this. */
+const touched = (t: TaskRow) => !!(t.task.trim() || t.notes.trim() || t.project_id || t.client_id || t.checklist.length);
 
 const FILED = ['SUBMITTED', 'LATE', 'UNDER_REVIEW', 'APPROVED'];
 
@@ -196,6 +363,8 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
   const { user } = useAuth();
   const { data } = useQuery({ queryKey: ['todo-plan', 'mine'], queryFn: () => api.get('/todo-plan/mine').then((r) => r.data) });
   const [rows, setRows] = useState<TaskRow[] | null>(null);
+  // Keyed by row, like the Action Items form keys its errors by field.
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!data || rows) return;
@@ -222,11 +391,28 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
         onClose();
       } else toast.success('Draft saved.');
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => {
+      const hit = rowError(e.message);
+      const row = hit && (rows || []).filter(touched)[hit.index];
+      if (row) setErrors({ [row.key]: hit.message });
+      toast.error(e.fieldErrors?.reporting_person_id || e.message);
+    },
   });
 
-  const set = (key: string, k: keyof TaskRow, v: string) =>
+  /** The required-field check the Action Items form makes, before the round trip. */
+  const attempt = (submit: boolean) => {
+    const missing = (rows || []).filter((r) => touched(r) && !r.task.trim());
+    if (missing.length) {
+      setErrors(Object.fromEntries(missing.map((r) => [r.key, 'Give the task a title'])));
+      return;
+    }
+    save.mutate(submit);
+  };
+
+  const set = (key: string, k: keyof TaskRow, v: string) => {
     setRows((rs) => (rs || []).map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+    setErrors((e) => ({ ...e, [key]: '' }));
+  };
   const setChecklist = (key: string, fn: (list: CheckItem[]) => CheckItem[]) =>
     setRows((rs) => (rs || []).map((r) => (r.key === key ? { ...r, checklist: fn(r.checklist) } : r)));
   const opts = data?.options || { projects: [], clients: [] };
@@ -238,9 +424,9 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
       footer={(
         <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button loading={save.isPending && save.variables === false} disabled={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button>
+          <Button loading={save.isPending && save.variables === false} disabled={save.isPending} onClick={() => attempt(false)}>Save draft</Button>
           <Button variant="primary" icon={<Send size={15} />} loading={save.isPending && save.variables === true}
-            disabled={save.isPending} onClick={() => save.mutate(true)}>
+            disabled={save.isPending || (!!data && !data.reporting_person)} onClick={() => attempt(true)}>
             {data?.plan?.status === 'CHANGES_REQUESTED' ? 'Resubmit' : 'Submit plan'}
           </Button>
         </>
@@ -252,6 +438,7 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
               <span className="font-medium text-ink">{lastNote.user_name}:</span> <span className="text-muted">{lastNote.body}</span>
             </div>
           )}
+          <AssignmentPanel assignee={user?.name} reviewer={data?.reporting_person?.name} />
           {rows.map((r, i) => (
             <fieldset key={r.key} className="rounded-lg border border-line p-3.5 space-y-3">
               <div className="flex items-center justify-between">
@@ -263,44 +450,8 @@ function PlanEditor({ onClose }: { onClose: () => void }) {
                   </button>
                 )}
               </div>
-              <Field label="Task" required>
-                <Input value={r.task} maxLength={300} autoFocus={i === rows.length - 1}
-                  placeholder="e.g. Follow up with 20 prospects" onChange={(e) => set(r.key, 'task', e.target.value)} />
-              </Field>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Project">
-                  <Select value={r.project_id} onChange={(e) => set(r.key, 'project_id', e.target.value)}>
-                    <option value="">— None —</option>
-                    {opts.projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </Select>
-                </Field>
-                {opts.clients.length > 0 && (
-                  <Field label="Client">
-                    <Select value={r.client_id} onChange={(e) => set(r.key, 'client_id', e.target.value)}>
-                      <option value="">— None —</option>
-                      {opts.clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </Select>
-                  </Field>
-                )}
-                <Field label="Priority">
-                  <div className="flex gap-1.5" role="radiogroup" aria-label="Priority">
-                    {Object.entries(PRIORITY).map(([k, p]) => (
-                      <button key={k} type="button" role="radio" aria-checked={r.priority === k}
-                        onClick={() => set(r.key, 'priority', k)}
-                        className={cx('flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border text-[13px] cursor-pointer transition-colors duration-150',
-                          r.priority === k ? 'border-[var(--brand)] bg-brand-soft text-ink font-medium' : 'border-line-strong text-muted hover:text-ink')}>
-                        <PriorityDot p={k} /> {p.label}
-                      </button>
-                    ))}
-                  </div>
-                </Field>
-                <Field label="Expected completion">
-                  <Input type="time" value={r.expected_time} onChange={(e) => set(r.key, 'expected_time', e.target.value)} />
-                </Field>
-              </div>
-              <Field label="Notes">
-                <Textarea rows={2} value={r.notes} maxLength={1000} onChange={(e) => set(r.key, 'notes', e.target.value)} />
-              </Field>
+              <TaskFields row={r} set={(k, v) => set(r.key, k, v)} options={opts} error={errors[r.key]}
+                autoFocus={i === rows.length - 1} todoDate={todoDate} />
               <ChecklistEditor items={r.checklist} onChange={(fn) => setChecklist(r.key, fn)} />
             </fieldset>
           ))}
@@ -325,6 +476,7 @@ function activityText(c: any) {
     case 'check_done': return <>checked off <span className="text-ink font-medium">“{c.body}”</span></>;
     case 'check_reopened': return <>unchecked <span className="text-ink font-medium">“{c.body}”</span></>;
     case 'task_added': return <>added <span className="text-ink font-medium">“{c.body}”</span></>;
+    case 'converted': return <>turned {c.body}</>;
     case 'carried_over': return <>carried over unfinished <span className="text-ink font-medium">“{c.body}”</span> from the day before</>;
     case 'moved_on': {
       const [task, day] = String(c.body || '').split(' → ');
@@ -399,13 +551,32 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
     onError: (e: any) => toast.error(e.message),
   });
 
+  // The last run's outcome, so what was skipped or failed stays on screen after the toast.
+  const [outcome, setOutcome] = useState<any>(null);
+  const convert = useMutation({
+    mutationFn: () => api.post(`/todo-plan/submissions/${id}/action-items`),
+    onSuccess: (r: any) => {
+      const { created, already_converted: already, skipped, failed, plan: next } = r.data;
+      qc.setQueryData(key, next);
+      qc.invalidateQueries({ queryKey: ['todo-plan', 'mine'] });
+      qc.invalidateQueries({ queryKey: ['action-items'] });
+      qc.invalidateQueries({ queryKey: ['home-counters'] });
+      setOutcome(r.data);
+      const n = created.length;
+      if (n) toast.success(`${n} action item${n === 1 ? '' : 's'} created.`);
+      else if (already.length && !skipped.length && !failed.length) toast.success('Every task is already an action item.');
+      if (failed.length) toast.error(`${failed.length} task${failed.length === 1 ? '' : 's'} could not be converted.`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const reviewable = plan?.can_review && ['SUBMITTED', 'LATE', 'UNDER_REVIEW'].includes(plan.status);
   const own = plan && plan.user_id === user?.id;
   const [adding, setAdding] = useState(startAdding);
   const canTick = !!plan?.can_tick;
   // A task that moved to the next day no longer counts here.
   const live = (plan?.tasks || []).filter((t: any) => !t.carried_to_date);
-  const doneCount = live.filter((t: any) => t.done_at).length;
+  const doneCount = live.filter(taskDone).length;
   const feed = [...(plan?.comments || [])].reverse();
 
   return (
@@ -453,6 +624,11 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
               )}
             </div>
 
+            {plan.conversion?.total > 0 && (
+              <ConversionPanel planId={plan.id} c={plan.conversion} outcome={outcome}
+                busy={convert.isPending} onConvert={() => convert.mutate()} />
+            )}
+
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink"><ClipboardList size={16} /> Tasks</h3>
@@ -470,7 +646,7 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
                 </div>
               )}
               {adding && plan.can_add_task && (
-                <AddTaskForm planId={plan.id} options={plan.options || { projects: [], clients: [] }}
+                <AddTaskForm planId={plan.id} todoDate={plan.todo_date} options={plan.options || { projects: [], clients: [] }}
                   onCancel={() => setAdding(false)}
                   onAdded={(r) => { done(r, 'Task added.'); setAdding(false); }} />
               )}
@@ -479,17 +655,20 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
               ) : (
                 <ul className="space-y-2">
                   {plan.tasks.map((t: any) => {
-                    const isDone = !!t.done_at;
+                    const isDone = taskDone(t);
                     const movedOn = !!t.carried_to_date;
+                    // Converted work is tracked on its action item; the planner only reads it back.
+                    const item = t.action_item;
+                    const canTickThis = canTick && !item;
                     return (
                       <li key={t.id} className={cx('flex gap-3 rounded-lg border border-line bg-raised px-3.5 py-3', movedOn && 'opacity-60')}>
-                        <button type="button" disabled={!canTick || movedOn || tick.isPending}
+                        <button type="button" disabled={!canTickThis || movedOn || tick.isPending}
                           onClick={() => tick.mutate({ taskId: t.id, value: !isDone })}
                           aria-label={isDone ? `Reopen “${t.task}”` : `Mark “${t.task}” complete`}
-                          title={canTick ? (isDone ? 'Reopen' : 'Mark complete') : undefined}
+                          title={item ? 'Tracked in Action Items' : canTick ? (isDone ? 'Reopen' : 'Mark complete') : undefined}
                           className={cx('mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 transition-colors duration-150',
                             isDone ? 'border-[var(--positive)] bg-[var(--positive)] text-white' : 'border-line-strong',
-                            canTick ? 'cursor-pointer hover:border-[var(--positive)]' : 'cursor-default')}>
+                            canTickThis ? 'cursor-pointer hover:border-[var(--positive)]' : 'cursor-default')}>
                           {isDone && <Check size={13} strokeWidth={3.5} className="text-white" />}
                         </button>
                         <div className="min-w-0 flex-1">
@@ -499,6 +678,25 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
                           <p className="text-[12.5px] text-subtle mt-0.5">
                             {[PRIORITY[t.priority]?.label, t.project_name, t.client_name, t.expected_time && `by ${clockTime(t.expected_time)}`].filter(Boolean).join(' · ')}
                           </p>
+                          {item && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {item.deleted ? (
+                                <span className="rounded border border-line px-1.5 py-0.5 text-[11.5px] text-muted">Action item deleted</span>
+                              ) : (
+                                <>
+                                  <StatusBadge status={item.status} />
+                                  {item.validation_status && <ItemValidation v={item.validation_status} status={item.status} />}
+                                  <Link to={`/action-items?open=${item.id}`}
+                                    className="inline-flex items-center gap-0.5 text-[12px] font-medium text-[var(--brand)] hover:underline">
+                                    Open action item <ArrowUpRight size={12} />
+                                  </Link>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          {!item && !movedOn && t.conversion_block && !plan.conversion?.problem && (
+                            <p className="text-[12px] text-subtle mt-1">Not converted · {t.conversion_block}</p>
+                          )}
                           {(t.carried_from_date || t.added_at || movedOn) && (
                             <div className="flex flex-wrap gap-1.5 mt-1.5">
                               {t.carried_from_date && (
@@ -520,7 +718,7 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
                           )}
                           {t.notes && <p className="text-[13px] text-muted mt-1.5 whitespace-pre-line">{t.notes}</p>}
                           {t.checklist?.length > 0 && (
-                            <ChecklistView items={t.checklist} canTick={canTick && !movedOn} busy={check.isPending}
+                            <ChecklistView items={t.checklist} canTick={canTickThis && !movedOn} busy={check.isPending}
                               onTick={(index, value) => check.mutate({ taskId: t.id, index, value })} />
                           )}
                         </div>
@@ -604,7 +802,7 @@ function PlanModal({ id, onClose, onEdit, startAdding = false }: {
 /** The plan being worked today, on top of the employee card: progress, open it, add to it. */
 function TodayStrip({ plan, onView }: { plan: any; onView: (id: string, add?: boolean) => void }) {
   const live = plan.tasks.filter((t: any) => !t.carried_to_date);
-  const doneCount = live.filter((t: any) => t.done_at).length;
+  const doneCount = live.filter(taskDone).length;
   const carried = live.filter((t: any) => t.carried_from_date).length;
   return (
     <div className="border-b border-line bg-sunken/60 px-4 py-3">
@@ -628,8 +826,8 @@ function TodayStrip({ plan, onView }: { plan: any; onView: (id: string, add?: bo
 }
 
 /** One more task on a plan already filed. Saved straight away: no re-approval. */
-function AddTaskForm({ planId, options, onAdded, onCancel }: {
-  planId: string; options: { projects: any[]; clients: any[] }; onAdded: (r: any) => void; onCancel: () => void;
+function AddTaskForm({ planId, todoDate, options, onAdded, onCancel }: {
+  planId: string; todoDate: string; options: { projects: any[]; clients: any[] }; onAdded: (r: any) => void; onCancel: () => void;
 }) {
   const toast = useToast();
   const [row, setRow] = useState<TaskRow>(blank());
@@ -644,46 +842,7 @@ function AddTaskForm({ planId, options, onAdded, onCancel }: {
   });
   return (
     <div className="rounded-lg border border-[var(--brand)]/40 bg-raised p-3.5 mb-3 space-y-3">
-      <Field label="New task" required>
-        <Input autoFocus value={row.task} maxLength={300} placeholder="What else needs doing?"
-          onChange={(e) => set('task', e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && row.task.trim()) add.mutate(); }} />
-      </Field>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Priority">
-          <div className="flex gap-1.5" role="radiogroup" aria-label="Priority">
-            {Object.entries(PRIORITY).map(([k, pr]) => (
-              <button key={k} type="button" role="radio" aria-checked={row.priority === k} onClick={() => set('priority', k)}
-                className={cx('flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border text-[12.5px] cursor-pointer',
-                  row.priority === k ? 'border-[var(--brand)] bg-brand-soft text-ink font-medium' : 'border-line-strong text-muted hover:text-ink')}>
-                <PriorityDot p={k} /> {pr.label}
-              </button>
-            ))}
-          </div>
-        </Field>
-        <Field label="Expected completion">
-          <Input type="time" value={row.expected_time} onChange={(e) => set('expected_time', e.target.value)} className="h-8" />
-        </Field>
-        {options.projects.length > 0 && (
-          <Field label="Project">
-            <Select value={row.project_id} onChange={(e) => set('project_id', e.target.value)} className="h-8">
-              <option value="">— None —</option>
-              {options.projects.map((pr: any) => <option key={pr.id} value={pr.id}>{pr.name}</option>)}
-            </Select>
-          </Field>
-        )}
-        {options.clients.length > 0 && (
-          <Field label="Client">
-            <Select value={row.client_id} onChange={(e) => set('client_id', e.target.value)} className="h-8">
-              <option value="">— None —</option>
-              {options.clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
-          </Field>
-        )}
-      </div>
-      <Field label="Notes">
-        <Textarea rows={2} value={row.notes} maxLength={1000} onChange={(e) => set('notes', e.target.value)} />
-      </Field>
+      <TaskFields row={row} set={set} options={options} autoFocus todoDate={todoDate} />
       <ChecklistEditor items={row.checklist} onChange={(fn) => setRow((r) => ({ ...r, checklist: fn(r.checklist) }))} />
       <div className="flex gap-2">
         <Button size="sm" variant="primary" icon={<Plus size={14} />} loading={add.isPending} disabled={!row.task.trim()}

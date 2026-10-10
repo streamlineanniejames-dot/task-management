@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Filter, Download, ArrowUpRight, X, MessageSquare, Paperclip, Repeat,
@@ -185,6 +185,8 @@ export default function ActionItems() {
     client_id: params.get('client_id') || '',
     category_id: params.get('category_id') || '',
     overdue: params.get('overdue') || '',
+    // Set by an Advance Planner plan's "View in Action Items" link.
+    source_plan_id: params.get('source_plan_id') || '',
   };
 
   const setFilter = (key: string, value: string) => {
@@ -202,7 +204,9 @@ export default function ActionItems() {
   // assignee marks something done it belongs to the Completed tab, whether or
   // not the creator has signed it off yet - asking for a status explicitly is
   // still honoured, so the filter can pull done items back into view.
-  const bucket = filters.status ? '' : 'active';
+  // A plan's items are shown whole - finished ones included - so the link from
+  // the planner lands on every task it turned into an item.
+  const bucket = filters.status || filters.source_plan_id ? '' : 'active';
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['action-items', filters, search, page, view, bucket],
@@ -346,6 +350,13 @@ export default function ActionItems() {
             icon={<AlertTriangle size={14} />}>
             Overdue only
           </Button>
+          {filters.source_plan_id && (
+            <Badge tone="brand">
+              From one Advance Planner plan
+              <button type="button" onClick={() => setFilter('source_plan_id', '')} aria-label="Show all action items"
+                className="ml-1 cursor-pointer"><X size={12} /></button>
+            </Badge>
+          )}
           {activeFilterCount > 0 && (
             <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={clearFilters}>Clear</Button>
           )}
@@ -1731,8 +1742,20 @@ function ItemDrawer({ id, meta, onClose }: { id: string; meta: any; onClose: () 
             )}
             {item.recurrence && item.recurrence !== 'none' && <Detail label="Repeats" value={item.recurrence} />}
             {item.estimate_minutes && <Detail label="Estimate" value={`${Math.round(item.estimate_minutes / 60)}h`} />}
-            {item.source_type && item.source_type !== 'manual' && (
+            {item.source_type && !['manual', 'advance_planner'].includes(item.source_type) && (
               <Detail label="Source" value={item.source_type.replace('_', ' ')} />
+            )}
+            {item.source_type === 'advance_planner' && (
+              <div>
+                <dt className="label-cap">Source</dt>
+                <dd className="text-ink mt-0.5">
+                  {item.source_plan ? (
+                    <Link to={`/?plan=${item.source_plan.id}`} className="text-[var(--brand)] hover:underline">
+                      Advance Planner · {date(item.source_plan.todo_date)}
+                    </Link>
+                  ) : 'Advance Planner'}
+                </dd>
+              </div>
             )}
           </dl>
 
