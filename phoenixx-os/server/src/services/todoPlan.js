@@ -281,6 +281,10 @@ export async function todoTick(tenantIds, now = new Date()) {
     // Yesterday is over: what was not finished moves to the next working day.
     if (s.enabled) n += await carryOver(tenantId, win.today, s);
 
+    // Approved work belongs in Action Items: catches plans approved before
+    // approval converted them, and tasks added to an approved plan since.
+    n += await convertApproved(tenantId, win.today);
+
     if (!win.working || !win.todo_date) continue;
     const t = win.time;
     if (t < s.open_time) continue;
@@ -1310,4 +1314,41 @@ export async function convertPlan(auth, id) {
   }
 
   return { ...result, plan: detail(auth, get('SELECT * FROM todo_submissions WHERE id = ?', [sub.id])) };
+}
+
+/**
+ * Every approved plan whose day has not passed and that still holds a task
+ * that could be an action item, converted on behalf of whoever approved it.
+ * Only plans with something to do are touched, so a quiet minute costs one
+ * query; a plan that cannot convert (its reporting person left, say) is left
+ * for the plan to explain and is tried again on the next tick.
+ */
+export async function convertApproved(tenantId, today) {
+  const plans = all(
+    `SELECT s.* FROM todo_submissions s
+      WHERE s.tenant_id = ? AND s.status = 'APPROVED' AND s.todo_date >= ?
+        AND EXISTS (SELECT 1 FROM todo_tasks t
+                     WHERE t.submission_id = s.id AND t.done_at IS NULL AND t.carried_to_date IS NULL
+                       AND LENGTH(TRIM(t.task)) >= 2
+                       AND NOT EXISTS (SELECT 1 FROM action_items a WHERE a.tenant_id = s.tenant_id
+                                         AND a.source_type = ? AND a.source_id = t.id))`,
+    [tenantId, today, SOURCE_TYPE],
+  );
+  let n = 0;
+  for (const sub of plans) {
+    const actor = get(
+      "SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'",
+      [sub.reviewed_by || sub.reporting_person_id, tenantId],
+    );
+    if (!actor) continue;
+    const auth = {
+      userId: actor.id, tenantId, name: actor.name, role: actor.role, customRoleId: actor.custom_role_id,
+    };
+    try {
+      n += (await convertPlan(auth, sub.id)).created.length;
+    } catch {
+      // Shown on the plan itself (conversion.problem); nothing to do here.
+    }
+  }
+  return n;
 }

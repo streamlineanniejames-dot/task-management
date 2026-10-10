@@ -442,6 +442,28 @@ describe('approving a plan moves its tasks to Action Items', () => {
     assert.equal(itemsOf(plan.id).length, 2);
   });
 
+  test('a plan approved without converting is picked up by the clock, once', async () => {
+    const emp = await join('Ranji');
+    await reportTo(emp, mani);
+    const plan = await file(emp, [{ task: 'Approved before the update' }]);
+    // Approved the way it was before approval converted: status only.
+    db.run("UPDATE todo_submissions SET status = 'APPROVED', reviewed_by = ?, approved_at = ? WHERE id = ?",
+      [mani.id, new Date().toISOString(), plan.id]);
+    assert.equal(itemsOf(plan.id).length, 0);
+
+    await P.todoTick([tenantId]);
+    const items = itemsOf(plan.id);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].owner_id, emp.id);
+    assert.equal(items[0].created_by, mani.id);
+
+    await P.todoTick([tenantId]);
+    assert.equal(itemsOf(plan.id).length, 1, 'the next tick has nothing left to do');
+    const audits = db.all("SELECT * FROM audit_logs WHERE entity = 'todo_submission' AND entity_id = ? AND action = 'convert_to_action_items'", [plan.id]);
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].actor_id, mani.id);
+  });
+
   test('an approval that cannot convert still approves, and says why', async () => {
     const emp = await join('Tara');
     await reportTo(emp, mani);
